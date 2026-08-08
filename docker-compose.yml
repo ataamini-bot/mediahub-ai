@@ -1,0 +1,111 @@
+services:
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: mediahub-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - mediahub
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+
+  redis:
+    image: redis:7-alpine
+    container_name: mediahub-redis
+    restart: unless-stopped
+    command: redis-server --appendonly yes
+    volumes:
+      - redis_data:/data
+    networks:
+      - mediahub
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: mediahub-backend
+    restart: unless-stopped
+    env_file:
+      - .env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - media_data:/app/media
+      - downloads_data:/app/downloads
+      - temp_data:/app/tmp
+    ports:
+      - "8000:8000"
+    networks:
+      - mediahub
+
+
+  bot:
+    build:
+      context: ./bot
+      dockerfile: Dockerfile
+    container_name: mediahub-bot
+    restart: unless-stopped
+    env_file:
+      - .env
+    depends_on:
+      - backend
+      - redis
+    volumes:
+      - downloads_data:/app/downloads
+      - temp_data:/app/tmp
+    networks:
+      - mediahub
+
+
+  worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: mediahub-worker
+    restart: unless-stopped
+    command: celery -A app.workers.celery_app worker --loglevel=INFO
+    env_file:
+      - .env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - media_data:/app/media
+      - downloads_data:/app/downloads
+      - temp_data:/app/tmp
+    networks:
+      - mediahub
+
+
+networks:
+  mediahub:
+    driver: bridge
+
+
+volumes:
+  postgres_data:
+  redis_data:
+  media_data:
+  downloads_data:
+  temp_data:
