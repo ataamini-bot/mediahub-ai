@@ -3,6 +3,7 @@ uvicorn[standard]
 
 sqlalchemy
 asyncpg
+psycopg[binary]
 alembic
 
 pydantic

@@ -59,3 +59,23 @@ docker-data/
 
 # Generated
 coverage.xml
+
+# Python
+__pycache__/
+*.py[cod]
+
+# Local backups
+*.bak
+*.bak-*
+
+# Environment / secrets
+.env
+.env.*
+
+# Downloaded/test media
+test*.mp4
+test-*.mp4
+
+# Temporary files
+/0
+

@@ -1,5 +1,3 @@
-aiogram>=3.0,<4.0
+aiogram
 httpx
-pydantic
-pydantic-settings
-redis
+aiohttp

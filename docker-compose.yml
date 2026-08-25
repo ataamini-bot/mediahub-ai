@@ -4,14 +4,18 @@ services:
     image: postgres:16-alpine
     container_name: mediahub-postgres
     restart: unless-stopped
+
     environment:
       POSTGRES_DB: ${POSTGRES_DB}
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+
     volumes:
       - postgres_data:/var/lib/postgresql/data
+
     networks:
       - mediahub
+
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
       interval: 10s
@@ -23,11 +27,15 @@ services:
     image: redis:7-alpine
     container_name: mediahub-redis
     restart: unless-stopped
+
     command: redis-server --appendonly yes
+
     volumes:
       - redis_data:/data
+
     networks:
       - mediahub
+
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 10s
@@ -35,25 +43,53 @@ services:
       retries: 5
 
 
+  telegram-api:
+    image: aiogram/telegram-bot-api:latest
+    container_name: mediahub-telegram-api
+    restart: unless-stopped
+
+    environment:
+      TELEGRAM_API_ID: ${TELEGRAM_API_ID}
+      TELEGRAM_API_HASH: ${TELEGRAM_API_HASH}
+
+    command:
+      - --local
+      - --api-id=${TELEGRAM_API_ID}
+      - --api-hash=${TELEGRAM_API_HASH}
+      - --http-port=8081
+
+    volumes:
+      - telegram_api_data:/var/lib/telegram-bot-api
+
+    networks:
+      - mediahub
+
+
   backend:
     build:
       context: ./backend
       dockerfile: Dockerfile
+
     container_name: mediahub-backend
     restart: unless-stopped
+
     env_file:
       - .env
+
     depends_on:
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
+
     volumes:
       - media_data:/app/media
       - downloads_data:/app/downloads
       - temp_data:/app/tmp
+
     ports:
       - "8000:8000"
+
     networks:
       - mediahub
 
@@ -62,16 +98,30 @@ services:
     build:
       context: ./bot
       dockerfile: Dockerfile
+
     container_name: mediahub-bot
     restart: unless-stopped
+
     env_file:
       - .env
+
+    environment:
+      BACKEND_URL: http://backend:8000
+      DOWNLOAD_DIR: /app/downloads
+      TELEGRAM_BOT_API: http://telegram-api:8081
+
     depends_on:
-      - backend
-      - redis
+      backend:
+        condition: service_started
+      redis:
+        condition: service_healthy
+      telegram-api:
+        condition: service_started
+
     volumes:
       - downloads_data:/app/downloads
       - temp_data:/app/tmp
+
     networks:
       - mediahub
 
@@ -80,20 +130,26 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile
+
     container_name: mediahub-worker
     restart: unless-stopped
+
     command: celery -A app.workers.celery_app worker --loglevel=INFO
+
     env_file:
       - .env
+
     depends_on:
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
+
     volumes:
       - media_data:/app/media
       - downloads_data:/app/downloads
       - temp_data:/app/tmp
+
     networks:
       - mediahub
 
@@ -109,3 +165,4 @@ volumes:
   media_data:
   downloads_data:
   temp_data:
+  telegram_api_data:
