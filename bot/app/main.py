@@ -32,6 +32,16 @@ from app.keyboards.media import (
 )
 
 
+from app.keyboards.quality import (
+    build_quality_keyboard,
+)
+
+from app.utils.formatting import (
+    format_file_size,
+    normalize_quality_label,
+)
+
+
 TOKEN = os.getenv(
     "TELEGRAM_BOT_TOKEN"
 )
@@ -358,27 +368,6 @@ def normalize_media_title(
 # Quality helpers
 # ============================================================
 
-def normalize_quality_label(
-    height: int,
-) -> str:
-
-    if (
-        height >= 2160
-    ):
-
-        return "4K"
-
-    if (
-        height >= 1440
-    ):
-
-        return "2K"
-
-    return (
-        f"{height}p"
-    )
-
-
 def normalize_platform_quality(
     value: int,
 ) -> int:
@@ -502,80 +491,6 @@ def quality_sort_key(
 # ============================================================
 # File size helpers
 # ============================================================
-
-def format_file_size(
-    file_size: (
-        int
-        | float
-        | None
-    ),
-) -> str | None:
-
-    if (
-        file_size is None
-        or file_size <= 0
-    ):
-
-        return None
-
-    size = float(
-        file_size
-    )
-
-    if (
-        size < 1024
-    ):
-
-        return (
-            f"{size:.0f} B"
-        )
-
-    kb = (
-        size
-        / 1024
-    )
-
-    if (
-        kb < 1024
-    ):
-
-        if kb >= 100:
-            return f"{kb:.0f} KB"
-
-        if kb >= 10:
-            return f"{kb:.0f} KB"
-
-        return f"{kb:.1f} KB"
-
-    mb = (
-        kb
-        / 1024
-    )
-
-    if (
-        mb < 1024
-    ):
-
-        if mb >= 100:
-            return f"{mb:.0f} MB"
-
-        if mb >= 10:
-            return f"{mb:.0f} MB"
-
-        return f"{mb:.1f} MB"
-
-    gb = (
-        mb
-        / 1024
-    )
-
-    if gb >= 10:
-        return f"{gb:.0f} GB"
-
-    return (
-        f"{gb:.1f} GB"
-    )
-
 
 def estimate_format_size(
     item: dict,
@@ -2237,94 +2152,6 @@ def extract_available_quality_options(
 
 # ============================================================
 # Quality keyboard
-# ============================================================
-
-def build_quality_keyboard(
-    quality_options: list[
-        tuple[
-            int,
-            int | None,
-        ]
-    ],
-    token: str,
-) -> InlineKeyboardMarkup:
-
-    buttons: list[
-        list[
-            InlineKeyboardButton
-        ]
-    ] = []
-
-    for index in range(
-        0,
-        len(
-            quality_options
-        ),
-        2,
-    ):
-
-        row: list[
-            InlineKeyboardButton
-        ] = []
-
-        for (
-            height,
-            file_size,
-        ) in quality_options[
-            index:
-            index + 2
-        ]:
-
-            quality_label = (
-                normalize_quality_label(
-                    height
-                )
-            )
-
-            size_label = (
-                format_file_size(
-                    file_size
-                )
-            )
-
-            if size_label:
-
-                button_text = (
-                    f"🎬 "
-                    f"{quality_label}"
-                    f" • ~"
-                    f"{size_label}"
-                )
-
-            else:
-
-                button_text = (
-                    f"🎬 "
-                    f"{quality_label}"
-                )
-
-            row.append(
-                InlineKeyboardButton(
-                    text=button_text,
-                    callback_data=(
-                        f"quality:"
-                        f"{token}:"
-                        f"{height}"
-                    ),
-                )
-            )
-
-        buttons.append(
-            row
-        )
-
-    return InlineKeyboardMarkup(
-        inline_keyboard=buttons
-    )
-
-
-# ============================================================
-# Smaller quality keyboard
 # ============================================================
 
 def build_smaller_quality_keyboard(
