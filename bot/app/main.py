@@ -1533,73 +1533,11 @@ async def safe_edit_message(
 # Download keyboards
 # ============================================================
 
-def build_active_download_keyboard(
-    job_id: int,
-) -> InlineKeyboardMarkup:
+from app.keyboards.download import (
+    build_active_download_keyboard,
+    build_paused_download_keyboard,
+)
 
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [
-                InlineKeyboardButton(
-                    text=(
-                        "⏸ توقف دانلود"
-                    ),
-                    callback_data=(
-                        f"download_pause:"
-                        f"{job_id}"
-                    ),
-                ),
-            ],
-            [
-                InlineKeyboardButton(
-                    text=(
-                        "❌ انصراف از دانلود"
-                    ),
-                    callback_data=(
-                        f"download_cancel:"
-                        f"{job_id}"
-                    ),
-                ),
-            ],
-        ]
-    )
-
-
-def build_paused_download_keyboard(
-    job_id: int,
-) -> InlineKeyboardMarkup:
-
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [
-                InlineKeyboardButton(
-                    text=(
-                        "▶️ ادامه دانلود"
-                    ),
-                    callback_data=(
-                        f"download_resume:"
-                        f"{job_id}"
-                    ),
-                ),
-            ],
-            [
-                InlineKeyboardButton(
-                    text=(
-                        "❌ انصراف از دانلود"
-                    ),
-                    callback_data=(
-                        f"download_cancel:"
-                        f"{job_id}"
-                    ),
-                ),
-            ],
-        ]
-    )
-
-
-# ============================================================
-# Resolution helpers
-# ============================================================
 
 def _extract_resolution(
     resolution: str | None,
