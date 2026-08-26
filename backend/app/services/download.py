@@ -1607,8 +1607,8 @@ def _get_x_gallery_info(
         check=False,
     )
 
-    # Do not break the existing yt-dlp video path if
-    # gallery-dl cannot resolve this tweet.
+    # Keep the existing yt-dlp path available whenever
+    # gallery-dl cannot resolve the tweet.
     if result.returncode != 0:
 
         return None
@@ -1630,14 +1630,14 @@ def _get_x_gallery_info(
 
         return None
 
-    post_metadata: dict[str, Any] = {}
-
-    entries_by_index: dict[
-        int,
-        dict[str, Any],
+    post_metadata: dict[
+        str,
+        Any,
     ] = {}
 
-    has_non_image_media = False
+    entries: list[
+        dict[str, Any]
+    ] = []
 
     for event in payload:
 
@@ -1648,6 +1648,10 @@ def _get_x_gallery_info(
 
             continue
 
+        # ----------------------------------------------------
+        # Tweet metadata
+        # ----------------------------------------------------
+
         if (
             len(event) >= 2
             and event[0] == 2
@@ -1657,9 +1661,15 @@ def _get_x_gallery_info(
             )
         ):
 
-            post_metadata = event[1]
+            post_metadata = (
+                event[1]
+            )
 
             continue
+
+        # ----------------------------------------------------
+        # Media item
+        # ----------------------------------------------------
 
         if (
             len(event) < 3
@@ -1668,8 +1678,13 @@ def _get_x_gallery_info(
 
             continue
 
-        raw_url = event[1]
-        metadata = event[2]
+        raw_url = (
+            event[1]
+        )
+
+        metadata = (
+            event[2]
+        )
 
         if (
             not isinstance(
@@ -1711,64 +1726,12 @@ def _get_x_gallery_info(
 
             extension = "jpg"
 
-        is_image = (
-            media_kind
-            in {
-                "photo",
-                "image",
-            }
-            or extension
-            in {
-                "jpg",
-                "png",
-                "webp",
-                "gif",
-                "avif",
-            }
-        )
-
-        if not is_image:
-
-            if (
-                media_kind
-                in {
-                    "video",
-                    "animated_gif",
-                }
-                or extension
-                in {
-                    "mp4",
-                    "webm",
-                    "m3u8",
-                }
-            ):
-
-                has_non_image_media = True
-
-            continue
-
-        if extension not in {
-            "jpg",
-            "png",
-            "webp",
-            "gif",
-            "avif",
-        }:
-
-            continue
-
-        if not _is_allowed_x_image_url(
-            raw_url
-        ):
-
-            continue
-
         try:
 
             index = int(
                 metadata.get(
                     "num",
-                    1,
+                    len(entries) + 1,
                 )
             )
 
@@ -1809,6 +1772,133 @@ def _get_x_gallery_info(
 
             height = None
 
+        # ----------------------------------------------------
+        # Detect image
+        # ----------------------------------------------------
+
+        is_image = (
+            media_kind
+            in {
+                "photo",
+                "image",
+            }
+            or extension
+            in {
+                "jpg",
+                "png",
+                "webp",
+                "gif",
+                "avif",
+            }
+        )
+
+        # ----------------------------------------------------
+        # Detect video
+        # ----------------------------------------------------
+
+        is_video = (
+            media_kind
+            in {
+                "video",
+                "animated_gif",
+            }
+            or extension
+            in {
+                "mp4",
+                "webm",
+                "m3u8",
+            }
+        )
+
+        if (
+            not is_image
+            and not is_video
+        ):
+
+            continue
+
+        # ----------------------------------------------------
+        # Image
+        # ----------------------------------------------------
+
+        if is_image:
+
+            if extension not in {
+                "jpg",
+                "png",
+                "webp",
+                "gif",
+                "avif",
+            }:
+
+                continue
+
+            if not _is_allowed_x_image_url(
+                raw_url
+            ):
+
+                continue
+
+            media_type = (
+                "image"
+            )
+
+            media_url = (
+                raw_url
+            )
+
+            thumbnail = (
+                raw_url
+            )
+
+            duration = None
+
+        # ----------------------------------------------------
+        # Video
+        #
+        # Do NOT use the video.twimg.com URL directly.
+        # Worker continues to download videos through yt-dlp.
+        # ----------------------------------------------------
+
+        else:
+
+            media_type = (
+                "video"
+            )
+
+            media_url = None
+
+            thumbnail = (
+                metadata.get(
+                    "thumbnail"
+                )
+            )
+
+            try:
+
+                duration_value = (
+                    metadata.get(
+                        "duration"
+                    )
+                )
+
+                duration = (
+                    int(
+                        float(
+                            duration_value
+                        )
+                    )
+                    if duration_value
+                    else None
+                )
+
+            except (
+                TypeError,
+                ValueError,
+            ):
+
+                duration = None
+
         tweet_id = (
             metadata.get(
                 "tweet_id"
@@ -1827,72 +1917,90 @@ def _get_x_gallery_info(
             )
         )
 
-        entries_by_index[
-            index
-        ] = {
-            "index":
-                index,
+        entries.append(
+            {
+                "index":
+                    index,
 
-            "id":
-                (
-                    f"{tweet_id}-{index}"
-                    if tweet_id is not None
-                    else str(index)
-                ),
+                "id":
+                    (
+                        f"{tweet_id}-{index}"
+                        if tweet_id is not None
+                        else str(index)
+                    ),
 
-            "title":
-                (
-                    str(content)
-                    if content
-                    else None
-                ),
+                "title":
+                    (
+                        str(content)
+                        if content
+                        else None
+                    ),
 
-            "duration":
-                None,
+                "duration":
+                    duration,
 
-            "thumbnail":
-                raw_url,
+                "thumbnail":
+                    thumbnail,
 
-            "formats":
-                [],
+                "formats":
+                    [],
 
-            "media_type":
-                "image",
+                "media_type":
+                    media_type,
 
-            "media_url":
-                raw_url,
+                "media_url":
+                    media_url,
 
-            "extension":
-                extension,
+                "extension":
+                    extension,
 
-            "width":
-                width,
+                "width":
+                    width,
 
-            "height":
-                height,
-        }
-
-    entries = [
-        entries_by_index[
-            index
-        ]
-        for index
-        in sorted(
-            entries_by_index
+                "height":
+                    height,
+            }
         )
-    ]
 
     if not entries:
 
         return None
 
-    # Important:
-    # If gallery-dl reports a mixed photo+video tweet,
-    # preserve the existing yt-dlp video path for now rather
-    # than silently hiding the video entries.
-    if has_non_image_media:
+    entries.sort(
+        key=lambda item: (
+            int(
+                item.get(
+                    "index",
+                    0,
+                )
+            )
+        )
+    )
+
+    media_types = {
+        str(
+            entry.get(
+                "media_type"
+            )
+        )
+        for entry in entries
+    }
+
+    # ========================================================
+    # Video-only X post
+    #
+    # Preserve the existing yt-dlp multi-video implementation.
+    # ========================================================
+
+    if media_types == {
+        "video"
+    }:
 
         return None
+
+    # ========================================================
+    # Title
+    # ========================================================
 
     title = (
         post_metadata.get(
@@ -1902,37 +2010,63 @@ def _get_x_gallery_info(
 
     if not title:
 
-        user = (
+        author = (
             post_metadata.get(
+                "author"
+            )
+            or post_metadata.get(
                 "user"
             )
-            or {}
         )
 
-        username = (
-            user.get(
-                "name"
-            )
-            if isinstance(
-                user,
-                dict,
-            )
-            else None
-        )
+        if isinstance(
+            author,
+            dict,
+        ):
 
-        if username:
+            author_name = (
+                author.get(
+                    "name"
+                )
+                or author.get(
+                    "nick"
+                )
+                or author.get(
+                    "username"
+                )
+            )
+
+        else:
+
+            author_name = (
+                author
+            )
+
+        if author_name:
 
             title = (
-                f"Post by @{username}"
+                f"Post by {author_name}"
             )
 
         else:
 
             title = "X post"
 
-    if len(entries) == 1:
+    # ========================================================
+    # Single image
+    # ========================================================
 
-        selected = entries[0]
+    if (
+        len(entries) == 1
+        and entries[0].get(
+            "media_type"
+        )
+        == "image"
+    ):
+
+        selected = (
+            entries[0]
+        )
 
         return {
             "source_url":
@@ -1985,6 +2119,36 @@ def _get_x_gallery_info(
                 [],
         }
 
+    # ========================================================
+    # Multi-image / mixed media
+    # ========================================================
+
+    top_media_type = (
+        "mixed"
+        if len(
+            media_types
+        ) > 1
+        else next(
+            iter(
+                media_types
+            )
+        )
+    )
+
+    first_thumbnail = next(
+        (
+            entry.get(
+                "thumbnail"
+            )
+            for entry
+            in entries
+            if entry.get(
+                "thumbnail"
+            )
+        ),
+        None,
+    )
+
     return {
         "source_url":
             source_url,
@@ -1996,15 +2160,13 @@ def _get_x_gallery_info(
             None,
 
         "thumbnail":
-            entries[0].get(
-                "thumbnail"
-            ),
+            first_thumbnail,
 
         "formats":
             [],
 
         "media_type":
-            "image",
+            top_media_type,
 
         "media_url":
             None,
@@ -2029,6 +2191,7 @@ def _get_x_gallery_info(
         "entries":
             entries,
     }
+
 
 
 class DownloadService:
@@ -2621,10 +2784,10 @@ class DownloadService:
                         [],
                 }
 
-        # X / Twitter photo extraction
-        #
-        # Video-only tweets continue through the existing
-        # yt-dlp path below.
+        # ====================================================
+        # X / Twitter image + mixed-media extraction
+        # ====================================================
+
         if _is_x_url(
             source_url
         ):
@@ -2640,43 +2803,75 @@ class DownloadService:
                 is not None
             ):
 
+                entries = (
+                    x_gallery_info.get(
+                        "entries"
+                    )
+                    or []
+                )
+
+                # --------------------------------------------
+                # Full post request
+                # --------------------------------------------
+
                 if (
                     playlist_index
-                    is not None
+                    is None
                 ):
 
-                    entries = (
-                        x_gallery_info.get(
-                            "entries"
-                        )
-                        or []
+                    return (
+                        x_gallery_info
                     )
 
-                    # Multi-photo tweet
-                    if entries:
+                # --------------------------------------------
+                # Multi-image / mixed-media item
+                # --------------------------------------------
 
-                        selected = next(
-                            (
-                                entry
-                                for entry
-                                in entries
-                                if int(
-                                    entry.get(
-                                        "index",
-                                        -1,
-                                    )
+                if entries:
+
+                    selected = next(
+                        (
+                            entry
+                            for entry
+                            in entries
+                            if int(
+                                entry.get(
+                                    "index",
+                                    -1,
                                 )
-                                == playlist_index
-                            ),
-                            None,
+                            )
+                            == playlist_index
+                        ),
+                        None,
+                    )
+
+                    if selected is None:
+
+                        raise ValueError(
+                            "Selected X media item "
+                            "does not exist"
                         )
 
-                        if selected is None:
-
-                            raise ValueError(
-                                "Selected X media item "
-                                "is not an image"
+                    selected_type = (
+                        str(
+                            selected.get(
+                                "media_type"
                             )
+                            or ""
+                        )
+                        .strip()
+                        .lower()
+                    )
+
+                    # ----------------------------------------
+                    # Image:
+                    # Return gallery-dl metadata directly.
+                    # ----------------------------------------
+
+                    if (
+                        selected_type
+                        == "image"
+                    ):
 
                         return {
                             "source_url":
@@ -2738,16 +2933,52 @@ class DownloadService:
                                 ],
                         }
 
-                    # Single-photo tweet:
-                    # playlist_index=1 is also accepted.
-                    if playlist_index != 1:
+                    # ----------------------------------------
+                    # Video:
+                    #
+                    # Do not return gallery-dl's direct URL.
+                    # Fall through to the existing yt-dlp
+                    # extraction below so formats, qualities
+                    # and filesize calculations remain intact.
+                    # ----------------------------------------
+
+                    if (
+                        selected_type
+                        != "video"
+                    ):
+
+                        raise ValueError(
+                            "Unsupported X media type"
+                        )
+
+                # --------------------------------------------
+                # Single image with explicit index=1
+                # --------------------------------------------
+
+                elif (
+                    str(
+                        x_gallery_info.get(
+                            "media_type"
+                        )
+                        or ""
+                    )
+                    .lower()
+                    == "image"
+                ):
+
+                    if (
+                        playlist_index
+                        != 1
+                    ):
 
                         raise ValueError(
                             "Selected X media item "
                             "does not exist"
                         )
 
-                return x_gallery_info
+                    return (
+                        x_gallery_info
+                    )
 
         options = (
             _get_media_info_options(
