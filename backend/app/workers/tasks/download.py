@@ -5,9 +5,11 @@ from datetime import (
 )
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 import json
 import os
 import subprocess
+import requests
 
 import yt_dlp
 from sqlalchemy import select
@@ -34,6 +36,40 @@ BGUTIL_POT_BASE_URL = os.getenv(
 )
 
 PAUSED_FILE_TTL_HOURS = 6
+
+# Maximum allowed output size.
+#
+# Keep the worker-side limit even if the bot already checks
+# estimated sizes. The worker is the final safety boundary.
+MAX_DOWNLOAD_BYTES = (
+    1900
+    * 1024
+    * 1024
+)
+
+INSTAGRAM_COOKIE_PATH = Path(
+    os.getenv(
+        "INSTAGRAM_COOKIE_PATH",
+        "/app/secrets/instagram-cookies.txt",
+    )
+)
+
+IMAGE_EXTENSIONS = {
+    "jpg",
+    "jpeg",
+    "png",
+    "webp",
+    "gif",
+    "avif",
+}
+
+IMAGE_CONTENT_TYPES = {
+    "image/jpeg",
+    "image/png",
+    "image/webp",
+    "image/gif",
+    "image/avif",
+}
 
 
 # ============================================================
@@ -72,6 +108,1058 @@ def _is_youtube_url(
         host in value
         for host in youtube_hosts
     )
+
+
+
+# ============================================================
+# Instagram image helpers
+# ============================================================
+
+def _is_instagram_url(
+    source_url: str,
+) -> bool:
+
+    try:
+
+        hostname = (
+            urlparse(
+                source_url
+            ).hostname
+            or ""
+        ).lower()
+
+    except Exception:
+
+        return False
+
+    return (
+        hostname == "instagram.com"
+        or hostname.endswith(
+            ".instagram.com"
+        )
+    )
+
+
+def _is_allowed_instagram_cdn_url(
+    media_url: str,
+) -> bool:
+
+    try:
+
+        parsed = urlparse(
+            media_url
+        )
+
+        hostname = (
+            parsed.hostname
+            or ""
+        ).lower()
+
+    except Exception:
+
+        return False
+
+    if parsed.scheme != "https":
+
+        return False
+
+    allowed_hosts = (
+        "cdninstagram.com",
+        "fbcdn.net",
+    )
+
+    return any(
+        hostname == domain
+        or hostname.endswith(
+            "." + domain
+        )
+        for domain
+        in allowed_hosts
+    )
+
+
+def _is_x_url(
+    source_url: str,
+) -> bool:
+
+    try:
+
+        hostname = (
+            urlparse(
+                source_url
+            ).hostname
+            or ""
+        ).lower()
+
+    except Exception:
+
+        return False
+
+    return hostname in {
+        "x.com",
+        "www.x.com",
+        "twitter.com",
+        "www.twitter.com",
+        "mobile.twitter.com",
+    }
+
+
+def _is_allowed_x_image_url(
+    media_url: str,
+) -> bool:
+
+    try:
+
+        parsed = urlparse(
+            media_url
+        )
+
+        hostname = (
+            parsed.hostname
+            or ""
+        ).lower()
+
+    except Exception:
+
+        return False
+
+    return (
+        parsed.scheme == "https"
+        and hostname == "pbs.twimg.com"
+        and parsed.path.startswith(
+            "/media/"
+        )
+    )
+
+
+def _extract_x_image(
+    source_url: str,
+    playlist_index: int | None,
+) -> dict[str, Any]:
+
+    if not _is_x_url(
+        source_url
+    ):
+
+        raise ValueError(
+            "Not an X/Twitter URL"
+        )
+
+    result = subprocess.run(
+        [
+            "gallery-dl",
+            "-j",
+            source_url,
+        ],
+        capture_output=True,
+        text=True,
+        timeout=90,
+        check=False,
+    )
+
+    if result.returncode != 0:
+
+        raise RuntimeError(
+            "gallery-dl failed while extracting "
+            "X image: "
+            f"{result.stderr[-1000:]}"
+        )
+
+    try:
+
+        payload = json.loads(
+            result.stdout
+        )
+
+    except Exception as exc:
+
+        raise RuntimeError(
+            "Invalid gallery-dl JSON output for X"
+        ) from exc
+
+    if not isinstance(
+        payload,
+        list,
+    ):
+
+        raise RuntimeError(
+            "Unexpected gallery-dl X output"
+        )
+
+    image_entries: list[
+        dict[str, Any]
+    ] = []
+
+    for event in payload:
+
+        if (
+            not isinstance(
+                event,
+                list,
+            )
+            or len(
+                event
+            )
+            < 3
+            or event[0] != 3
+        ):
+
+            continue
+
+        raw_url = event[1]
+        metadata = event[2]
+
+        if (
+            not isinstance(
+                raw_url,
+                str,
+            )
+            or not isinstance(
+                metadata,
+                dict,
+            )
+        ):
+
+            continue
+
+        media_kind = (
+            str(
+                metadata.get(
+                    "type"
+                )
+                or ""
+            )
+            .strip()
+            .lower()
+        )
+
+        extension = (
+            _normalize_image_extension(
+                metadata.get(
+                    "extension"
+                )
+            )
+        )
+
+        if (
+            media_kind
+            not in {
+                "photo",
+                "image",
+            }
+            and extension is None
+        ):
+
+            continue
+
+        if extension is None:
+
+            continue
+
+        if not _is_allowed_x_image_url(
+            raw_url
+        ):
+
+            raise RuntimeError(
+                "Extractor returned an unexpected "
+                "X image host"
+            )
+
+        try:
+
+            index = int(
+                metadata.get(
+                    "num",
+                    1,
+                )
+            )
+
+        except (
+            TypeError,
+            ValueError,
+        ):
+
+            continue
+
+        image_entries.append(
+            {
+                "index":
+                    index,
+
+                "url":
+                    raw_url,
+
+                "extension":
+                    extension,
+            }
+        )
+
+    if not image_entries:
+
+        raise RuntimeError(
+            "No downloadable X images found"
+        )
+
+    if (
+        playlist_index
+        is not None
+    ):
+
+        selected = next(
+            (
+                item
+                for item
+                in image_entries
+                if item[
+                    "index"
+                ]
+                == playlist_index
+            ),
+            None,
+        )
+
+        if selected is None:
+
+            raise RuntimeError(
+                "Selected X media item "
+                "is not an image"
+            )
+
+        return selected
+
+    if len(
+        image_entries
+    ) == 1:
+
+        return image_entries[0]
+
+    raise ValueError(
+        "playlist_index is required for "
+        "an X post containing multiple images"
+    )
+
+
+def _normalize_image_extension(
+    value: str | None,
+) -> str | None:
+
+    if not value:
+
+        return None
+
+    extension = (
+        str(
+            value
+        )
+        .strip()
+        .lower()
+        .lstrip(".")
+    )
+
+    if extension == "jpeg":
+
+        extension = "jpg"
+
+    if extension not in {
+        "jpg",
+        "png",
+        "webp",
+        "gif",
+        "avif",
+    }:
+
+        return None
+
+    return extension
+
+
+def _image_extension_from_content_type(
+    content_type: str | None,
+) -> str | None:
+
+    value = (
+        str(
+            content_type
+            or ""
+        )
+        .split(
+            ";",
+            1,
+        )[0]
+        .strip()
+        .lower()
+    )
+
+    mapping = {
+        "image/jpeg":
+            "jpg",
+
+        "image/png":
+            "png",
+
+        "image/webp":
+            "webp",
+
+        "image/gif":
+            "gif",
+
+        "image/avif":
+            "avif",
+    }
+
+    return mapping.get(
+        value
+    )
+
+
+def _extract_instagram_image(
+    source_url: str,
+    playlist_index: int | None,
+) -> dict[str, Any]:
+
+    if not _is_instagram_url(
+        source_url
+    ):
+
+        raise ValueError(
+            "Image downloads currently support "
+            "Instagram URLs only"
+        )
+
+    if not INSTAGRAM_COOKIE_PATH.is_file():
+
+        raise RuntimeError(
+            "Instagram cookie file not found: "
+            f"{INSTAGRAM_COOKIE_PATH}"
+        )
+
+    command = [
+        "gallery-dl",
+        "--cookies",
+        str(
+            INSTAGRAM_COOKIE_PATH
+        ),
+        "-j",
+        source_url,
+    ]
+
+    result = subprocess.run(
+        command,
+        capture_output=True,
+        text=True,
+        timeout=90,
+        check=False,
+    )
+
+    if result.returncode != 0:
+
+        raise RuntimeError(
+            "gallery-dl failed while extracting "
+            "Instagram image: "
+            f"{result.stderr[-1000:]}"
+        )
+
+    try:
+
+        payload = json.loads(
+            result.stdout
+        )
+
+    except Exception as exc:
+
+        raise RuntimeError(
+            "Invalid gallery-dl JSON output"
+        ) from exc
+
+    if not isinstance(
+        payload,
+        list,
+    ):
+
+        raise RuntimeError(
+            "Unexpected gallery-dl output"
+        )
+
+    image_entries: list[
+        dict[str, Any]
+    ] = []
+
+    for event in payload:
+
+        if (
+            not isinstance(
+                event,
+                list,
+            )
+            or len(
+                event
+            )
+            < 3
+            or event[0] != 3
+        ):
+
+            continue
+
+        raw_url = event[1]
+        metadata = event[2]
+
+        if not isinstance(
+            raw_url,
+            str,
+        ):
+
+            continue
+
+        if not isinstance(
+            metadata,
+            dict,
+        ):
+
+            continue
+
+        extension = (
+            _normalize_image_extension(
+                metadata.get(
+                    "extension"
+                )
+            )
+        )
+
+        if extension is None:
+
+            continue
+
+        try:
+
+            index = int(
+                metadata.get(
+                    "num",
+                    1,
+                )
+            )
+
+        except (
+            TypeError,
+            ValueError,
+        ):
+
+            continue
+
+        if not _is_allowed_instagram_cdn_url(
+            raw_url
+        ):
+
+            raise RuntimeError(
+                "Extractor returned an unexpected "
+                "Instagram image host"
+            )
+
+        image_entries.append(
+            {
+                "index":
+                    index,
+
+                "url":
+                    raw_url,
+
+                "extension":
+                    extension,
+            }
+        )
+
+    if not image_entries:
+
+        raise RuntimeError(
+            "No downloadable Instagram images found"
+        )
+
+    if playlist_index is not None:
+
+        selected = next(
+            (
+                item
+                for item
+                in image_entries
+                if item[
+                    "index"
+                ]
+                == playlist_index
+            ),
+            None,
+        )
+
+        if selected is None:
+
+            raise RuntimeError(
+                "Selected Instagram carousel "
+                "item is not an image"
+            )
+
+        return selected
+
+    # Single-photo Instagram post.
+    if len(
+        image_entries
+    ) == 1:
+
+        return image_entries[0]
+
+    raise ValueError(
+        "playlist_index is required for an "
+        "Instagram post containing multiple images"
+    )
+
+
+def _download_social_image(
+    job_id: int,
+    source_url: str,
+    playlist_index: int | None,
+) -> Path:
+
+    if _is_instagram_url(
+        source_url
+    ):
+
+        item = (
+            _extract_instagram_image(
+                source_url=source_url,
+                playlist_index=(
+                    playlist_index
+                ),
+            )
+        )
+
+        url_validator = (
+            _is_allowed_instagram_cdn_url
+        )
+
+        referer = (
+            "https://www.instagram.com/"
+        )
+
+        platform_name = "Instagram"
+
+    elif _is_x_url(
+        source_url
+    ):
+
+        item = (
+            _extract_x_image(
+                source_url=source_url,
+                playlist_index=(
+                    playlist_index
+                ),
+            )
+        )
+
+        url_validator = (
+            _is_allowed_x_image_url
+        )
+
+        referer = (
+            "https://x.com/"
+        )
+
+        platform_name = "X"
+
+    else:
+
+        raise ValueError(
+            "Image downloads currently support "
+            "Instagram and X URLs"
+        )
+
+    media_url = str(
+        item[
+            "url"
+        ]
+    )
+
+    metadata_extension = (
+        _normalize_image_extension(
+            item.get(
+                "extension"
+            )
+        )
+    )
+
+    if metadata_extension is None:
+
+        raise RuntimeError(
+            "Unsupported image extension"
+        )
+
+    part_path = (
+        DOWNLOAD_DIR
+        / (
+            f"{job_id}."
+            f"{metadata_extension}"
+            ".part"
+        )
+    )
+
+    existing_bytes = 0
+
+    if part_path.is_file():
+
+        existing_bytes = (
+            part_path
+            .stat()
+            .st_size
+        )
+
+        if (
+            existing_bytes
+            > MAX_DOWNLOAD_BYTES
+        ):
+
+            raise RuntimeError(
+                "Partial image exceeds "
+                "maximum allowed size"
+            )
+
+    headers = {
+        "User-Agent":
+            (
+                "Mozilla/5.0 "
+                "(X11; Linux x86_64) "
+                "AppleWebKit/537.36 "
+                "(KHTML, like Gecko) "
+                "Chrome/140.0 Safari/537.36"
+            ),
+
+        "Referer":
+            referer,
+    }
+
+    if existing_bytes > 0:
+
+        headers[
+            "Range"
+        ] = (
+            f"bytes={existing_bytes}-"
+        )
+
+    response = requests.get(
+        media_url,
+        headers=headers,
+        stream=True,
+        timeout=(
+            15,
+            60,
+        ),
+        allow_redirects=True,
+    )
+
+    # --------------------------------------------------------
+    # Validate final redirect target as well.
+    # --------------------------------------------------------
+
+    if not url_validator(
+        response.url
+    ):
+
+        response.close()
+
+        raise RuntimeError(
+            f"{platform_name} image redirected to "
+            "an unexpected host"
+        )
+
+    # --------------------------------------------------------
+    # A stale/finished range can produce 416.
+    # Retry once from byte zero.
+    # --------------------------------------------------------
+
+    if (
+        existing_bytes > 0
+        and response.status_code == 416
+    ):
+
+        response.close()
+
+        part_path.unlink(
+            missing_ok=True
+        )
+
+        existing_bytes = 0
+
+        headers.pop(
+            "Range",
+            None,
+        )
+
+        response = requests.get(
+            media_url,
+            headers=headers,
+            stream=True,
+            timeout=(
+                15,
+                60,
+            ),
+            allow_redirects=True,
+        )
+
+        if not url_validator(
+            response.url
+        ):
+
+            response.close()
+
+            raise RuntimeError(
+                f"{platform_name} image redirected to "
+                "an unexpected host"
+            )
+
+    response.raise_for_status()
+
+    content_type = (
+        response.headers.get(
+            "Content-Type",
+            ""
+        )
+        .split(
+            ";",
+            1,
+        )[0]
+        .strip()
+        .lower()
+    )
+
+    if (
+        content_type
+        not in IMAGE_CONTENT_TYPES
+    ):
+
+        response.close()
+
+        raise RuntimeError(
+            "Unexpected image Content-Type: "
+            f"{content_type or 'unknown'}"
+        )
+
+    response_extension = (
+        _image_extension_from_content_type(
+            content_type
+        )
+    )
+
+    extension = (
+        response_extension
+        or metadata_extension
+    )
+
+    if extension is None:
+
+        response.close()
+
+        raise RuntimeError(
+            "Could not determine image extension"
+        )
+
+    # If server ignored Range and returned 200,
+    # restart the partial file from zero.
+    append_mode = (
+        existing_bytes > 0
+        and response.status_code == 206
+    )
+
+    if not append_mode:
+
+        existing_bytes = 0
+
+    content_length = (
+        response.headers.get(
+            "Content-Length"
+        )
+    )
+
+    total_bytes: int | None = None
+
+    if content_length:
+
+        try:
+
+            remaining = int(
+                content_length
+            )
+
+            total_bytes = (
+                existing_bytes
+                + remaining
+            )
+
+        except (
+            TypeError,
+            ValueError,
+        ):
+
+            total_bytes = None
+
+    if (
+        total_bytes is not None
+        and total_bytes
+        > MAX_DOWNLOAD_BYTES
+    ):
+
+        response.close()
+
+        raise RuntimeError(
+            "Image exceeds the 1900 MB "
+            "download limit"
+        )
+
+    mode = (
+        "ab"
+        if append_mode
+        else "wb"
+    )
+
+    downloaded_bytes = (
+        existing_bytes
+    )
+
+    last_reported_bytes = (
+        downloaded_bytes
+    )
+
+    last_reported_progress = -1
+
+    try:
+
+        with part_path.open(
+            mode
+        ) as output:
+
+            for chunk in (
+                response.iter_content(
+                    chunk_size=(
+                        256
+                        * 1024
+                    )
+                )
+            ):
+
+                if not chunk:
+
+                    continue
+
+                _check_job_control(
+                    job_id
+                )
+
+                output.write(
+                    chunk
+                )
+
+                downloaded_bytes += (
+                    len(
+                        chunk
+                    )
+                )
+
+                if (
+                    downloaded_bytes
+                    > MAX_DOWNLOAD_BYTES
+                ):
+
+                    raise RuntimeError(
+                        "Image exceeds the 1900 MB "
+                        "download limit"
+                    )
+
+                if (
+                    total_bytes
+                    and total_bytes > 0
+                ):
+
+                    progress = int(
+                        (
+                            downloaded_bytes
+                            / total_bytes
+                        )
+                        * 100
+                    )
+
+                    progress = max(
+                        0,
+                        min(
+                            progress,
+                            99,
+                        ),
+                    )
+
+                else:
+
+                    progress = 0
+
+                if (
+                    progress
+                    != last_reported_progress
+                    or (
+                        downloaded_bytes
+                        - last_reported_bytes
+                    )
+                    >= (
+                        1024
+                        * 1024
+                    )
+                ):
+
+                    _update_download_stats(
+                        job_id=job_id,
+                        progress=progress,
+                        downloaded_bytes=(
+                            downloaded_bytes
+                        ),
+                        total_bytes=(
+                            total_bytes
+                        ),
+                        speed=None,
+                        eta=None,
+                    )
+
+                    last_reported_progress = (
+                        progress
+                    )
+
+                    last_reported_bytes = (
+                        downloaded_bytes
+                    )
+
+    finally:
+
+        response.close()
+
+    _check_job_control(
+        job_id
+    )
+
+    if (
+        not part_path.is_file()
+        or part_path.stat().st_size <= 0
+    ):
+
+        raise RuntimeError(
+            "Downloaded image is empty"
+        )
+
+    final_path = (
+        DOWNLOAD_DIR
+        / (
+            f"{job_id}."
+            f"{extension}"
+        )
+    )
+
+    # If metadata extension differs from MIME extension,
+    # move the completed partial file to the correct suffix.
+    os.replace(
+        part_path,
+        final_path,
+    )
+
+    return final_path
 
 
 # ============================================================
@@ -2366,139 +3454,162 @@ def download_task(
         )
 
         # ====================================================
-        # Select format
-        # ====================================================
-
-        format_selector = (
-            _get_format_selector(
-                source_url=source_url,
-                format_id=format_id,
-                quality=quality,
-                media_type=media_type,
-                playlist_index=(
-                    playlist_index
-                ),
-            )
-        )
-
-        common_options = {
-            "outtmpl":
-                output_template,
-
-            "format":
-                format_selector,
-
-            "progress_hooks": [
-                progress_hook,
-            ],
-
-            "noplaylist":
-                True,
-
-            "quiet":
-                True,
-
-            "no_warnings":
-                True,
-
-            "continuedl":
-                True,
-
-            "nopart":
-                False,
-        }
-
-        # ====================================================
-        # X / Twitter multi-video playlist item
-        # ====================================================
-
-        if (
-            playlist_index
-            is not None
-        ):
-
-            common_options[
-                "playlist_items"
-            ] = str(
-                playlist_index
-            )
-
-            # The selected item must be allowed through.
-            common_options[
-                "noplaylist"
-            ] = False
-
-        # ====================================================
-        # Audio
+        # Image
         # ====================================================
 
         if (
             media_type
-            == "audio"
+            == "image"
         ):
 
-            ydl_options = (
-                _get_yt_dlp_options(
-                    source_url,
-                    **common_options,
+            print(
+                "Starting image download job "
+                f"{job_id}: "
+                f"playlist_index="
+                f"{playlist_index}"
+            )
+
+            file_path = (
+                _download_social_image(
+                    job_id=job_id,
+                    source_url=source_url,
+                    playlist_index=(
+                        playlist_index
+                    ),
                 )
             )
 
         # ====================================================
-        # Video
+        # Audio / Video
         # ====================================================
 
         else:
 
-            ydl_options = (
-                _get_yt_dlp_options(
-                    source_url,
-                    merge_output_format="mp4",
-                    **common_options,
+            format_selector = (
+                _get_format_selector(
+                    source_url=source_url,
+                    format_id=format_id,
+                    quality=quality,
+                    media_type=media_type,
+                    playlist_index=(
+                        playlist_index
+                    ),
                 )
             )
 
-        print(
-            "Starting download job "
-            f"{job_id}: "
-            f"quality={quality}, "
-            f"format_id={format_id}, "
-            f"media_type={media_type}, "
-            f"playlist_index={playlist_index}, "
-            f"youtube="
-            f"{_is_youtube_url(source_url)}, "
-            f"selector="
-            f"{format_selector}"
-        )
+            common_options = {
+                "outtmpl":
+                    output_template,
 
-        # ====================================================
-        # Download
-        # ====================================================
+                "format":
+                    format_selector,
 
-        with yt_dlp.YoutubeDL(
-            ydl_options
-        ) as ydl:
+                "progress_hooks": [
+                    progress_hook,
+                ],
 
-            ydl.download(
-                [
-                    source_url,
-                ]
+                "noplaylist":
+                    True,
+
+                "quiet":
+                    True,
+
+                "no_warnings":
+                    True,
+
+                "continuedl":
+                    True,
+
+                "nopart":
+                    False,
+            }
+
+            # ================================================
+            # Playlist item
+            # ================================================
+
+            if (
+                playlist_index
+                is not None
+            ):
+
+                common_options[
+                    "playlist_items"
+                ] = str(
+                    playlist_index
+                )
+
+                common_options[
+                    "noplaylist"
+                ] = False
+
+            # ================================================
+            # Audio
+            # ================================================
+
+            if (
+                media_type
+                == "audio"
+            ):
+
+                ydl_options = (
+                    _get_yt_dlp_options(
+                        source_url,
+                        **common_options,
+                    )
+                )
+
+            # ================================================
+            # Video
+            # ================================================
+
+            else:
+
+                ydl_options = (
+                    _get_yt_dlp_options(
+                        source_url,
+                        merge_output_format="mp4",
+                        **common_options,
+                    )
+                )
+
+            print(
+                "Starting download job "
+                f"{job_id}: "
+                f"quality={quality}, "
+                f"format_id={format_id}, "
+                f"media_type={media_type}, "
+                f"playlist_index={playlist_index}, "
+                f"youtube="
+                f"{_is_youtube_url(source_url)}, "
+                f"selector="
+                f"{format_selector}"
             )
 
-        _check_job_control(
-            job_id
-        )
+            with yt_dlp.YoutubeDL(
+                ydl_options
+            ) as ydl:
 
-        # ====================================================
-        # Find the actual final media file
-        # ====================================================
+                ydl.download(
+                    [
+                        source_url,
+                    ]
+                )
 
-        file_path = (
-            _find_final_output_file(
-                job_id=job_id,
-                media_type=media_type,
+            _check_job_control(
+                job_id
             )
-        )
+
+            file_path = (
+                _find_final_output_file(
+                    job_id=job_id,
+                    media_type=media_type,
+                )
+            )
+
+        # ====================================================
+        # Final file checks
+        # ====================================================
 
         file_size = (
             file_path
@@ -2506,31 +3617,45 @@ def download_task(
             .st_size
         )
 
-        if (
-            file_size <= 0
-        ):
+        if file_size <= 0:
 
             raise RuntimeError(
                 "Downloaded file is empty"
             )
 
+        if (
+            file_size
+            > MAX_DOWNLOAD_BYTES
+        ):
+
+            raise RuntimeError(
+                "Downloaded file exceeds "
+                "the 1900 MB limit"
+            )
+
         print(
             "Selected final output: "
             f"{file_path}, "
-            f"size="
-            f"{file_size}"
+            f"size={file_size}"
         )
 
         # ====================================================
-        # Validate quality
+        # Validate video/audio quality
+        #
+        # Images have no video quality to validate.
         # ====================================================
 
-        _validate_output_quality(
-            source_url=source_url,
-            quality=quality,
-            media_type=media_type,
-            file_path=file_path,
-        )
+        if (
+            media_type
+            != "image"
+        ):
+
+            _validate_output_quality(
+                source_url=source_url,
+                quality=quality,
+                media_type=media_type,
+                file_path=file_path,
+            )
 
         _check_job_control(
             job_id

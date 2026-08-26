@@ -1313,7 +1313,8 @@ async def get_media_info(
 
 async def create_download_job(
     source_url: str,
-    quality: str,
+    quality: str | None = None,
+    media_type: str = "video",
     playlist_index: int | None = None,
 ) -> dict:
 
@@ -1323,25 +1324,27 @@ async def create_download_job(
         )
     )
 
+    payload = {
+        "source_url":
+            source_url,
+
+        "quality":
+            quality,
+
+        "media_type":
+            media_type,
+
+        "playlist_index":
+            playlist_index,
+    }
+
     async with aiohttp.ClientSession(
         timeout=timeout
     ) as session:
 
         async with session.post(
             f"{BACKEND_URL}/downloads",
-            json={
-                "source_url":
-                    source_url,
-
-                "quality":
-                    quality,
-
-                "media_type":
-                    "video",
-
-                "playlist_index":
-                    playlist_index,
-            },
+            json=payload,
         ) as response:
 
             response.raise_for_status()
@@ -1349,7 +1352,6 @@ async def create_download_job(
             return (
                 await response.json()
             )
-
 
 # ============================================================
 # Backend - get
@@ -1685,22 +1687,38 @@ def _get_format_quality(
 # Audio size
 # ============================================================
 
-def _get_best_audio_size(
-    formats: list[
-        dict
-    ],
-    duration: (
-        int
-        | float
-        | None
-    ),
+def _estimate_best_audio_size(
+    formats: list[dict],
+    duration: int | float | None,
 ) -> int | None:
+    """
+    Estimate the audio stream size that will be combined with
+    a video-only format.
 
-    preferred: list[
+    Normal sites:
+        Prefer real audio filesize metadata.
+
+    X / Twitter:
+        HLS audio entries often expose only the tiny .m3u8
+        manifest size. Their format_id contains the bitrate:
+
+            hls-audio-64000-Audio
+
+        In that case estimate:
+            bitrate * duration / 8
+
+        plus a small container/network overhead.
+    """
+
+    real_audio_sizes: list[
         int
     ] = []
 
-    fallback: list[
+    preferred_audio_sizes: list[
+        int
+    ] = []
+
+    x_hls_bitrates: list[
         int
     ] = []
 
@@ -1718,98 +1736,186 @@ def _get_best_audio_size(
 
             continue
 
-        estimated = (
-            estimate_format_size(
-                item,
-                duration,
+        format_id = (
+            str(
+                item.get(
+                    "format_id"
+                )
+                or ""
+            )
+            .strip()
+            .lower()
+        )
+
+        extension = (
+            str(
+                item.get(
+                    "extension"
+                )
+                or ""
+            )
+            .strip()
+            .lower()
+        )
+
+        audio_codec = (
+            str(
+                item.get(
+                    "audio_codec"
+                )
+                or ""
+            )
+            .strip()
+            .lower()
+        )
+
+        # ----------------------------------------------------
+        # X HLS audio
+        #
+        # filesize for these entries is normally the manifest
+        # itself (hundreds of bytes), not the media payload.
+        # ----------------------------------------------------
+
+        match = re.search(
+            r"hls-audio-(\d+)-audio",
+            format_id,
+        )
+
+        if match:
+
+            try:
+
+                bitrate = int(
+                    match.group(
+                        1
+                    )
+                )
+
+            except ValueError:
+
+                bitrate = 0
+
+            if bitrate > 0:
+
+                x_hls_bitrates.append(
+                    bitrate
+                )
+
+            # Never use the tiny HLS manifest filesize.
+            continue
+
+        # ----------------------------------------------------
+        # Normal audio filesize
+        # ----------------------------------------------------
+
+        file_size = (
+            item.get(
+                "filesize"
             )
         )
 
-        if (
-            estimated is None
-            or estimated <= 0
+        if not isinstance(
+            file_size,
+            int,
         ):
 
             continue
 
-        extension = str(
-            item.get(
-                "extension"
-            )
-            or ""
-        ).lower()
+        if (
+            file_size
+            <= 4096
+        ):
 
-        format_id = str(
-            item.get(
-                "format_id"
-            )
-            or ""
-        ).lower()
+            # Protect against other manifest-like responses.
+            continue
 
-        audio_codec = str(
-            item.get(
-                "audio_codec"
-            )
-            or ""
-        ).lower()
-
-        fallback.append(
-            estimated
+        real_audio_sizes.append(
+            file_size
         )
 
         if (
             extension
-            in (
+            in {
                 "m4a",
                 "mp4",
-            )
-            and "drc"
-            not in format_id
+            }
             and (
                 audio_codec.startswith(
                     "mp4a"
                 )
-                or audio_codec.startswith(
-                    "aac"
-                )
+                or not audio_codec
             )
         ):
 
-            preferred.append(
-                estimated
+            preferred_audio_sizes.append(
+                file_size
             )
 
-    if preferred:
+    if preferred_audio_sizes:
 
         return max(
-            preferred
+            preferred_audio_sizes
         )
 
-    if fallback:
+    if real_audio_sizes:
 
         return max(
-            fallback
+            real_audio_sizes
         )
+
+    # --------------------------------------------------------
+    # Estimate X audio from bitrate + duration
+    # --------------------------------------------------------
+
+    if x_hls_bitrates:
+
+        try:
+
+            duration_value = float(
+                duration
+                or 0
+            )
+
+        except (
+            TypeError,
+            ValueError,
+        ):
+
+            duration_value = 0
+
+        if duration_value > 0:
+
+            bitrate = max(
+                x_hls_bitrates
+            )
+
+            estimated = (
+                bitrate
+                * duration_value
+                / 8
+            )
+
+            # Small overhead for container/segments.
+            estimated *= 1.03
+
+            return int(
+                estimated
+            )
 
     return None
 
 
 # ============================================================
-# Worker-format simulation
+# Worker video format simulation
 # ============================================================
 
 def _select_worker_video_format(
-    formats: list[
-        dict
-    ],
+    formats: list[dict],
     quality: int,
 ) -> dict | None:
 
-    usable: list[
-        tuple[
-            dict,
-            int,
-        ]
+    candidates: list[
+        dict
     ] = []
 
     for item in formats:
@@ -1828,144 +1934,105 @@ def _select_worker_video_format(
 
         if (
             item_quality
-            is None
+            != quality
         ):
 
             continue
 
-        usable.append(
-            (
-                item,
-                item_quality,
-            )
+        candidates.append(
+            item
         )
 
-    if not usable:
+    if not candidates:
 
         return None
 
-    # --------------------------------------------------------
-    # Match Worker behavior:
-    # choose nearest real resolution.
+    # ========================================================
+    # 1. X/Twitter direct HTTP media
     #
     # Example:
-    # requested=360
-    # available=320,364
-    # -> 364
-    # --------------------------------------------------------
+    #   http-950 -> 401772 bytes
+    #
+    # Prefer these over:
+    #   hls-316 -> ~498 byte manifest
+    # ========================================================
 
-    nearest_quality = min(
-        (
-            item_quality
-            for (
-                _,
-                item_quality,
-            ) in usable
-        ),
-        key=lambda value: (
-            abs(
-                value
-                - quality
+    http_candidates = [
+        item
+        for item
+        in candidates
+        if (
+            str(
+                item.get(
+                    "format_id"
+                )
+                or ""
+            )
+            .lower()
+            .startswith(
+                "http-"
+            )
+            and isinstance(
+                item.get(
+                    "filesize"
+                ),
+                int,
+            )
+            and item.get(
+                "filesize"
+            )
+            > 4096
+        )
+    ]
+
+    if http_candidates:
+
+        return max(
+            http_candidates,
+            key=lambda item: (
+                item.get(
+                    "filesize"
+                )
+                or 0
             ),
-            -value,
-        ),
+        )
+
+    # ========================================================
+    # Remove HLS manifest entries when a normal alternative
+    # exists.
+    # ========================================================
+
+    non_hls_candidates = [
+        item
+        for item
+        in candidates
+        if not (
+            str(
+                item.get(
+                    "format_id"
+                )
+                or ""
+            )
+            .lower()
+            .startswith(
+                "hls-"
+            )
+        )
+    ]
+
+    usable_candidates = (
+        non_hls_candidates
+        or candidates
     )
 
-    candidates = [
-        item
-        for (
-            item,
-            item_quality,
-        ) in usable
-        if (
-            item_quality
-            == nearest_quality
-        )
-    ]
-
-    h264_mp4 = [
-        item
-        for item
-        in candidates
-        if (
-            str(
-                item.get(
-                    "extension"
-                )
-                or ""
-            ).lower()
-            == "mp4"
-
-            and str(
-                item.get(
-                    "video_codec"
-                )
-                or ""
-            ).lower().startswith(
-                "avc1"
-            )
-
-            and not item.get(
-                "has_audio"
-            )
-        )
-    ]
-
-    if h264_mp4:
-
-        return max(
-            h264_mp4,
-            key=lambda item: (
-                item.get(
-                    "filesize"
-                )
-                or
-                item.get(
-                    "filesize_approx"
-                )
-                or 0
-            ),
-        )
-
-    mp4_video = [
-        item
-        for item
-        in candidates
-        if (
-            str(
-                item.get(
-                    "extension"
-                )
-                or ""
-            ).lower()
-            == "mp4"
-
-            and not item.get(
-                "has_audio"
-            )
-        )
-    ]
-
-    if mp4_video:
-
-        return max(
-            mp4_video,
-            key=lambda item: (
-                item.get(
-                    "filesize"
-                )
-                or
-                item.get(
-                    "filesize_approx"
-                )
-                or 0
-            ),
-        )
+    # ========================================================
+    # 2. Progressive video+audio
+    # ========================================================
 
     progressive = [
         item
         for item
-        in candidates
+        in usable_candidates
         if (
             item.get(
                 "has_video"
@@ -1984,23 +2051,54 @@ def _select_worker_video_format(
                 item.get(
                     "filesize"
                 )
-                or
+                or 0
+            ),
+        )
+
+    # ========================================================
+    # 3. MP4 video-only
+    # ========================================================
+
+    mp4_video = [
+        item
+        for item
+        in usable_candidates
+        if (
+            str(
                 item.get(
-                    "filesize_approx"
+                    "extension"
+                )
+                or ""
+            )
+            .lower()
+            == "mp4"
+            and not item.get(
+                "has_audio"
+            )
+        )
+    ]
+
+    if mp4_video:
+
+        return max(
+            mp4_video,
+            key=lambda item: (
+                item.get(
+                    "filesize"
                 )
                 or 0
             ),
         )
 
+    # ========================================================
+    # 4. Generic fallback
+    # ========================================================
+
     return max(
-        candidates,
+        usable_candidates,
         key=lambda item: (
             item.get(
                 "filesize"
-            )
-            or
-            item.get(
-                "filesize_approx"
             )
             or 0
         ),
@@ -2008,7 +2106,7 @@ def _select_worker_video_format(
 
 
 # ============================================================
-# Quality extraction + size estimation
+# Extract qualities + estimated size
 # ============================================================
 
 def extract_available_quality_options(
@@ -2020,22 +2118,12 @@ def extract_available_quality_options(
     ]
 ]:
 
-    standard_qualities = {
-        144,
-        240,
-        360,
-        480,
-        720,
-        1080,
-        1440,
-        2160,
-    }
-
     formats = (
         media_info.get(
             "formats",
             [],
         )
+        or []
     )
 
     duration = (
@@ -2063,31 +2151,18 @@ def extract_available_quality_options(
         )
 
         if (
-            quality
-            is None
-        ):
-
-            continue
-
-        normalized_quality = (
-            normalize_platform_quality(
-                quality
-            )
-        )
-
-        if (
-            normalized_quality
-            not in standard_qualities
+            quality is None
+            or quality <= 0
         ):
 
             continue
 
         available_qualities.add(
-            normalized_quality
+            quality
         )
 
     audio_size = (
-        _get_best_audio_size(
+        _estimate_best_audio_size(
             formats,
             duration,
         )
@@ -2101,8 +2176,7 @@ def extract_available_quality_options(
     ] = []
 
     for quality in sorted(
-        available_qualities,
-        key=quality_sort_key,
+        available_qualities
     ):
 
         selected_format = (
@@ -2120,9 +2194,8 @@ def extract_available_quality_options(
         if selected_format:
 
             video_size = (
-                estimate_format_size(
-                    selected_format,
-                    duration,
+                selected_format.get(
+                    "filesize"
                 )
             )
 
@@ -2133,7 +2206,39 @@ def extract_available_quality_options(
             )
 
             if (
-                video_size is not None
+                isinstance(
+                    video_size,
+                    int,
+                )
+                and video_size > 0
+            ):
+
+                # HLS manifest sizes are not media sizes.
+                format_id = (
+                    str(
+                        selected_format.get(
+                            "format_id"
+                        )
+                        or ""
+                    )
+                    .lower()
+                )
+
+                if (
+                    format_id.startswith(
+                        "hls-"
+                    )
+                    and video_size
+                    <= 4096
+                ):
+
+                    video_size = None
+
+            if (
+                isinstance(
+                    video_size,
+                    int,
+                )
                 and video_size > 0
             ):
 
@@ -2141,9 +2246,31 @@ def extract_available_quality_options(
                     video_size
                 )
 
+                format_id = (
+                    str(
+                        selected_format.get(
+                            "format_id"
+                        )
+                        or ""
+                    )
+                    .strip()
+                    .lower()
+                )
+
+                # X/Twitter direct HTTP MP4 sizes are already
+                # very close to the final downloaded media.
+                # Do not double-count a separate HLS audio
+                # estimate for these formats.
+                is_x_http_format = (
+                    format_id.startswith(
+                        "http-"
+                    )
+                )
+
                 if (
                     not has_audio
                     and audio_size
+                    and not is_x_http_format
                 ):
 
                     approximate_size += (
@@ -2192,12 +2319,36 @@ def build_media_entry_keyboard(
 
             continue
 
+        media_type = (
+            str(
+                entry.get(
+                    "media_type"
+                )
+                or "video"
+            )
+            .strip()
+            .lower()
+        )
+
+        if media_type == "image":
+
+            button_text = (
+                f"📷 عکس {index}"
+            )
+
+        else:
+
+            # Backward compatible:
+            # old X entries without media_type
+            # are still considered videos.
+            button_text = (
+                f"🎬 ویدئو {index}"
+            )
+
         rows.append(
             [
                 InlineKeyboardButton(
-                    text=(
-                        f"🎬 ویدئو {index}"
-                    ),
+                    text=button_text,
                     callback_data=(
                         f"media_entry:"
                         f"{token}:"
@@ -2210,7 +2361,6 @@ def build_media_entry_keyboard(
     return InlineKeyboardMarkup(
         inline_keyboard=rows
     )
-
 
 # ============================================================
 # Quality keyboard
@@ -2311,6 +2461,7 @@ def build_smaller_quality_keyboard(
         int,
         int | None,
     ],
+    playlist_index: int | None = None,
 ) -> InlineKeyboardMarkup | None:
 
     quality_options: list[
@@ -2360,6 +2511,9 @@ def build_smaller_quality_keyboard(
         add_pending_selection(
             source_url,
             quality_options,
+            playlist_index=(
+                playlist_index
+            ),
         )
     )
 
@@ -2371,7 +2525,6 @@ def build_smaller_quality_keyboard(
             token=token,
         )
     )
-
 
 # ============================================================
 # Wait for download
@@ -3227,20 +3380,23 @@ async def media_entry_callback(
 
     (
         _,
-        token,
+        media_token,
         index_text,
     ) = parts
 
     selection = (
         PENDING_MEDIA_ENTRIES.get(
-            token
+            media_token
         )
     )
 
     if not selection:
 
         await callback.answer(
-            "⏰ این درخواست منقضی شده است.",
+            (
+                "⌛ این انتخاب منقضی شده است. "
+                "لینک را دوباره ارسال کنید."
+            ),
             show_alert=True,
         )
 
@@ -3248,14 +3404,17 @@ async def media_entry_callback(
 
     try:
 
-        playlist_index = int(
+        index = int(
             index_text
         )
 
-    except ValueError:
+    except (
+        TypeError,
+        ValueError,
+    ):
 
         await callback.answer(
-            "❌ شماره ویدئو نامعتبر است.",
+            "❌ شماره رسانه نامعتبر است.",
             show_alert=True,
         )
 
@@ -3267,9 +3426,63 @@ async def media_entry_callback(
         )
     )
 
+    entries = (
+        selection.get(
+            "entries"
+        )
+        or []
+    )
+
     if not source_url:
 
+        await callback.answer(
+            "❌ لینک رسانه پیدا نشد.",
+            show_alert=True,
+        )
+
         return
+
+    selected_entry = next(
+        (
+            entry
+            for entry in entries
+            if (
+                isinstance(
+                    entry,
+                    dict,
+                )
+                and str(
+                    entry.get(
+                        "index"
+                    )
+                )
+                == str(
+                    index
+                )
+            )
+        ),
+        None,
+    )
+
+    if selected_entry is None:
+
+        await callback.answer(
+            "❌ رسانه انتخاب‌شده پیدا نشد.",
+            show_alert=True,
+        )
+
+        return
+
+    media_type = (
+        str(
+            selected_entry.get(
+                "media_type"
+            )
+            or "video"
+        )
+        .strip()
+        .lower()
+    )
 
     message = (
         callback.message
@@ -3282,33 +3495,140 @@ async def media_entry_callback(
 
         return
 
+    # The selection token is one-time.
+    PENDING_MEDIA_ENTRIES.pop(
+        media_token,
+        None,
+    )
+
+    # ========================================================
+    # IMAGE
+    # ========================================================
+
+    if media_type == "image":
+
+        await callback.answer(
+            f"📷 عکس {index} انتخاب شد."
+        )
+
+        try:
+
+            await safe_edit_message(
+                message,
+                (
+                    "⏳ <b>در حال ایجاد درخواست دانلود عکس...</b>\n\n"
+                    f"📷 شماره عکس: "
+                    f"<code>{index}</code>\n"
+                    "🖼 کیفیت: "
+                    "<code>اصلی</code>"
+                ),
+            )
+
+            job = (
+                await create_download_job(
+                    source_url=source_url,
+                    quality=None,
+                    media_type="image",
+                    playlist_index=index,
+                )
+            )
+
+            job_id = (
+                job[
+                    "id"
+                ]
+            )
+
+            await safe_edit_message(
+                message,
+                (
+                    "✅ <b>درخواست دانلود عکس ایجاد شد</b>\n\n"
+                    f"🆔 Job ID: "
+                    f"<code>{job_id}</code>\n"
+                    f"📷 عکس: "
+                    f"<code>{index}</code>\n"
+                    "🖼 کیفیت: "
+                    "<code>اصلی</code>\n"
+                    "📊 وضعیت: "
+                    "<code>pending</code>"
+                ),
+                reply_markup=(
+                    build_active_download_keyboard(
+                        job_id
+                    )
+                ),
+            )
+
+            completed_job = (
+                await wait_for_download(
+                    job_id,
+                    message,
+                    "تصویر اصلی",
+                )
+            )
+
+            final_status = (
+                completed_job.get(
+                    "status"
+                )
+            )
+
+            if final_status != "completed":
+
+                return
+
+            await send_downloaded_file(
+                message=message,
+                status_message=message,
+                job=completed_job,
+            )
+
+        except Exception as exc:
+
+            print(
+                "Image download callback error: "
+                f"{type(exc).__name__}: "
+                f"{exc}"
+            )
+
+            await safe_edit_message(
+                message,
+                (
+                    "❌ <b>دانلود عکس با خطا مواجه شد</b>\n\n"
+                    "⚠️ خطا:\n"
+                    f"<code>"
+                    f"{html.escape(str(exc)[:1000])}"
+                    f"</code>"
+                ),
+                reply_markup=None,
+            )
+
+        return
+
+    # ========================================================
+    # VIDEO
+    #
+    # Existing X / Instagram video flow:
+    # retrieve the selected entry's real formats, then show
+    # the normal quality keyboard.
+    # ========================================================
+
     await callback.answer(
-        f"ویدئو {playlist_index} انتخاب شد."
+        f"🎬 ویدئو {index} انتخاب شد."
     )
 
     try:
 
-        await safe_edit_message(
-            message,
-            (
-                "🔎 <b>در حال بررسی ویدئو "
-                f"{playlist_index}</b>\n\n"
-                "کیفیت‌های موجود در حال دریافت هستند..."
-            ),
-        )
-
-        media_info = (
+        selected_info = (
             await get_media_info(
-                source_url,
-                playlist_index=(
-                    playlist_index
-                ),
+                source_url=source_url,
+                playlist_index=index,
             )
         )
 
         quality_options = (
             extract_available_quality_options(
-                media_info
+                selected_info
             )
         )
 
@@ -3321,16 +3641,15 @@ async def media_entry_callback(
         if not quality_options:
 
             raise RuntimeError(
-                "هیچ کیفیت ویدئویی قابل دانلودی پیدا نشد."
+                "هیچ کیفیت ویدئویی "
+                "قابل دانلودی پیدا نشد."
             )
 
-        quality_token = (
+        token = (
             add_pending_selection(
                 source_url,
                 quality_options,
-                playlist_index=(
-                    playlist_index
-                ),
+                playlist_index=index,
             )
         )
 
@@ -3339,7 +3658,7 @@ async def media_entry_callback(
                 quality_options=(
                     quality_options
                 ),
-                token=quality_token,
+                token=token,
             )
         )
 
@@ -3347,7 +3666,7 @@ async def media_entry_callback(
             normalize_media_title(
                 source_url=source_url,
                 title=(
-                    media_info.get(
+                    selected_info.get(
                         "title"
                     )
                 ),
@@ -3362,70 +3681,16 @@ async def media_entry_callback(
             )
         )
 
-        duration = (
-            media_info.get(
-                "duration"
-            )
-        )
-
-        text = (
-            f"🎬 <b>ویدئو {playlist_index} آماده دانلود است</b>\n\n"
-            f"📌 <b>عنوان:</b> "
-            f"{safe_title}\n"
-        )
-
-        if duration:
-
-            try:
-
-                duration_value = int(
-                    duration
-                )
-
-            except (
-                TypeError,
-                ValueError,
-            ):
-
-                duration_value = 0
-
-            if (
-                duration_value
-                > 0
-            ):
-
-                minutes = (
-                    duration_value
-                    // 60
-                )
-
-                seconds = (
-                    duration_value
-                    % 60
-                )
-
-                text += (
-                    f"⏱ <b>مدت:</b> "
-                    f"<code>"
-                    f"{minutes}:"
-                    f"{seconds:02d}"
-                    f"</code>\n"
-                )
-
-        text += (
-            "\n🎯 <b>کیفیت موردنظر را انتخاب کنید:</b>\n"
-            "📦 حجم‌ها تقریبی هستند."
-        )
-
         await safe_edit_message(
             message,
-            text,
+            (
+                f"🎬 <b>ویدئو {index} آماده دانلود است</b>\n\n"
+                f"📌 <b>عنوان:</b> "
+                f"{safe_title}\n\n"
+                "🎯 <b>کیفیت موردنظر را انتخاب کنید:</b>\n"
+                "📦 حجم‌ها تقریبی هستند."
+            ),
             reply_markup=keyboard,
-        )
-
-        PENDING_MEDIA_ENTRIES.pop(
-            token,
-            None,
         )
 
     except Exception as exc:
@@ -3439,11 +3704,13 @@ async def media_entry_callback(
         await safe_edit_message(
             message,
             (
-                "❌ <b>نتوانستم اطلاعات این ویدئو را دریافت کنم</b>\n\n"
+                "❌ <b>دریافت اطلاعات رسانه ناموفق بود</b>\n\n"
+                "⚠️ خطا:\n"
                 f"<code>"
                 f"{html.escape(str(exc)[:1000])}"
                 f"</code>"
             ),
+            reply_markup=None,
         )
 
 
@@ -3607,6 +3874,9 @@ async def quality_callback(
                 source_url=source_url,
                 selected_height=height,
                 sizes=sizes,
+                playlist_index=(
+                    playlist_index
+                ),
             )
         )
 
@@ -4000,17 +4270,113 @@ async def download_handler(
 
             await status_message.edit_text(
                 (
-                    "🐦 <b>این پست شامل "
-                    f"{len(entries)} ویدئو است</b>\n\n"
+                    "📚 <b>این پست شامل "
+                    f"{len(entries)} رسانه است</b>\n\n"
 
                     f"📌 <b>عنوان:</b> "
                     f"{safe_title}\n\n"
 
-                    "👇 <b>ویدئوی موردنظر را انتخاب کنید:</b>"
+                    "👇 <b>رسانه موردنظر را انتخاب کنید:</b>"
                 ),
                 reply_markup=keyboard,
                 parse_mode="HTML",
             )
+
+            return
+
+        # Single-image media
+        #
+        # Multi-image posts were already handled above by the
+        # playlist UI. A single image does not need a quality
+        # selection screen.
+        media_type = (
+            str(
+                media_info.get(
+                    "media_type"
+                )
+                or "video"
+            )
+            .strip()
+            .lower()
+        )
+
+        if media_type == "image":
+
+            safe_title = (
+                html.escape(
+                    str(
+                        title
+                    )
+                )
+            )
+
+            await safe_edit_message(
+                status_message,
+                (
+                    "📷 <b>تصویر آماده دانلود است</b>\n\n"
+                    f"📌 <b>عنوان:</b> "
+                    f"{safe_title}\n"
+                    "🖼 <b>کیفیت:</b> "
+                    "<code>اصلی</code>\n\n"
+                    "⏳ در حال ایجاد درخواست دانلود..."
+                ),
+            )
+
+            job = (
+                await create_download_job(
+                    source_url=source_url,
+                    quality=None,
+                    media_type="image",
+                    playlist_index=None,
+                )
+            )
+
+            job_id = (
+                job[
+                    "id"
+                ]
+            )
+
+            await safe_edit_message(
+                status_message,
+                (
+                    "✅ <b>درخواست دانلود تصویر ایجاد شد</b>\n\n"
+                    f"🆔 Job ID: "
+                    f"<code>{job_id}</code>\n"
+                    "🖼 کیفیت: "
+                    "<code>اصلی</code>\n"
+                    "📊 وضعیت: "
+                    "<code>pending</code>"
+                ),
+                reply_markup=(
+                    build_active_download_keyboard(
+                        job_id
+                    )
+                ),
+            )
+
+            completed_job = (
+                await wait_for_download(
+                    job_id,
+                    status_message,
+                    "تصویر اصلی",
+                )
+            )
+
+            if (
+                completed_job.get(
+                    "status"
+                )
+                == "completed"
+            ):
+
+                await send_downloaded_file(
+                    message=message,
+                    status_message=(
+                        status_message
+                    ),
+                    job=completed_job,
+                )
 
             return
 

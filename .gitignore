@@ -79,3 +79,7 @@ test-*.mp4
 # Temporary files
 /0
 
+
+# Secrets and authentication cookies
+secrets/
+*.cookies.txt

@@ -286,6 +286,31 @@ class MediaEntry(
         default_factory=list
     )
 
+    media_type: (
+        str
+        | None
+    ) = None
+
+    media_url: (
+        str
+        | None
+    ) = None
+
+    extension: (
+        str
+        | None
+    ) = None
+
+    width: (
+        int
+        | None
+    ) = None
+
+    height: (
+        int
+        | None
+    ) = None
+
 
 # ============================================================
 # Media info response
@@ -308,6 +333,31 @@ class MediaInfoResponse(
 
     thumbnail: (
         str
+        | None
+    ) = None
+
+    media_type: (
+        str
+        | None
+    ) = None
+
+    media_url: (
+        str
+        | None
+    ) = None
+
+    extension: (
+        str
+        | None
+    ) = None
+
+    width: (
+        int
+        | None
+    ) = None
+
+    height: (
+        int
         | None
     ) = None
 

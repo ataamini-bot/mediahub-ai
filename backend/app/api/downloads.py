@@ -1,3 +1,6 @@
+import mimetypes
+from pathlib import Path
+
 from fastapi import (
     APIRouter,
     Depends,
@@ -328,10 +331,29 @@ async def download_file(
             ),
         )
 
+    file_path = Path(
+        job.file_path
+    )
+
+    suffix = (
+        file_path.suffix
+        .lower()
+    )
+
+    guessed_media_type = (
+        mimetypes.guess_type(
+            file_path.name
+        )[0]
+        or "application/octet-stream"
+    )
+
     return FileResponse(
         path=job.file_path,
         filename=(
-            f"download-{job.id}.mp4"
+            f"download-{job.id}"
+            f"{suffix}"
         ),
-        media_type="video/mp4",
+        media_type=(
+            guessed_media_type
+        ),
     )

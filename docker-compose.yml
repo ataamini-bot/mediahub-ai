@@ -86,6 +86,7 @@ services:
       - media_data:/app/media
       - downloads_data:/app/downloads
       - temp_data:/app/tmp
+      - ./secrets:/app/secrets:ro
 
     ports:
       - "8000:8000"
@@ -149,6 +150,7 @@ services:
       - media_data:/app/media
       - downloads_data:/app/downloads
       - temp_data:/app/tmp
+      - ./secrets:/app/secrets:ro
 
     networks:
       - mediahub

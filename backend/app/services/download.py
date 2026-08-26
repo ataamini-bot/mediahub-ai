@@ -1,3 +1,5 @@
+import json
+import subprocess
 from datetime import datetime, timezone
 from typing import Any
 import ipaddress
@@ -616,6 +618,7 @@ def _get_format_filesize(
     item: dict[str, Any],
 ) -> int | None:
 
+    # Exact extractor value always wins.
     filesize = (
         _positive_int(
             item.get(
@@ -627,6 +630,36 @@ def _get_format_filesize(
     if filesize is not None:
 
         return filesize
+
+    stream_url = (
+        str(
+            item.get(
+                "url"
+            )
+            or ""
+        )
+        .strip()
+        .lower()
+    )
+
+    # X often provides filesize_approx even though its CDN
+    # exposes the real Content-Length / Content-Range.
+    if (
+        "video.twimg.com"
+        in stream_url
+        or "pbs.twimg.com"
+        in stream_url
+    ):
+
+        probed_size = (
+            _probe_remote_filesize(
+                item
+            )
+        )
+
+        if probed_size is not None:
+
+            return probed_size
 
     filesize_approx = (
         _positive_int(
@@ -641,9 +674,7 @@ def _get_format_filesize(
         is not None
     ):
 
-        return (
-            filesize_approx
-        )
+        return filesize_approx
 
     return (
         _probe_remote_filesize(
@@ -1041,6 +1072,965 @@ def _normalize_duration(
 # Download Service
 # ============================================================
 
+
+# ============================================================
+# Instagram mixed-media helpers
+# ============================================================
+
+INSTAGRAM_COOKIE_PATH = os.getenv(
+    "INSTAGRAM_COOKIE_PATH",
+    "/app/secrets/instagram-cookies.txt",
+)
+
+
+def _is_instagram_url(
+    source_url: str,
+) -> bool:
+
+    try:
+
+        hostname = (
+            urlparse(
+                source_url
+            ).hostname
+            or ""
+        ).lower()
+
+    except Exception:
+
+        return False
+
+    return (
+        hostname == "instagram.com"
+        or hostname.endswith(
+            ".instagram.com"
+        )
+    )
+
+
+def _get_instagram_gallery_info(
+    source_url: str,
+) -> dict[str, Any] | None:
+
+    cookie_path = (
+        INSTAGRAM_COOKIE_PATH
+    )
+
+    if not os.path.isfile(
+        cookie_path
+    ):
+
+        print(
+            "Instagram gallery cookies "
+            f"not found: {cookie_path}"
+        )
+
+        return None
+
+    command = [
+        "gallery-dl",
+        "--cookies",
+        cookie_path,
+        "-j",
+        source_url,
+    ]
+
+    try:
+
+        result = subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            timeout=90,
+            check=False,
+        )
+
+    except Exception as exc:
+
+        print(
+            "gallery-dl execution failed: "
+            f"{type(exc).__name__}: "
+            f"{exc}"
+        )
+
+        return None
+
+    if result.returncode != 0:
+
+        print(
+            "gallery-dl failed: "
+            f"{result.stderr[-1000:]}"
+        )
+
+        return None
+
+    try:
+
+        data = json.loads(
+            result.stdout
+        )
+
+    except Exception as exc:
+
+        print(
+            "gallery-dl JSON parse failed: "
+            f"{type(exc).__name__}: "
+            f"{exc}"
+        )
+
+        return None
+
+    if not isinstance(
+        data,
+        list,
+    ):
+
+        return None
+
+    post_metadata: dict[
+        str,
+        Any,
+    ] = {}
+
+    entries_by_index: dict[
+        int,
+        dict[str, Any],
+    ] = {}
+
+    for event in data:
+
+        if (
+            not isinstance(
+                event,
+                list,
+            )
+            or len(
+                event
+            )
+            < 2
+        ):
+
+            continue
+
+        event_type = (
+            event[0]
+        )
+
+        if (
+            event_type == 2
+            and len(
+                event
+            )
+            >= 2
+            and isinstance(
+                event[1],
+                dict,
+            )
+        ):
+
+            post_metadata = (
+                event[1]
+            )
+
+            continue
+
+        if (
+            event_type != 3
+            or len(
+                event
+            )
+            < 3
+        ):
+
+            continue
+
+        raw_url = (
+            event[1]
+        )
+
+        metadata = (
+            event[2]
+        )
+
+        if not isinstance(
+            metadata,
+            dict,
+        ):
+
+            continue
+
+        try:
+
+            index = int(
+                metadata.get(
+                    "num"
+                )
+            )
+
+        except (
+            TypeError,
+            ValueError,
+        ):
+
+            continue
+
+        extension = str(
+            metadata.get(
+                "extension"
+            )
+            or ""
+        ).lower()
+
+        video_url = (
+            metadata.get(
+                "video_url"
+            )
+        )
+
+        image_extensions = {
+            "jpg",
+            "jpeg",
+            "png",
+            "webp",
+            "gif",
+            "avif",
+        }
+
+        video_extensions = {
+            "mp4",
+            "mov",
+            "m4v",
+            "webm",
+            "mkv",
+        }
+
+        if (
+            video_url
+            or extension
+            in video_extensions
+            or (
+                isinstance(
+                    raw_url,
+                    str,
+                )
+                and raw_url.startswith(
+                    "ytdl:"
+                )
+            )
+        ):
+
+            media_type = (
+                "video"
+            )
+
+            media_url = (
+                video_url
+                if isinstance(
+                    video_url,
+                    str,
+                )
+                else None
+            )
+
+        elif (
+            extension
+            in image_extensions
+        ):
+
+            media_type = (
+                "image"
+            )
+
+            media_url = (
+                raw_url
+                if isinstance(
+                    raw_url,
+                    str,
+                )
+                else None
+            )
+
+        else:
+
+            continue
+
+        media_id = (
+            metadata.get(
+                "media_id"
+            )
+            or metadata.get(
+                "shortcode"
+            )
+        )
+
+        entries_by_index[
+            index
+        ] = {
+            "index":
+                index,
+
+            "id":
+                (
+                    str(
+                        media_id
+                    )
+                    if (
+                        media_id
+                        is not None
+                    )
+                    else None
+                ),
+
+            "title":
+                None,
+
+            "duration":
+                None,
+
+            "thumbnail":
+                metadata.get(
+                    "display_url"
+                ),
+
+            "formats":
+                [],
+
+            "media_type":
+                media_type,
+
+            "media_url":
+                media_url,
+
+            "extension":
+                (
+                    extension
+                    or None
+                ),
+
+            "width":
+                metadata.get(
+                    "width_original"
+                )
+                or metadata.get(
+                    "width"
+                ),
+
+            "height":
+                metadata.get(
+                    "height_original"
+                )
+                or metadata.get(
+                    "height"
+                ),
+        }
+
+    if not entries_by_index:
+
+        return None
+
+    entries = [
+        entries_by_index[
+            index
+        ]
+        for index
+        in sorted(
+            entries_by_index
+        )
+    ]
+
+    username = (
+        post_metadata.get(
+            "username"
+        )
+    )
+
+    if username:
+
+        title = (
+            f"Post by {username}"
+        )
+
+    else:
+
+        title = (
+            post_metadata.get(
+                "description"
+            )
+        )
+
+    return {
+        "source_url":
+            source_url,
+
+        "title":
+            title,
+
+        "duration":
+            None,
+
+        "thumbnail":
+            (
+                entries[0].get(
+                    "thumbnail"
+                )
+                if entries
+                else None
+            ),
+
+        "formats":
+            [],
+
+        "media_type":
+            (
+                "mixed"
+                if len(
+                    {
+                        item[
+                            "media_type"
+                        ]
+                        for item
+                        in entries
+                    }
+                )
+                > 1
+                else entries[0][
+                    "media_type"
+                ]
+            ),
+
+        "media_url":
+            None,
+
+        "extension":
+            None,
+
+        "width":
+            None,
+
+        "height":
+            None,
+
+        "is_playlist":
+            len(
+                entries
+            )
+            > 1,
+
+        "entry_count":
+            len(
+                entries
+            ),
+
+        "entries":
+            entries,
+    }
+
+
+
+# ============================================================
+# X / Twitter image helpers
+# ============================================================
+
+def _is_x_url(
+    source_url: str,
+) -> bool:
+
+    try:
+
+        hostname = (
+            urlparse(
+                source_url
+            ).hostname
+            or ""
+        ).lower()
+
+    except Exception:
+
+        return False
+
+    return hostname in {
+        "x.com",
+        "www.x.com",
+        "twitter.com",
+        "www.twitter.com",
+        "mobile.twitter.com",
+    }
+
+
+def _is_allowed_x_image_url(
+    media_url: str,
+) -> bool:
+
+    try:
+
+        parsed = urlparse(
+            media_url
+        )
+
+        hostname = (
+            parsed.hostname
+            or ""
+        ).lower()
+
+    except Exception:
+
+        return False
+
+    return (
+        parsed.scheme == "https"
+        and hostname == "pbs.twimg.com"
+        and parsed.path.startswith(
+            "/media/"
+        )
+    )
+
+
+def _get_x_gallery_info(
+    source_url: str,
+) -> dict[str, Any] | None:
+
+    if not _is_x_url(
+        source_url
+    ):
+
+        return None
+
+    result = subprocess.run(
+        [
+            "gallery-dl",
+            "-j",
+            source_url,
+        ],
+        capture_output=True,
+        text=True,
+        timeout=90,
+        check=False,
+    )
+
+    # Do not break the existing yt-dlp video path if
+    # gallery-dl cannot resolve this tweet.
+    if result.returncode != 0:
+
+        return None
+
+    try:
+
+        payload = json.loads(
+            result.stdout
+        )
+
+    except Exception:
+
+        return None
+
+    if not isinstance(
+        payload,
+        list,
+    ):
+
+        return None
+
+    post_metadata: dict[str, Any] = {}
+
+    entries_by_index: dict[
+        int,
+        dict[str, Any],
+    ] = {}
+
+    has_non_image_media = False
+
+    for event in payload:
+
+        if not isinstance(
+            event,
+            list,
+        ):
+
+            continue
+
+        if (
+            len(event) >= 2
+            and event[0] == 2
+            and isinstance(
+                event[1],
+                dict,
+            )
+        ):
+
+            post_metadata = event[1]
+
+            continue
+
+        if (
+            len(event) < 3
+            or event[0] != 3
+        ):
+
+            continue
+
+        raw_url = event[1]
+        metadata = event[2]
+
+        if (
+            not isinstance(
+                raw_url,
+                str,
+            )
+            or not isinstance(
+                metadata,
+                dict,
+            )
+        ):
+
+            continue
+
+        media_kind = (
+            str(
+                metadata.get(
+                    "type"
+                )
+                or ""
+            )
+            .strip()
+            .lower()
+        )
+
+        extension = (
+            str(
+                metadata.get(
+                    "extension"
+                )
+                or ""
+            )
+            .strip()
+            .lower()
+            .lstrip(".")
+        )
+
+        if extension == "jpeg":
+
+            extension = "jpg"
+
+        is_image = (
+            media_kind
+            in {
+                "photo",
+                "image",
+            }
+            or extension
+            in {
+                "jpg",
+                "png",
+                "webp",
+                "gif",
+                "avif",
+            }
+        )
+
+        if not is_image:
+
+            if (
+                media_kind
+                in {
+                    "video",
+                    "animated_gif",
+                }
+                or extension
+                in {
+                    "mp4",
+                    "webm",
+                    "m3u8",
+                }
+            ):
+
+                has_non_image_media = True
+
+            continue
+
+        if extension not in {
+            "jpg",
+            "png",
+            "webp",
+            "gif",
+            "avif",
+        }:
+
+            continue
+
+        if not _is_allowed_x_image_url(
+            raw_url
+        ):
+
+            continue
+
+        try:
+
+            index = int(
+                metadata.get(
+                    "num",
+                    1,
+                )
+            )
+
+        except (
+            TypeError,
+            ValueError,
+        ):
+
+            continue
+
+        try:
+
+            width = int(
+                metadata.get(
+                    "width"
+                )
+            )
+
+        except (
+            TypeError,
+            ValueError,
+        ):
+
+            width = None
+
+        try:
+
+            height = int(
+                metadata.get(
+                    "height"
+                )
+            )
+
+        except (
+            TypeError,
+            ValueError,
+        ):
+
+            height = None
+
+        tweet_id = (
+            metadata.get(
+                "tweet_id"
+            )
+            or post_metadata.get(
+                "tweet_id"
+            )
+        )
+
+        content = (
+            metadata.get(
+                "content"
+            )
+            or post_metadata.get(
+                "content"
+            )
+        )
+
+        entries_by_index[
+            index
+        ] = {
+            "index":
+                index,
+
+            "id":
+                (
+                    f"{tweet_id}-{index}"
+                    if tweet_id is not None
+                    else str(index)
+                ),
+
+            "title":
+                (
+                    str(content)
+                    if content
+                    else None
+                ),
+
+            "duration":
+                None,
+
+            "thumbnail":
+                raw_url,
+
+            "formats":
+                [],
+
+            "media_type":
+                "image",
+
+            "media_url":
+                raw_url,
+
+            "extension":
+                extension,
+
+            "width":
+                width,
+
+            "height":
+                height,
+        }
+
+    entries = [
+        entries_by_index[
+            index
+        ]
+        for index
+        in sorted(
+            entries_by_index
+        )
+    ]
+
+    if not entries:
+
+        return None
+
+    # Important:
+    # If gallery-dl reports a mixed photo+video tweet,
+    # preserve the existing yt-dlp video path for now rather
+    # than silently hiding the video entries.
+    if has_non_image_media:
+
+        return None
+
+    title = (
+        post_metadata.get(
+            "content"
+        )
+    )
+
+    if not title:
+
+        user = (
+            post_metadata.get(
+                "user"
+            )
+            or {}
+        )
+
+        username = (
+            user.get(
+                "name"
+            )
+            if isinstance(
+                user,
+                dict,
+            )
+            else None
+        )
+
+        if username:
+
+            title = (
+                f"Post by @{username}"
+            )
+
+        else:
+
+            title = "X post"
+
+    if len(entries) == 1:
+
+        selected = entries[0]
+
+        return {
+            "source_url":
+                source_url,
+
+            "title":
+                title,
+
+            "duration":
+                None,
+
+            "thumbnail":
+                selected.get(
+                    "thumbnail"
+                ),
+
+            "formats":
+                [],
+
+            "media_type":
+                "image",
+
+            "media_url":
+                selected.get(
+                    "media_url"
+                ),
+
+            "extension":
+                selected.get(
+                    "extension"
+                ),
+
+            "width":
+                selected.get(
+                    "width"
+                ),
+
+            "height":
+                selected.get(
+                    "height"
+                ),
+
+            "is_playlist":
+                False,
+
+            "entry_count":
+                0,
+
+            "entries":
+                [],
+        }
+
+    return {
+        "source_url":
+            source_url,
+
+        "title":
+            title,
+
+        "duration":
+            None,
+
+        "thumbnail":
+            entries[0].get(
+                "thumbnail"
+            ),
+
+        "formats":
+            [],
+
+        "media_type":
+            "image",
+
+        "media_url":
+            None,
+
+        "extension":
+            None,
+
+        "width":
+            None,
+
+        "height":
+            None,
+
+        "is_playlist":
+            True,
+
+        "entry_count":
+            len(
+                entries
+            ),
+
+        "entries":
+            entries,
+    }
+
+
 class DownloadService:
 
     def __init__(
@@ -1436,6 +2426,329 @@ class DownloadService:
         playlist_index: int | None = None,
     ) -> dict[str, Any]:
 
+        # ====================================================
+        # Instagram mixed media
+        # ====================================================
+
+        instagram_gallery = None
+
+        if _is_instagram_url(
+            source_url
+        ):
+
+            instagram_gallery = (
+                _get_instagram_gallery_info(
+                    source_url
+                )
+            )
+
+        if instagram_gallery:
+
+            gallery_entries = (
+                instagram_gallery.get(
+                    "entries"
+                )
+                or []
+            )
+
+            # ------------------------------------------------
+            # Selected image
+            #
+            # Images do not go through yt-dlp because
+            # yt-dlp treats Instagram photos as
+            # "No video formats found".
+            # ------------------------------------------------
+
+            if (
+                playlist_index
+                is not None
+            ):
+
+                selected_entry = next(
+                    (
+                        item
+                        for item
+                        in gallery_entries
+                        if (
+                            item.get(
+                                "index"
+                            )
+                            == playlist_index
+                        )
+                    ),
+                    None,
+                )
+
+                if (
+                    selected_entry
+                    and selected_entry.get(
+                        "media_type"
+                    )
+                    == "image"
+                ):
+
+                    return {
+                        "source_url":
+                            source_url,
+
+                        "title":
+                            instagram_gallery.get(
+                                "title"
+                            ),
+
+                        "duration":
+                            None,
+
+                        "thumbnail":
+                            selected_entry.get(
+                                "thumbnail"
+                            ),
+
+                        "formats":
+                            [],
+
+                        "media_type":
+                            "image",
+
+                        "media_url":
+                            selected_entry.get(
+                                "media_url"
+                            ),
+
+                        "extension":
+                            selected_entry.get(
+                                "extension"
+                            ),
+
+                        "width":
+                            selected_entry.get(
+                                "width"
+                            ),
+
+                        "height":
+                            selected_entry.get(
+                                "height"
+                            ),
+
+                        "is_playlist":
+                            True,
+
+                        "entry_count":
+                            1,
+
+                        "entries":
+                            [
+                                selected_entry
+                            ],
+                    }
+
+            # ------------------------------------------------
+            # Multi-media/carousel.
+            #
+            # Return gallery structure before yt-dlp attempts
+            # to parse photo entries.
+            # ------------------------------------------------
+
+            if (
+                playlist_index
+                is None
+                and len(
+                    gallery_entries
+                )
+                > 1
+            ):
+
+                return (
+                    instagram_gallery
+                )
+
+            # ------------------------------------------------
+            # Single Instagram image
+            # ------------------------------------------------
+
+            if (
+                playlist_index
+                is None
+                and len(
+                    gallery_entries
+                )
+                == 1
+                and gallery_entries[
+                    0
+                ].get(
+                    "media_type"
+                )
+                == "image"
+            ):
+
+                selected_entry = (
+                    gallery_entries[0]
+                )
+
+                return {
+                    **instagram_gallery,
+
+                    "media_type":
+                        "image",
+
+                    "media_url":
+                        selected_entry.get(
+                            "media_url"
+                        ),
+
+                    "extension":
+                        selected_entry.get(
+                            "extension"
+                        ),
+
+                    "width":
+                        selected_entry.get(
+                            "width"
+                        ),
+
+                    "height":
+                        selected_entry.get(
+                            "height"
+                        ),
+
+                    "is_playlist":
+                        False,
+
+                    "entry_count":
+                        0,
+
+                    "entries":
+                        [],
+                }
+
+        # X / Twitter photo extraction
+        #
+        # Video-only tweets continue through the existing
+        # yt-dlp path below.
+        if _is_x_url(
+            source_url
+        ):
+
+            x_gallery_info = (
+                _get_x_gallery_info(
+                    source_url
+                )
+            )
+
+            if (
+                x_gallery_info
+                is not None
+            ):
+
+                if (
+                    playlist_index
+                    is not None
+                ):
+
+                    entries = (
+                        x_gallery_info.get(
+                            "entries"
+                        )
+                        or []
+                    )
+
+                    # Multi-photo tweet
+                    if entries:
+
+                        selected = next(
+                            (
+                                entry
+                                for entry
+                                in entries
+                                if int(
+                                    entry.get(
+                                        "index",
+                                        -1,
+                                    )
+                                )
+                                == playlist_index
+                            ),
+                            None,
+                        )
+
+                        if selected is None:
+
+                            raise ValueError(
+                                "Selected X media item "
+                                "is not an image"
+                            )
+
+                        return {
+                            "source_url":
+                                source_url,
+
+                            "title":
+                                (
+                                    selected.get(
+                                        "title"
+                                    )
+                                    or x_gallery_info.get(
+                                        "title"
+                                    )
+                                ),
+
+                            "duration":
+                                None,
+
+                            "thumbnail":
+                                selected.get(
+                                    "thumbnail"
+                                ),
+
+                            "formats":
+                                [],
+
+                            "media_type":
+                                "image",
+
+                            "media_url":
+                                selected.get(
+                                    "media_url"
+                                ),
+
+                            "extension":
+                                selected.get(
+                                    "extension"
+                                ),
+
+                            "width":
+                                selected.get(
+                                    "width"
+                                ),
+
+                            "height":
+                                selected.get(
+                                    "height"
+                                ),
+
+                            "is_playlist":
+                                True,
+
+                            "entry_count":
+                                1,
+
+                            "entries":
+                                [
+                                    selected,
+                                ],
+                        }
+
+                    # Single-photo tweet:
+                    # playlist_index=1 is also accepted.
+                    if playlist_index != 1:
+
+                        raise ValueError(
+                            "Selected X media item "
+                            "does not exist"
+                        )
+
+                return x_gallery_info
+
         options = (
             _get_media_info_options(
                 source_url=source_url,
@@ -1548,6 +2861,27 @@ class DownloadService:
 
                         "formats":
                             entry_formats,
+
+                        "media_type":
+                            "video",
+
+                        "media_url":
+                            None,
+
+                        "extension":
+                            raw_entry.get(
+                                "ext"
+                            ),
+
+                        "width":
+                            raw_entry.get(
+                                "width"
+                            ),
+
+                        "height":
+                            raw_entry.get(
+                                "height"
+                            ),
                     }
                 )
 
@@ -1628,6 +2962,21 @@ class DownloadService:
                 "formats":
                     top_formats,
 
+                "media_type":
+                    "video",
+
+                "media_url":
+                    None,
+
+                "extension":
+                    None,
+
+                "width":
+                    None,
+
+                "height":
+                    None,
+
                 "is_playlist":
                     True,
 
@@ -1675,6 +3024,27 @@ class DownloadService:
 
             "formats":
                 formats,
+
+            "media_type":
+                "video",
+
+            "media_url":
+                None,
+
+            "extension":
+                info.get(
+                    "ext"
+                ),
+
+            "width":
+                info.get(
+                    "width"
+                ),
+
+            "height":
+                info.get(
+                    "height"
+                ),
 
             "is_playlist":
                 False,
