@@ -2291,9 +2291,13 @@ def extract_available_quality_options(
 # Multi-video keyboard
 # ============================================================
 
+MEDIA_ENTRY_PAGE_SIZE = 10
+
+
 def build_media_entry_keyboard(
     entries: list[dict],
     token: str,
+    page: int = 0,
 ) -> InlineKeyboardMarkup:
 
     rows: list[
@@ -2302,7 +2306,55 @@ def build_media_entry_keyboard(
         ]
     ] = []
 
-    for entry in entries:
+    total_entries = (
+        len(
+            entries
+        )
+    )
+
+    total_pages = max(
+        1,
+        (
+            total_entries
+            + MEDIA_ENTRY_PAGE_SIZE
+            - 1
+        )
+        // MEDIA_ENTRY_PAGE_SIZE,
+    )
+
+    page = max(
+        0,
+        min(
+            page,
+            total_pages - 1,
+        ),
+    )
+
+    start_index = (
+        page
+        * MEDIA_ENTRY_PAGE_SIZE
+    )
+
+    end_index = (
+        start_index
+        + MEDIA_ENTRY_PAGE_SIZE
+    )
+
+    page_entries = (
+        entries[
+            start_index:
+            end_index
+        ]
+    )
+
+    for entry in page_entries:
+
+        if not isinstance(
+            entry,
+            dict,
+        ):
+
+            continue
 
         try:
 
@@ -2339,8 +2391,8 @@ def build_media_entry_keyboard(
         else:
 
             # Backward compatible:
-            # old X entries without media_type
-            # are still considered videos.
+            # entries without media_type
+            # are still treated as video.
             button_text = (
                 f"🎬 ویدئو {index}"
             )
@@ -2358,9 +2410,66 @@ def build_media_entry_keyboard(
             ]
         )
 
+    # ========================================================
+    # Pagination navigation
+    # ========================================================
+
+    if total_pages > 1:
+
+        navigation_row: list[
+            InlineKeyboardButton
+        ] = []
+
+        if page > 0:
+
+            navigation_row.append(
+                InlineKeyboardButton(
+                    text="⬅️ قبلی",
+                    callback_data=(
+                        f"media_page:"
+                        f"{token}:"
+                        f"{page - 1}"
+                    ),
+                )
+            )
+
+        navigation_row.append(
+            InlineKeyboardButton(
+                text=(
+                    f"📄 "
+                    f"{page + 1}"
+                    f"/"
+                    f"{total_pages}"
+                ),
+                callback_data=(
+                    "media_page_info"
+                ),
+            )
+        )
+
+        if page < (
+            total_pages - 1
+        ):
+
+            navigation_row.append(
+                InlineKeyboardButton(
+                    text="بعدی ➡️",
+                    callback_data=(
+                        f"media_page:"
+                        f"{token}:"
+                        f"{page + 1}"
+                    ),
+                )
+            )
+
+        rows.append(
+            navigation_row
+        )
+
     return InlineKeyboardMarkup(
         inline_keyboard=rows
     )
+
 
 # ============================================================
 # Quality keyboard
@@ -3338,6 +3447,183 @@ async def download_cancel_callback(
             f"❌ {str(exc)[:150]}",
             show_alert=True,
         )
+
+
+# ============================================================
+# Media pagination
+# ============================================================
+
+@dp.callback_query(
+    F.data == "media_page_info"
+)
+async def media_page_info_callback(
+    callback: CallbackQuery,
+):
+
+    await callback.answer()
+
+
+@dp.callback_query(
+    F.data.startswith(
+        "media_page:"
+    )
+)
+async def media_page_callback(
+    callback: CallbackQuery,
+):
+
+    if not callback.data:
+
+        return
+
+    parts = (
+        callback.data.split(
+            ":",
+            2,
+        )
+    )
+
+    if (
+        len(
+            parts
+        )
+        != 3
+    ):
+
+        await callback.answer(
+            "❌ درخواست نامعتبر است.",
+            show_alert=True,
+        )
+
+        return
+
+    (
+        _,
+        media_token,
+        page_text,
+    ) = parts
+
+    selection = (
+        PENDING_MEDIA_ENTRIES.get(
+            media_token
+        )
+    )
+
+    if not selection:
+
+        await callback.answer(
+            (
+                "⌛ این انتخاب منقضی شده است. "
+                "لینک را دوباره ارسال کنید."
+            ),
+            show_alert=True,
+        )
+
+        return
+
+    try:
+
+        page = int(
+            page_text
+        )
+
+    except (
+        TypeError,
+        ValueError,
+    ):
+
+        await callback.answer(
+            "❌ شماره صفحه نامعتبر است.",
+            show_alert=True,
+        )
+
+        return
+
+    entries = (
+        selection.get(
+            "entries"
+        )
+        or []
+    )
+
+    total_pages = max(
+        1,
+        (
+            len(
+                entries
+            )
+            + MEDIA_ENTRY_PAGE_SIZE
+            - 1
+        )
+        // MEDIA_ENTRY_PAGE_SIZE,
+    )
+
+    if (
+        page < 0
+        or page >= total_pages
+    ):
+
+        await callback.answer(
+            "❌ این صفحه وجود ندارد.",
+            show_alert=True,
+        )
+
+        return
+
+    message = (
+        callback.message
+    )
+
+    if not isinstance(
+        message,
+        Message,
+    ):
+
+        return
+
+    keyboard = (
+        build_media_entry_keyboard(
+            entries=entries,
+            token=media_token,
+            page=page,
+        )
+    )
+
+    await callback.answer(
+        (
+            f"صفحه "
+            f"{page + 1}"
+            f" از "
+            f"{total_pages}"
+        )
+    )
+
+    try:
+
+        await message.edit_reply_markup(
+            reply_markup=keyboard
+        )
+
+    except Exception as exc:
+
+        error_text = (
+            str(
+                exc
+            )
+            .strip()
+            .lower()
+        )
+
+        if (
+            "message is not modified"
+            not in error_text
+        ):
+
+            print(
+                "Media pagination edit failed: "
+                f"{type(exc).__name__}: "
+                f"{exc}"
+            )
 
 
 # ============================================================
