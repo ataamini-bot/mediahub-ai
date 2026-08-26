@@ -1944,6 +1944,432 @@ def _has_audio_stream(
 
 
 # ============================================================
+# iOS / Instagram video compatibility
+# ============================================================
+
+def _probe_video_codec_for_ios(
+    file_path: Path,
+) -> tuple[
+    str | None,
+    str | None,
+]:
+
+    try:
+
+        result = subprocess.run(
+            [
+                "ffprobe",
+                "-v",
+                "error",
+                "-select_streams",
+                "v:0",
+                "-show_entries",
+                "stream=codec_name,pix_fmt",
+                "-of",
+                "csv=p=0:s=|",
+                str(
+                    file_path
+                ),
+            ],
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=30,
+        )
+
+    except (
+        FileNotFoundError,
+        subprocess.SubprocessError,
+        OSError,
+    ):
+
+        return (
+            None,
+            None,
+        )
+
+    value = (
+        result.stdout
+        .strip()
+    )
+
+    if not value:
+
+        return (
+            None,
+            None,
+        )
+
+    parts = [
+        part
+        .strip()
+        .lower()
+        for part
+        in value.split(
+            "|"
+        )
+    ]
+
+    codec_name = (
+        parts[0]
+        if parts
+        and parts[0]
+        else None
+    )
+
+    pixel_format = (
+        parts[1]
+        if len(parts) > 1
+        and parts[1]
+        else None
+    )
+
+    return (
+        codec_name,
+        pixel_format,
+    )
+
+
+def _normalize_instagram_video_for_ios(
+    job_id: int,
+    file_path: Path,
+) -> Path:
+
+    codec_name, pixel_format = (
+        _probe_video_codec_for_ios(
+            file_path
+        )
+    )
+
+    is_compatible = (
+        file_path.suffix.lower()
+        == ".mp4"
+        and codec_name
+        == "h264"
+        and pixel_format
+        == "yuv420p"
+    )
+
+    print(
+        "Instagram iOS compatibility check: "
+        f"job={job_id}, "
+        f"file={file_path}, "
+        f"codec={codec_name}, "
+        f"pix_fmt={pixel_format}, "
+        f"compatible={is_compatible}"
+    )
+
+    # --------------------------------------------------------
+    # Already compatible:
+    #
+    # H.264 + yuv420p inside MP4.
+    # Do not waste CPU by transcoding it again.
+    # --------------------------------------------------------
+
+    if is_compatible:
+
+        return file_path
+
+    # --------------------------------------------------------
+    # Do not waste time transcoding an output that will be
+    # rejected by the global size check anyway.
+    # --------------------------------------------------------
+
+    try:
+
+        source_size = (
+            file_path.stat()
+            .st_size
+        )
+
+    except OSError as exc:
+
+        raise RuntimeError(
+            "Unable to inspect video "
+            "before iOS normalization"
+        ) from exc
+
+    if (
+        source_size <= 0
+        or source_size
+        > MAX_DOWNLOAD_BYTES
+    ):
+
+        return file_path
+
+    # --------------------------------------------------------
+    # .part is intentional:
+    #
+    # _find_final_output_file() ignores .part files, so a
+    # failed/interrupted normalization cannot later be selected
+    # as a completed download.
+    # --------------------------------------------------------
+
+    temporary_path = (
+        DOWNLOAD_DIR
+        / (
+            f"{job_id}"
+            ".ios-normalized.mp4.part"
+        )
+    )
+
+    final_path = (
+        DOWNLOAD_DIR
+        / f"{job_id}.mp4"
+    )
+
+    try:
+
+        temporary_path.unlink()
+
+    except FileNotFoundError:
+
+        pass
+
+    except OSError as exc:
+
+        raise RuntimeError(
+            "Unable to prepare temporary "
+            "iOS video output"
+        ) from exc
+
+    print(
+        "Normalizing Instagram video "
+        "for iOS compatibility: "
+        f"job={job_id}, "
+        f"codec={codec_name}, "
+        f"pix_fmt={pixel_format}"
+    )
+
+    command = [
+        "ffmpeg",
+        "-y",
+        "-v",
+        "error",
+
+        "-i",
+        str(
+            file_path
+        ),
+
+        "-map",
+        "0:v:0",
+
+        "-map",
+        "0:a:0?",
+
+        "-c:v",
+        "libx264",
+
+        "-preset",
+        "fast",
+
+        "-crf",
+        "20",
+
+        "-pix_fmt",
+        "yuv420p",
+
+        "-c:a",
+        "aac",
+
+        "-profile:a",
+        "aac_low",
+
+        "-b:a",
+        "128k",
+
+        "-movflags",
+        "+faststart",
+
+        "-f",
+        "mp4",
+
+        str(
+            temporary_path
+        ),
+    ]
+
+    try:
+
+        result = subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+    except FileNotFoundError as exc:
+
+        raise RuntimeError(
+            "FFmpeg is not available "
+            "for iOS video normalization"
+        ) from exc
+
+    except OSError as exc:
+
+        raise RuntimeError(
+            "Unable to start FFmpeg "
+            "for iOS video normalization"
+        ) from exc
+
+    if (
+        result.returncode
+        != 0
+    ):
+
+        try:
+
+            temporary_path.unlink()
+
+        except FileNotFoundError:
+
+            pass
+
+        error_text = (
+            result.stderr
+            .strip()
+        )
+
+        if len(
+            error_text
+        ) > 2000:
+
+            error_text = (
+                error_text[
+                    -2000:
+                ]
+            )
+
+        raise RuntimeError(
+            "iOS video normalization "
+            "failed"
+            + (
+                f": {error_text}"
+                if error_text
+                else ""
+            )
+        )
+
+    if (
+        not temporary_path.exists()
+    ):
+
+        raise RuntimeError(
+            "iOS video normalization "
+            "did not create an output file"
+        )
+
+    if (
+        temporary_path.stat()
+        .st_size
+        <= 0
+    ):
+
+        try:
+
+            temporary_path.unlink()
+
+        except FileNotFoundError:
+
+            pass
+
+        raise RuntimeError(
+            "iOS normalized video is empty"
+        )
+
+    normalized_codec, normalized_pix_fmt = (
+        _probe_video_codec_for_ios(
+            temporary_path
+        )
+    )
+
+    if (
+        normalized_codec
+        != "h264"
+        or normalized_pix_fmt
+        != "yuv420p"
+    ):
+
+        try:
+
+            temporary_path.unlink()
+
+        except FileNotFoundError:
+
+            pass
+
+        raise RuntimeError(
+            "iOS normalized video "
+            "failed codec validation: "
+            f"codec={normalized_codec}, "
+            f"pix_fmt={normalized_pix_fmt}"
+        )
+
+    # --------------------------------------------------------
+    # Atomic replacement.
+    #
+    # The original file stays untouched until FFmpeg has
+    # produced and validated the complete replacement.
+    # --------------------------------------------------------
+
+    original_path = (
+        file_path
+    )
+
+    try:
+
+        temporary_path.replace(
+            final_path
+        )
+
+    except OSError as exc:
+
+        try:
+
+            temporary_path.unlink()
+
+        except FileNotFoundError:
+
+            pass
+
+        raise RuntimeError(
+            "Unable to install "
+            "iOS-compatible video"
+        ) from exc
+
+    if (
+        original_path
+        != final_path
+        and original_path.exists()
+    ):
+
+        try:
+
+            original_path.unlink()
+
+        except OSError as exc:
+
+            print(
+                "Unable to delete original "
+                "incompatible video: "
+                f"{type(exc).__name__}: "
+                f"{exc}"
+            )
+
+    print(
+        "Instagram video normalized "
+        "for iOS: "
+        f"job={job_id}, "
+        f"file={final_path}, "
+        "codec=h264, "
+        "pix_fmt=yuv420p"
+    )
+
+    return final_path
+
+
+# ============================================================
 # Find final output
 # ============================================================
 
@@ -3605,6 +4031,43 @@ def download_task(
                     job_id=job_id,
                     media_type=media_type,
                 )
+            )
+
+        # ====================================================
+        # Instagram / iOS compatibility
+        #
+        # Some Instagram DASH outputs contain VP9 video inside
+        # an MP4 container. Windows can decode those files, but
+        # Telegram/iOS may play only the audio or freeze the
+        # first video frame.
+        #
+        # Only incompatible Instagram video outputs are
+        # normalized. Existing H.264/yuv420p MP4 files are
+        # passed through unchanged.
+        # ====================================================
+
+        if (
+            media_type
+            == "video"
+            and "instagram.com"
+            in str(
+                source_url
+            ).lower()
+        ):
+
+            _check_job_control(
+                job_id
+            )
+
+            file_path = (
+                _normalize_instagram_video_for_ios(
+                    job_id=job_id,
+                    file_path=file_path,
+                )
+            )
+
+            _check_job_control(
+                job_id
             )
 
         # ====================================================
