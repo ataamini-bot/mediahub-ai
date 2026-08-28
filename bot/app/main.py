@@ -3997,6 +3997,35 @@ async def download_handler(
             or []
         )
 
+        single_playlist_index: (
+            int
+            | None
+        ) = None
+
+        if (
+            is_playlist
+            and len(
+                entries
+            )
+            == 1
+        ):
+
+            try:
+
+                single_playlist_index = int(
+                    entries[0].get(
+                        "index"
+                    )
+                )
+
+            except (
+                TypeError,
+                ValueError,
+                AttributeError,
+            ):
+
+                single_playlist_index = None
+
         if (
             is_playlist
             and len(
@@ -4162,6 +4191,9 @@ async def download_handler(
             add_pending_selection(
                 source_url,
                 quality_options,
+                playlist_index=(
+                    single_playlist_index
+                ),
             )
         )
 

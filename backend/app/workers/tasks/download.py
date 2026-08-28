@@ -8,6 +8,7 @@ from typing import Any
 from urllib.parse import urlparse
 import json
 import os
+import tempfile
 import subprocess
 import requests
 
@@ -53,6 +54,137 @@ INSTAGRAM_COOKIE_PATH = Path(
         "/app/secrets/instagram-cookies.txt",
     )
 )
+
+
+def _is_instagram_story_url(
+    source_url: str,
+) -> bool:
+
+    if not _is_instagram_url(
+        source_url
+    ):
+
+        return False
+
+    try:
+
+        path = (
+            urlparse(
+                source_url
+            ).path
+            or ""
+        ).lower()
+
+    except Exception:
+
+        return False
+
+    return path.startswith(
+        "/stories/"
+    )
+
+
+def _prepare_instagram_yt_dlp_cookie_file(
+) -> str:
+
+    source_path = os.fspath(
+        INSTAGRAM_COOKIE_PATH
+    )
+
+    if not os.path.isfile(
+        source_path
+    ):
+
+        raise RuntimeError(
+            "Instagram cookie file not found: "
+            f"{source_path}"
+        )
+
+    temporary_path: str | None = None
+
+    try:
+
+        with tempfile.NamedTemporaryFile(
+            mode="wb",
+            prefix="mediahub-instagram-",
+            suffix=".cookies.txt",
+            dir="/tmp",
+            delete=False,
+        ) as temporary_file:
+
+            temporary_path = (
+                temporary_file.name
+            )
+
+            os.chmod(
+                temporary_path,
+                0o600,
+            )
+
+            with open(
+                source_path,
+                "rb",
+            ) as source_file:
+
+                while True:
+
+                    chunk = (
+                        source_file.read(
+                            1024 * 1024
+                        )
+                    )
+
+                    if not chunk:
+                        break
+
+                    temporary_file.write(
+                        chunk
+                    )
+
+        return temporary_path
+
+    except Exception:
+
+        if temporary_path:
+
+            try:
+
+                os.remove(
+                    temporary_path
+                )
+
+            except FileNotFoundError:
+
+                pass
+
+        raise
+
+
+def _cleanup_instagram_yt_dlp_cookie_file(
+    cookie_path: str | None,
+) -> None:
+
+    if not cookie_path:
+        return
+
+    try:
+
+        os.remove(
+            cookie_path
+        )
+
+    except FileNotFoundError:
+
+        pass
+
+    except OSError as exc:
+
+        print(
+            "Failed to remove temporary "
+            "Instagram cookie file: "
+            f"{type(exc).__name__}: "
+            f"{exc}"
+        )
 
 IMAGE_EXTENSIONS = {
     "jpg",
@@ -1275,6 +1407,20 @@ def _get_yt_dlp_options(
     ydl_options = dict(
         options
     )
+
+    # --------------------------------------------------------
+    # Instagram Story authentication
+    # --------------------------------------------------------
+
+    if _is_instagram_story_url(
+        source_url
+    ):
+
+        ydl_options[
+            "cookiefile"
+        ] = (
+            _prepare_instagram_yt_dlp_cookie_file()
+        )
 
     if not _is_youtube_url(
         source_url
@@ -2578,13 +2724,33 @@ def _get_non_youtube_format_selector(
             playlist_index
         )
 
-    with yt_dlp.YoutubeDL(
-        ydl_options
-    ) as ydl:
+    temporary_cookie = (
+        ydl_options.get(
+            "cookiefile"
+        )
+    )
 
-        info = ydl.extract_info(
-            source_url,
-            download=False,
+    try:
+
+        with yt_dlp.YoutubeDL(
+            ydl_options
+        ) as ydl:
+
+            info = ydl.extract_info(
+                source_url,
+                download=False,
+            )
+
+    finally:
+
+        _cleanup_instagram_yt_dlp_cookie_file(
+            (
+                str(
+                    temporary_cookie
+                )
+                if temporary_cookie
+                else None
+            )
         )
 
     if (
@@ -4012,14 +4178,34 @@ def download_task(
                 f"{format_selector}"
             )
 
-            with yt_dlp.YoutubeDL(
-                ydl_options
-            ) as ydl:
+            temporary_cookie = (
+                ydl_options.get(
+                    "cookiefile"
+                )
+            )
 
-                ydl.download(
-                    [
-                        source_url,
-                    ]
+            try:
+
+                with yt_dlp.YoutubeDL(
+                    ydl_options
+                ) as ydl:
+
+                    ydl.download(
+                        [
+                            source_url,
+                        ]
+                    )
+
+            finally:
+
+                _cleanup_instagram_yt_dlp_cookie_file(
+                    (
+                        str(
+                            temporary_cookie
+                        )
+                        if temporary_cookie
+                        else None
+                    )
                 )
 
             _check_job_control(

@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 from typing import Any
 import ipaddress
 import os
+import tempfile
 import socket
 from urllib.error import (
     HTTPError,
@@ -236,6 +237,20 @@ def _get_media_info_options(
             "playlist_items"
         ] = str(
             playlist_index
+        )
+
+    # --------------------------------------------------------
+    # Instagram Story authentication
+    # --------------------------------------------------------
+
+    if _is_instagram_story_url(
+        source_url
+    ):
+
+        options[
+            "cookiefile"
+        ] = (
+            _prepare_instagram_yt_dlp_cookie_file()
         )
 
     if not _is_youtube_url(
@@ -1081,6 +1096,229 @@ INSTAGRAM_COOKIE_PATH = os.getenv(
     "INSTAGRAM_COOKIE_PATH",
     "/app/secrets/instagram-cookies.txt",
 )
+
+
+def _is_instagram_story_url(
+    source_url: str,
+) -> bool:
+
+    if not _is_instagram_url(
+        source_url
+    ):
+
+        return False
+
+    try:
+
+        path = (
+            urlparse(
+                source_url
+            ).path
+            or ""
+        ).lower()
+
+    except Exception:
+
+        return False
+
+    return path.startswith(
+        "/stories/"
+    )
+
+
+INSTAGRAM_SHORTCODE_ALPHABET = (
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+    "abcdefghijklmnopqrstuvwxyz"
+    "0123456789-_"
+)
+
+
+def _get_instagram_story_media_id(
+    source_url: str,
+) -> int | None:
+
+    if not _is_instagram_story_url(
+        source_url
+    ):
+
+        return None
+
+    try:
+
+        parts = [
+            part
+            for part in (
+                urlparse(
+                    source_url
+                ).path
+                or ""
+            ).split("/")
+            if part
+        ]
+
+    except Exception:
+
+        return None
+
+    if (
+        len(parts) < 3
+        or parts[0].lower()
+        != "stories"
+    ):
+
+        return None
+
+    story_id = (
+        parts[2]
+        .strip()
+    )
+
+    if not story_id.isdigit():
+
+        return None
+
+    return int(
+        story_id
+    )
+
+
+def _decode_instagram_shortcode_media_id(
+    shortcode: str | None,
+) -> int | None:
+
+    value = str(
+        shortcode
+        or ""
+    ).strip()
+
+    if not value:
+
+        return None
+
+    result = 0
+
+    for character in value:
+
+        position = (
+            INSTAGRAM_SHORTCODE_ALPHABET.find(
+                character
+            )
+        )
+
+        if position < 0:
+
+            return None
+
+        result = (
+            result * 64
+            + position
+        )
+
+    return result
+
+
+
+def _prepare_instagram_yt_dlp_cookie_file(
+) -> str:
+
+    source_path = os.fspath(
+        INSTAGRAM_COOKIE_PATH
+    )
+
+    if not os.path.isfile(
+        source_path
+    ):
+
+        raise RuntimeError(
+            "Instagram cookie file not found: "
+            f"{source_path}"
+        )
+
+    temporary_path: str | None = None
+
+    try:
+
+        with tempfile.NamedTemporaryFile(
+            mode="wb",
+            prefix="mediahub-instagram-",
+            suffix=".cookies.txt",
+            dir="/tmp",
+            delete=False,
+        ) as temporary_file:
+
+            temporary_path = (
+                temporary_file.name
+            )
+
+            os.chmod(
+                temporary_path,
+                0o600,
+            )
+
+            with open(
+                source_path,
+                "rb",
+            ) as source_file:
+
+                while True:
+
+                    chunk = (
+                        source_file.read(
+                            1024 * 1024
+                        )
+                    )
+
+                    if not chunk:
+                        break
+
+                    temporary_file.write(
+                        chunk
+                    )
+
+        return temporary_path
+
+    except Exception:
+
+        if temporary_path:
+
+            try:
+
+                os.remove(
+                    temporary_path
+                )
+
+            except FileNotFoundError:
+
+                pass
+
+        raise
+
+
+def _cleanup_instagram_yt_dlp_cookie_file(
+    cookie_path: str | None,
+) -> None:
+
+    if not cookie_path:
+        return
+
+    try:
+
+        os.remove(
+            cookie_path
+        )
+
+    except FileNotFoundError:
+
+        pass
+
+    except OSError as exc:
+
+        print(
+            "Failed to remove temporary "
+            "Instagram cookie file: "
+            f"{type(exc).__name__}: "
+            f"{exc}"
+        )
 
 
 def _is_instagram_url(
@@ -2989,14 +3227,34 @@ class DownloadService:
             )
         )
 
-        with yt_dlp.YoutubeDL(
-            options
-        ) as ydl:
+        temporary_cookie = (
+            options.get(
+                "cookiefile"
+            )
+        )
 
-            info = (
-                ydl.extract_info(
-                    source_url,
-                    download=False,
+        try:
+
+            with yt_dlp.YoutubeDL(
+                options
+            ) as ydl:
+
+                info = (
+                    ydl.extract_info(
+                        source_url,
+                        download=False,
+                    )
+                )
+
+        finally:
+
+            _cleanup_instagram_yt_dlp_cookie_file(
+                (
+                    str(
+                        temporary_cookie
+                    )
+                    if temporary_cookie
+                    else None
                 )
             )
 
@@ -3017,6 +3275,103 @@ class DownloadService:
                 )
                 or []
             )
+
+            story_playlist_index: (
+                int
+                | None
+            ) = None
+
+            # ------------------------------------------------
+            # Instagram Story URLs point to one exact Story,
+            # but yt-dlp may return all currently active
+            # Stories from that account.
+            #
+            # Match the numeric Story media ID from the URL
+            # against each entry's Instagram shortcode.
+            # ------------------------------------------------
+
+            if (
+                playlist_index
+                is None
+                and _is_instagram_story_url(
+                    source_url
+                )
+            ):
+
+                target_story_id = (
+                    _get_instagram_story_media_id(
+                        source_url
+                    )
+                )
+
+                if target_story_id is not None:
+
+                    matched_story = None
+
+                    for (
+                        candidate_index,
+                        candidate_entry,
+                    ) in enumerate(
+                        raw_entries,
+                        start=1,
+                    ):
+
+                        if not isinstance(
+                            candidate_entry,
+                            dict,
+                        ):
+
+                            continue
+
+                        candidate_shortcode = (
+                            candidate_entry.get(
+                                "id"
+                            )
+                            or candidate_entry.get(
+                                "display_id"
+                            )
+                        )
+
+                        candidate_story_id = (
+                            _decode_instagram_shortcode_media_id(
+                                (
+                                    str(
+                                        candidate_shortcode
+                                    )
+                                    if candidate_shortcode
+                                    is not None
+                                    else None
+                                )
+                            )
+                        )
+
+                        if (
+                            candidate_story_id
+                            == target_story_id
+                        ):
+
+                            matched_story = (
+                                candidate_index,
+                                candidate_entry,
+                            )
+
+                            break
+
+                    if matched_story is None:
+
+                        raise ValueError(
+                            "Requested Instagram Story "
+                            "was not found"
+                        )
+
+                    (
+                        story_playlist_index,
+                        matched_story_entry,
+                    ) = matched_story
+
+                    raw_entries = [
+                        matched_story_entry
+                    ]
 
             entries: list[
                 dict[str, Any]
@@ -3054,7 +3409,14 @@ class DownloadService:
                                     playlist_index
                                     is not None
                                 )
-                                else index
+                                else (
+                                    story_playlist_index
+                                    if (
+                                        story_playlist_index
+                                        is not None
+                                    )
+                                    else index
+                                )
                             ),
 
                         "id":
@@ -3147,8 +3509,12 @@ class DownloadService:
             )
 
             if (
-                playlist_index
-                is not None
+                (
+                    playlist_index
+                    is not None
+                    or story_playlist_index
+                    is not None
+                )
                 and entries
             ):
 
