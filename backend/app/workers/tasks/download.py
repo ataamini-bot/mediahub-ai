@@ -50,6 +50,7 @@ MAX_DOWNLOAD_BYTES = (
 
 from app.services.instagram_auth_monitor import (
     notify_instagram_story_auth_issue,
+    notify_instagram_story_auth_recovery,
 )
 
 INSTAGRAM_COOKIE_PATH = Path(
@@ -4368,6 +4369,11 @@ def download_task(
                         else None
                     )
                 )
+
+            notify_instagram_story_auth_recovery(
+                source_url=source_url,
+                service="Worker",
+            )
 
             _check_job_control(
                 job_id

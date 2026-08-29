@@ -1,5 +1,8 @@
+import os
 from typing import Literal
 from urllib.parse import urlparse
+
+import redis
 
 from app.services.admin_notifications import (
     notify_event,
@@ -10,6 +13,48 @@ InstagramAuthIssue = Literal[
     "cookie_missing",
     "auth_rejected",
 ]
+
+
+INSTAGRAM_AUTH_INCIDENT_KEY = (
+    "mediahub:"
+    "instagram:"
+    "story-auth:"
+    "incident"
+)
+
+
+def _get_redis_client():
+    return redis.Redis.from_url(
+        os.getenv(
+            "REDIS_URL",
+            "redis://redis:6379/0",
+        ),
+        socket_connect_timeout=3,
+        socket_timeout=3,
+        decode_responses=True,
+    )
+
+
+def _mark_instagram_auth_incident(
+    issue: InstagramAuthIssue,
+) -> None:
+
+    try:
+
+        client = _get_redis_client()
+
+        client.set(
+            INSTAGRAM_AUTH_INCIDENT_KEY,
+            issue,
+        )
+
+    except Exception as exc:
+
+        print(
+            "Instagram auth incident state "
+            "update failed: "
+            f"{type(exc).__name__}"
+        )
 
 
 def _is_instagram_story_url(
@@ -134,6 +179,10 @@ def notify_instagram_story_auth_issue(
     if issue is None:
         return False
 
+    _mark_instagram_auth_incident(
+        issue
+    )
+
     if issue == "cookie_missing":
 
         return notify_event(
@@ -175,3 +224,82 @@ def notify_instagram_story_auth_issue(
             "نیاز بروزرسانی شود."
         ),
     )
+
+
+
+def notify_instagram_story_auth_recovery(
+    *,
+    source_url: str,
+    service: str,
+) -> bool:
+
+    if not _is_instagram_story_url(
+        source_url
+    ):
+
+        return False
+
+    try:
+
+        client = _get_redis_client()
+
+        previous_issue = client.getdel(
+            INSTAGRAM_AUTH_INCIDENT_KEY
+        )
+
+    except Exception as exc:
+
+        print(
+            "Instagram auth recovery state "
+            "check failed: "
+            f"{type(exc).__name__}"
+        )
+
+        return False
+
+    if not previous_issue:
+        return False
+
+    sent = notify_event(
+        "monitoring",
+        level="recovery",
+        title=(
+            "اتصال اینستاگرام "
+            "بازیابی شد"
+        ),
+        message=(
+            "احراز هویت Instagram Story "
+            "دوباره با موفقیت انجام شد."
+        ),
+        service=service,
+        component="Instagram Story",
+        action=(
+            "اقدام دیگری لازم نیست. "
+            "وضعیت سرویس به حالت عادی "
+            "بازگشته است."
+        ),
+    )
+
+    if sent:
+        return True
+
+    # Telegram delivery failed.
+    # Restore the active incident so recovery
+    # can be reported on the next successful Story.
+
+    try:
+
+        client.set(
+            INSTAGRAM_AUTH_INCIDENT_KEY,
+            previous_issue,
+        )
+
+    except Exception as exc:
+
+        print(
+            "Instagram auth recovery state "
+            "restore failed: "
+            f"{type(exc).__name__}"
+        )
+
+    return False

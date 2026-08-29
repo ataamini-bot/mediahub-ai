@@ -24,6 +24,7 @@ from app.schemas.download import (
 )
 from app.services.instagram_auth_monitor import (
     notify_instagram_story_auth_issue,
+    notify_instagram_story_auth_recovery,
 )
 
 from app.services.download import (
@@ -95,7 +96,7 @@ async def get_media_info(
 ):
     try:
 
-        return (
+        media_info = (
             DownloadService.get_media_info(
                 source_url=url,
                 playlist_index=(
@@ -103,6 +104,13 @@ async def get_media_info(
                 ),
             )
         )
+
+        notify_instagram_story_auth_recovery(
+            source_url=url,
+            service="Backend",
+        )
+
+        return media_info
 
     except Exception as exc:
 
