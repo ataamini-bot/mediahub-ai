@@ -48,6 +48,10 @@ MAX_DOWNLOAD_BYTES = (
     * 1024
 )
 
+from app.services.instagram_auth_monitor import (
+    notify_instagram_story_auth_issue,
+)
+
 INSTAGRAM_COOKIE_PATH = Path(
     os.getenv(
         "INSTAGRAM_COOKIE_PATH",
@@ -4617,6 +4621,12 @@ def download_task(
         # ====================================================
         # Final failure
         # ====================================================
+
+        notify_instagram_story_auth_issue(
+            source_url=source_url,
+            error=exc,
+            service="Worker",
+        )
 
         _cleanup_job_files(
             job_id

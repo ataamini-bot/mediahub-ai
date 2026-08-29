@@ -22,6 +22,10 @@ from app.schemas.download import (
     DownloadResponse,
     MediaInfoResponse,
 )
+from app.services.instagram_auth_monitor import (
+    notify_instagram_story_auth_issue,
+)
+
 from app.services.download import (
     DownloadService,
 )
@@ -101,6 +105,12 @@ async def get_media_info(
         )
 
     except Exception as exc:
+
+        notify_instagram_story_auth_issue(
+            source_url=url,
+            error=exc,
+            service="Backend",
+        )
 
         raise HTTPException(
             status_code=400,
