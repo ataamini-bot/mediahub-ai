@@ -2244,6 +2244,164 @@ def _normalize_instagram_video_for_ios(
         return file_path
 
     # --------------------------------------------------------
+    # Size-aware H.264 normalization
+    #
+    # Instagram may provide an efficient VP9 stream. Encoding
+    # that stream with an unconstrained CRF can make the final
+    # H.264 file several times larger than the size shown to
+    # the user.
+    #
+    # When duration is available, keep the final average
+    # bitrate close to the already-downloaded source file.
+    # --------------------------------------------------------
+
+    probe = (
+        _probe_media_file(
+            file_path
+        )
+    )
+
+    duration_seconds: (
+        float
+        | None
+    ) = None
+
+    has_audio_stream = False
+
+    if isinstance(
+        probe,
+        dict,
+    ):
+
+        format_info = (
+            probe.get(
+                "format"
+            )
+            or {}
+        )
+
+        if isinstance(
+            format_info,
+            dict,
+        ):
+
+            try:
+
+                candidate_duration = float(
+                    format_info.get(
+                        "duration"
+                    )
+                    or 0
+                )
+
+            except (
+                TypeError,
+                ValueError,
+            ):
+
+                candidate_duration = 0.0
+
+            if candidate_duration > 0:
+
+                duration_seconds = (
+                    candidate_duration
+                )
+
+        streams = (
+            probe.get(
+                "streams"
+            )
+            or []
+        )
+
+        if isinstance(
+            streams,
+            list,
+        ):
+
+            has_audio_stream = any(
+                isinstance(
+                    stream,
+                    dict,
+                )
+                and stream.get(
+                    "codec_type"
+                )
+                == "audio"
+                for stream in streams
+            )
+
+    video_encoding_options = [
+        "-crf",
+        "20",
+    ]
+
+    target_video_bitrate: (
+        int
+        | None
+    ) = None
+
+    if (
+        duration_seconds
+        is not None
+        and duration_seconds > 0
+    ):
+
+        source_total_bitrate = int(
+            (
+                source_size
+                * 8
+            )
+            / duration_seconds
+        )
+
+        target_audio_bitrate = (
+            128_000
+            if has_audio_stream
+            else 0
+        )
+
+        # Leave a small margin for MP4/container overhead.
+        target_video_bitrate = max(
+            250_000,
+            int(
+                source_total_bitrate
+                * 0.96
+            )
+            - target_audio_bitrate,
+        )
+
+        video_encoding_options = [
+            "-b:v",
+            str(
+                target_video_bitrate
+            ),
+
+            "-maxrate",
+            str(
+                int(
+                    target_video_bitrate
+                    * 1.5
+                )
+            ),
+
+            "-bufsize",
+            str(
+                target_video_bitrate
+                * 2
+            ),
+        ]
+
+    print(
+        "Instagram iOS size control: "
+        f"job={job_id}, "
+        f"source_size={source_size}, "
+        f"duration={duration_seconds}, "
+        f"target_video_bitrate="
+        f"{target_video_bitrate}"
+    )
+
+    # --------------------------------------------------------
     # .part is intentional:
     #
     # _find_final_output_file() ignores .part files, so a
@@ -2310,8 +2468,7 @@ def _normalize_instagram_video_for_ios(
         "-preset",
         "fast",
 
-        "-crf",
-        "20",
+        *video_encoding_options,
 
         "-pix_fmt",
         "yuv420p",
