@@ -21,3 +21,34 @@ celery_app.conf.imports = (
     "app.workers.tasks.health",
     "app.workers.tasks.download",
 )
+
+
+# ============================================================
+# Worker lifecycle notifications
+# ============================================================
+
+from celery.signals import (
+    worker_ready,
+    worker_shutdown,
+)
+
+from app.services.system_monitor import (
+    notify_worker_ready,
+    notify_worker_stopping,
+)
+
+
+@worker_ready.connect
+def on_worker_ready(
+    sender=None,
+    **kwargs,
+):
+    notify_worker_ready()
+
+
+@worker_shutdown.connect
+def on_worker_shutdown(
+    sender=None,
+    **kwargs,
+):
+    notify_worker_stopping()
