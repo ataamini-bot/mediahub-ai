@@ -1,3 +1,5 @@
+import asyncio
+
 import mimetypes
 from pathlib import Path
 
@@ -96,13 +98,10 @@ async def get_media_info(
 ):
     try:
 
-        media_info = (
-            DownloadService.get_media_info(
-                source_url=url,
-                playlist_index=(
-                    playlist_index
-                ),
-            )
+        media_info = await asyncio.to_thread(
+            DownloadService.get_media_info,
+            source_url=url,
+            playlist_index=playlist_index,
         )
 
         notify_instagram_story_auth_recovery(
