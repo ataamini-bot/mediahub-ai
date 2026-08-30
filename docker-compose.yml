@@ -156,6 +156,23 @@ services:
       - mediahub
 
 
+  monitor:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+
+    container_name: mediahub-monitor
+    restart: unless-stopped
+
+    command: python -m app.monitoring.health_monitor
+
+    env_file:
+      - .env
+
+    networks:
+      - mediahub
+
+
 networks:
   mediahub:
     driver: bridge
