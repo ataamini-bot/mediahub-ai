@@ -1,3 +1,4 @@
+import re
 from functools import lru_cache
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -26,10 +27,35 @@ class Settings(BaseSettings):
     redis_url: str = "redis://redis:6379/0"
 
     telegram_bot_token: str
+    telegram_admin_ids: str = ""
 
-    free_daily_download_limit: int = 10
-    free_max_file_size_mb: int = 100
+    free_daily_download_limit: int = 3
+    free_max_file_size_mb: int = 300
     max_concurrent_downloads: int = 3
+    quota_timezone: str = "Asia/Tehran"
+
+    @property
+    def telegram_admin_id_set(
+        self,
+    ) -> frozenset[int]:
+        values = re.split(
+            r"[\s,;]+",
+            self.telegram_admin_ids.strip(),
+        )
+
+        try:
+            return frozenset(
+                int(value)
+                for value in values
+                if value
+            )
+
+        except ValueError as exc:
+            raise ValueError(
+                "TELEGRAM_ADMIN_IDS must contain "
+                "integer IDs separated by comma, "
+                "semicolon, or whitespace"
+            ) from exc
 
     model_config = SettingsConfigDict(
         env_file=".env",

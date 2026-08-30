@@ -2401,16 +2401,12 @@ async def start_handler(
 
     try:
 
-        user = (
-            await register_telegram_user(
-                message
-            )
+        await register_telegram_user(
+            message
         )
 
-        user_id = (
-            user[
-                "id"
-            ]
+        telegram_id = (
+            message.from_user.id
         )
 
         await message.answer(
@@ -2420,8 +2416,8 @@ async def start_handler(
                 "🎬 لینک ویدئو را ارسال کنید "
                 "تا دانلود شود.\n\n"
 
-                f"🆔 User ID: "
-                f"<code>{user_id}</code>"
+                f"🆔 Telegram ID شما: "
+                f"<code>{telegram_id}</code>"
             ),
             parse_mode="HTML",
         )
@@ -3121,6 +3117,9 @@ async def media_entry_callback(
             job = (
                 await create_download_job(
                     source_url=source_url,
+                    telegram_id=(
+                        callback.from_user.id
+                    ),
                     quality=None,
                     media_type="image",
                     playlist_index=index,
@@ -3576,6 +3575,9 @@ async def quality_callback(
         job = (
             await create_download_job(
                 source_url=source_url,
+                telegram_id=(
+                    callback.from_user.id
+                ),
                 quality=quality,
                 playlist_index=(
                     playlist_index
@@ -3783,6 +3785,30 @@ async def download_handler(
 
         return
 
+    try:
+
+        await register_telegram_user(
+            message
+        )
+
+    except Exception as exc:
+
+        print(
+            "User registration before download failed: "
+            f"{type(exc).__name__}: "
+            f"{exc}"
+        )
+
+        await message.answer(
+            (
+                "❌ <b>ثبت اطلاعات کاربر انجام نشد</b>\n\n"
+                "لطفاً چند لحظه بعد دوباره تلاش کنید."
+            ),
+            parse_mode="HTML",
+        )
+
+        return
+
     status_message = (
         await message.answer(
             (
@@ -3947,6 +3973,9 @@ async def download_handler(
             job = (
                 await create_download_job(
                     source_url=source_url,
+                    telegram_id=(
+                        message.from_user.id
+                    ),
                     quality=None,
                     media_type="image",
                     playlist_index=(

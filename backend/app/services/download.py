@@ -25,6 +25,9 @@ from app.models.download_job import (
 from app.repositories.download_job import (
     DownloadJobRepository,
 )
+from app.services.quota import (
+    DownloadQuotaService,
+)
 from app.workers.tasks.download import (
     cleanup_paused_download,
     download_task,
@@ -2281,6 +2284,12 @@ class DownloadService:
             session
         )
 
+        self.quota = (
+            DownloadQuotaService(
+                session
+            )
+        )
+
     # ========================================================
     # Create Job
     # ========================================================
@@ -2288,12 +2297,16 @@ class DownloadService:
     async def create_job(
         self,
         source_url: str,
-        user_id: int | None = None,
+        user_id: int,
         format_id: str | None = None,
         quality: str | None = None,
         media_type: str | None = None,
         playlist_index: int | None = None,
     ) -> DownloadJob:
+
+        await self.quota.reserve_daily_slot(
+            user_id=user_id,
+        )
 
         # ----------------------------------------------------
         # Keep repository backward-compatible.

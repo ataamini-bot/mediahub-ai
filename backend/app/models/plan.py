@@ -43,22 +43,22 @@ class Plan(Base, TimestampMixin):
         nullable=False,
     )
 
-    daily_download_limit: Mapped[int] = mapped_column(
+    daily_download_limit: Mapped[int | None] = mapped_column(
         Integer,
-        default=10,
-        nullable=False,
+        default=3,
+        nullable=True,
     )
 
-    max_file_size_mb: Mapped[int] = mapped_column(
+    max_file_size_mb: Mapped[int | None] = mapped_column(
         Integer,
-        default=100,
-        nullable=False,
+        default=300,
+        nullable=True,
     )
 
-    max_quality: Mapped[int] = mapped_column(
+    max_quality: Mapped[int | None] = mapped_column(
         Integer,
         default=720,
-        nullable=False,
+        nullable=True,
     )
 
     ai_enabled: Mapped[bool] = mapped_column(

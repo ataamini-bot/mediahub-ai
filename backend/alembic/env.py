@@ -9,7 +9,7 @@ from app.core.config import settings
 from app.db.base import Base
 
 # Import all models so SQLAlchemy registers them in Base.metadata.
-from app.models import Plan, Subscription, User, Wallet  # noqa: F401
+from app.models import Payment, Plan, Subscription, User, Wallet  # noqa: F401
 
 
 config = context.config

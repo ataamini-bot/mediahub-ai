@@ -119,6 +119,7 @@ async def get_media_info(
 
 async def create_download_job(
     source_url: str,
+    telegram_id: int,
     quality: str | None = None,
     media_type: str = "video",
     playlist_index: int | None = None,
@@ -131,6 +132,9 @@ async def create_download_job(
     )
 
     payload = {
+        "telegram_id":
+            telegram_id,
+
         "source_url":
             source_url,
 
@@ -152,6 +156,41 @@ async def create_download_job(
             f"{BACKEND_URL}/downloads",
             json=payload,
         ) as response:
+
+            if response.status == 429:
+
+                payload = await response.json(
+                    content_type=None
+                )
+
+                detail = payload.get(
+                    "detail"
+                )
+
+                if not isinstance(
+                    detail,
+                    dict,
+                ):
+
+                    detail = {}
+
+                limit = detail.get(
+                    "limit",
+                    "?",
+                )
+
+                used = detail.get(
+                    "used",
+                    limit,
+                )
+
+                raise RuntimeError(
+                    "سهمیه روزانه دانلود شما "
+                    "تکمیل شده است "
+                    f"({used}/{limit} فایل). "
+                    "پس از شروع روز جدید "
+                    "دوباره تلاش کنید."
+                )
 
             response.raise_for_status()
 

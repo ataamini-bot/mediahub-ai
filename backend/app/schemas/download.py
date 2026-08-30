@@ -19,6 +19,10 @@ from app.models.download_job import (
 class DownloadCreate(
     BaseModel
 ):
+    telegram_id: int = Field(
+        gt=0,
+    )
+
     source_url: str = Field(
         min_length=5,
         max_length=2048,

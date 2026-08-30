@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import settings
 from app.db.session import get_db
 from app.models.user import User, UserStatus
 
@@ -25,6 +26,11 @@ async def get_or_create_telegram_user(
     language_code: str | None = None,
     db: AsyncSession = Depends(get_db),
 ):
+    is_configured_admin = (
+        telegram_id
+        in settings.telegram_admin_id_set
+    )
+
     result = await db.execute(
         select(User).where(
             User.telegram_id == telegram_id
@@ -43,7 +49,7 @@ async def get_or_create_telegram_user(
             last_name=last_name,
             language_code=language_code,
             status=UserStatus.ACTIVE,
-            is_admin=False,
+            is_admin=is_configured_admin,
             last_activity_at=now,
         )
 
@@ -55,6 +61,9 @@ async def get_or_create_telegram_user(
         user.last_name = last_name
         user.language_code = language_code
         user.last_activity_at = now
+
+        if is_configured_admin:
+            user.is_admin = True
 
     await db.commit()
     await db.refresh(user)

@@ -83,3 +83,5 @@ test-*.mp4
 # Secrets and authentication cookies
 secrets/
 *.cookies.txt
+
+backups/

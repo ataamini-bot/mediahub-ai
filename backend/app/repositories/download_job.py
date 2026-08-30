@@ -19,7 +19,7 @@ class DownloadJobRepository:
     async def create(
         self,
         source_url: str,
-        user_id: int | None = None,
+        user_id: int,
         format_id: str | None = None,
         quality: str | None = None,
         media_type: str | None = None,
