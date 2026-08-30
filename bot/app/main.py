@@ -750,11 +750,8 @@ def format_eta(
 
     try:
 
-        seconds = max(
-            0,
-            int(
-                seconds
-            ),
+        seconds = int(
+            seconds
         )
 
     except (
@@ -764,9 +761,13 @@ def format_eta(
 
         return None
 
-    if (
-        seconds < 60
-    ):
+    # Zero means either finished or unavailable.
+    # Never show "0 seconds remaining".
+    if seconds <= 0:
+
+        return None
+
+    if seconds < 60:
 
         return (
             f"{seconds} ثانیه"
@@ -809,9 +810,7 @@ def format_eta(
 
     if not parts:
 
-        return (
-            "کمتر از یک دقیقه"
-        )
+        return None
 
     return (
         " و ".join(
@@ -881,6 +880,81 @@ def build_progress_text(
         )
     )
 
+    # If Backend/Worker has no useful ETA, derive one from
+    # remaining bytes and current transfer speed.
+    if (
+        not paused
+        and progress < 100
+    ):
+
+        try:
+
+            normalized_eta = (
+                float(
+                    eta
+                )
+                if eta is not None
+                else None
+            )
+
+        except (
+            TypeError,
+            ValueError,
+        ):
+
+            normalized_eta = None
+
+        if (
+            normalized_eta
+            is None
+            or normalized_eta <= 0
+        ):
+
+            try:
+
+                normalized_downloaded = int(
+                    downloaded_bytes
+                    or 0
+                )
+
+                normalized_total = int(
+                    total_bytes
+                    or 0
+                )
+
+                normalized_speed = float(
+                    speed
+                    or 0
+                )
+
+                if (
+                    normalized_total
+                    > normalized_downloaded
+                    and normalized_speed > 0
+                ):
+
+                    eta = max(
+                        1,
+                        int(
+                            (
+                                normalized_total
+                                - normalized_downloaded
+                            )
+                            / normalized_speed
+                        ),
+                    )
+
+                else:
+
+                    eta = None
+
+            except (
+                TypeError,
+                ValueError,
+            ):
+
+                eta = None
+
     eta_label = (
         format_eta(
             eta
@@ -930,15 +1004,49 @@ def build_progress_text(
         and total_label
     ):
 
-        lines.append(
-            (
-                "📦 دانلود شده: "
-                f"<code>"
-                f"{downloaded_label} / "
-                f"{total_label}"
-                f"</code>"
+        try:
+
+            download_complete = (
+                int(
+                    downloaded_bytes
+                    or 0
+                )
+                >= int(
+                    total_bytes
+                    or 0
+                )
+                > 0
             )
-        )
+
+        except (
+            TypeError,
+            ValueError,
+        ):
+
+            download_complete = False
+
+        if download_complete:
+
+            lines.append(
+                (
+                    "📦 دریافت شده: "
+                    f"<code>"
+                    f"{downloaded_label}"
+                    f"</code>"
+                )
+            )
+
+        else:
+
+            lines.append(
+                (
+                    "📦 دانلود شده: "
+                    f"<code>"
+                    f"{downloaded_label} از "
+                    f"{total_label}"
+                    f"</code>"
+                )
+            )
 
     elif downloaded_label:
 
@@ -2237,6 +2345,7 @@ async def send_downloaded_file(
 
         await message.answer_document(
             document=document,
+            disable_content_type_detection=True,
             caption=(
                 "✅ <b>دانلود با موفقیت انجام شد</b>\n\n"
 
@@ -3729,8 +3838,7 @@ async def download_handler(
         ) = None
 
         if (
-            is_playlist
-            and len(
+            len(
                 entries
             )
             == 1
@@ -3841,7 +3949,9 @@ async def download_handler(
                     source_url=source_url,
                     quality=None,
                     media_type="image",
-                    playlist_index=None,
+                    playlist_index=(
+                        single_playlist_index
+                    ),
                 )
             )
 

@@ -4,7 +4,6 @@ from datetime import datetime, timezone
 from typing import Any
 import ipaddress
 import os
-import tempfile
 import socket
 from urllib.error import (
     HTTPError,
@@ -237,20 +236,6 @@ def _get_media_info_options(
             "playlist_items"
         ] = str(
             playlist_index
-        )
-
-    # --------------------------------------------------------
-    # Instagram Story authentication
-    # --------------------------------------------------------
-
-    if _is_instagram_story_url(
-        source_url
-    ):
-
-        options[
-            "cookiefile"
-        ] = (
-            _prepare_instagram_yt_dlp_cookie_file()
         )
 
     if not _is_youtube_url(
@@ -1092,10 +1077,6 @@ def _normalize_duration(
 # Instagram mixed-media helpers
 # ============================================================
 
-INSTAGRAM_COOKIE_PATH = os.getenv(
-    "INSTAGRAM_COOKIE_PATH",
-    "/app/secrets/instagram-cookies.txt",
-)
 
 
 def _is_instagram_story_url(
@@ -1218,107 +1199,8 @@ def _decode_instagram_shortcode_media_id(
 
 
 
-def _prepare_instagram_yt_dlp_cookie_file(
-) -> str:
-
-    source_path = os.fspath(
-        INSTAGRAM_COOKIE_PATH
-    )
-
-    if not os.path.isfile(
-        source_path
-    ):
-
-        raise RuntimeError(
-            "Instagram cookie file not found: "
-            f"{source_path}"
-        )
-
-    temporary_path: str | None = None
-
-    try:
-
-        with tempfile.NamedTemporaryFile(
-            mode="wb",
-            prefix="mediahub-instagram-",
-            suffix=".cookies.txt",
-            dir="/tmp",
-            delete=False,
-        ) as temporary_file:
-
-            temporary_path = (
-                temporary_file.name
-            )
-
-            os.chmod(
-                temporary_path,
-                0o600,
-            )
-
-            with open(
-                source_path,
-                "rb",
-            ) as source_file:
-
-                while True:
-
-                    chunk = (
-                        source_file.read(
-                            1024 * 1024
-                        )
-                    )
-
-                    if not chunk:
-                        break
-
-                    temporary_file.write(
-                        chunk
-                    )
-
-        return temporary_path
-
-    except Exception:
-
-        if temporary_path:
-
-            try:
-
-                os.remove(
-                    temporary_path
-                )
-
-            except FileNotFoundError:
-
-                pass
-
-        raise
 
 
-def _cleanup_instagram_yt_dlp_cookie_file(
-    cookie_path: str | None,
-) -> None:
-
-    if not cookie_path:
-        return
-
-    try:
-
-        os.remove(
-            cookie_path
-        )
-
-    except FileNotFoundError:
-
-        pass
-
-    except OSError as exc:
-
-        print(
-            "Failed to remove temporary "
-            "Instagram cookie file: "
-            f"{type(exc).__name__}: "
-            f"{exc}"
-        )
 
 
 def _is_instagram_url(
@@ -1350,68 +1232,45 @@ def _get_instagram_gallery_info(
     source_url: str,
 ) -> dict[str, Any] | None:
 
-    cookie_path = (
-        INSTAGRAM_COOKIE_PATH
-    )
-
-    if not os.path.isfile(
-        cookie_path
+    if not _is_instagram_url(
+        source_url
     ):
 
-        print(
-            "Instagram gallery cookies "
-            f"not found: {cookie_path}"
-        )
+        return None
+
+    if _is_instagram_story_url(
+        source_url
+    ):
 
         return None
 
-    command = [
-        "gallery-dl",
-        "--cookies",
-        cookie_path,
-        "-j",
-        source_url,
-    ]
+    options = {
+        "quiet": True,
+        "no_warnings": True,
+        "skip_download": True,
+        "noplaylist": False,
+        "socket_timeout": 15,
+        "ignore_no_formats_error": True,
+    }
 
     try:
 
-        result = subprocess.run(
-            command,
-            capture_output=True,
-            text=True,
-            timeout=90,
-            check=False,
-        )
+        with yt_dlp.YoutubeDL(
+            options
+        ) as ydl:
+
+            raw_info = (
+                ydl.extract_info(
+                    source_url,
+                    download=False,
+                    process=False,
+                )
+            )
 
     except Exception as exc:
 
         print(
-            "gallery-dl execution failed: "
-            f"{type(exc).__name__}: "
-            f"{exc}"
-        )
-
-        return None
-
-    if result.returncode != 0:
-
-        print(
-            "gallery-dl failed: "
-            f"{result.stderr[-1000:]}"
-        )
-
-        return None
-
-    try:
-
-        data = json.loads(
-            result.stdout
-        )
-
-    except Exception as exc:
-
-        print(
-            "gallery-dl JSON parse failed: "
+            "Instagram raw yt-dlp extraction failed: "
             f"{type(exc).__name__}: "
             f"{exc}"
         )
@@ -1419,300 +1278,284 @@ def _get_instagram_gallery_info(
         return None
 
     if not isinstance(
-        data,
-        list,
+        raw_info,
+        dict,
     ):
 
         return None
 
-    post_metadata: dict[
-        str,
-        Any,
-    ] = {}
+    if (
+        raw_info.get(
+            "_type"
+        )
+        == "playlist"
+    ):
 
-    entries_by_index: dict[
-        int,
-        dict[str, Any],
-    ] = {}
-
-    for event in data:
-
-        if (
-            not isinstance(
-                event,
-                list,
+        raw_entries = (
+            raw_info.get(
+                "entries"
             )
-            or len(
-                event
-            )
-            < 2
-        ):
-
-            continue
-
-        event_type = (
-            event[0]
+            or []
         )
 
-        if (
-            event_type == 2
-            and len(
-                event
-            )
-            >= 2
-            and isinstance(
-                event[1],
-                dict,
-            )
-        ):
+    else:
 
-            post_metadata = (
-                event[1]
-            )
+        raw_entries = [
+            raw_info
+        ]
 
-            continue
+    entries: list[
+        dict[str, Any]
+    ] = []
 
-        if (
-            event_type != 3
-            or len(
-                event
-            )
-            < 3
-        ):
-
-            continue
-
-        raw_url = (
-            event[1]
-        )
-
-        metadata = (
-            event[2]
-        )
+    for index, item in enumerate(
+        raw_entries,
+        start=1,
+    ):
 
         if not isinstance(
-            metadata,
+            item,
             dict,
         ):
 
             continue
 
-        try:
+        formats = (
+            item.get(
+                "formats"
+            )
+            or []
+        )
 
-            index = int(
-                metadata.get(
-                    "num"
+        thumbnails = [
+            thumbnail
+            for thumbnail in (
+                item.get(
+                    "thumbnails"
                 )
+                or []
+            )
+            if isinstance(
+                thumbnail,
+                dict,
+            )
+            and isinstance(
+                thumbnail.get(
+                    "url"
+                ),
+                str,
+            )
+        ]
+
+        def thumbnail_score(
+            thumbnail: dict[str, Any],
+        ) -> tuple[
+            int,
+            int,
+            int,
+        ]:
+
+            try:
+                width = int(
+                    thumbnail.get(
+                        "width"
+                    )
+                    or 0
+                )
+            except (
+                TypeError,
+                ValueError,
+            ):
+                width = 0
+
+            try:
+                height = int(
+                    thumbnail.get(
+                        "height"
+                    )
+                    or 0
+                )
+            except (
+                TypeError,
+                ValueError,
+            ):
+                height = 0
+
+            return (
+                width * height,
+                width,
+                height,
             )
 
-        except (
-            TypeError,
-            ValueError,
-        ):
+        # yt-dlp normally orders Instagram thumbnails from
+        # smaller to larger variants.
+        #
+        # Some image-only posts do not include width/height
+        # metadata at all. In that case every thumbnail receives
+        # the same resolution score, so use the original list
+        # position as the final tie-breaker and prefer the last
+        # (highest-quality) candidate.
+        best_thumbnail = (
+            max(
+                enumerate(
+                    thumbnails
+                ),
+                key=lambda pair: (
+                    *thumbnail_score(
+                        pair[1]
+                    ),
+                    pair[0],
+                ),
+            )[1]
+            if thumbnails
+            else {}
+        )
 
-            continue
-
-        extension = str(
-            metadata.get(
-                "extension"
+        thumbnail_url = (
+            item.get(
+                "thumbnail"
             )
-            or ""
-        ).lower()
-
-        video_url = (
-            metadata.get(
-                "video_url"
+            or best_thumbnail.get(
+                "url"
             )
         )
 
-        image_extensions = {
-            "jpg",
-            "jpeg",
-            "png",
-            "webp",
-            "gif",
-            "avif",
-        }
+        if formats:
 
-        video_extensions = {
-            "mp4",
-            "mov",
-            "m4v",
-            "webm",
-            "mkv",
-        }
+            media_type = "video"
+            media_url = None
 
-        if (
-            video_url
-            or extension
-            in video_extensions
-            or (
-                isinstance(
-                    raw_url,
-                    str,
+            extension = (
+                item.get(
+                    "ext"
                 )
-                and raw_url.startswith(
-                    "ytdl:"
-                )
-            )
-        ):
-
-            media_type = (
-                "video"
-            )
-
-            media_url = (
-                video_url
-                if isinstance(
-                    video_url,
-                    str,
-                )
-                else None
-            )
-
-        elif (
-            extension
-            in image_extensions
-        ):
-
-            media_type = (
-                "image"
-            )
-
-            media_url = (
-                raw_url
-                if isinstance(
-                    raw_url,
-                    str,
-                )
-                else None
+                or "mp4"
             )
 
         else:
 
-            continue
+            media_type = "image"
 
-        media_id = (
-            metadata.get(
-                "media_id"
+            media_url = (
+                best_thumbnail.get(
+                    "url"
+                )
+                or item.get(
+                    "thumbnail"
+                )
             )
-            or metadata.get(
-                "shortcode"
+
+            if not media_url:
+
+                continue
+
+            extension = (
+                best_thumbnail.get(
+                    "ext"
+                )
+                or item.get(
+                    "ext"
+                )
+                or "jpg"
             )
+
+        entries.append(
+            {
+                "index":
+                    index,
+
+                "id":
+                    (
+                        str(
+                            item.get(
+                                "id"
+                            )
+                        )
+                        if item.get(
+                            "id"
+                        )
+                        is not None
+                        else None
+                    ),
+
+                "title":
+                    item.get(
+                        "title"
+                    ),
+
+                "duration":
+                    item.get(
+                        "duration"
+                    ),
+
+                "thumbnail":
+                    thumbnail_url,
+
+                # Video formats are intentionally resolved
+                # again by the normal yt-dlp path when the
+                # user selects the specific carousel item.
+                "formats":
+                    [],
+
+                "media_type":
+                    media_type,
+
+                "media_url":
+                    media_url,
+
+                "extension":
+                    str(
+                        extension
+                    ).lower(),
+
+                "width":
+                    (
+                        best_thumbnail.get(
+                            "width"
+                        )
+                        or item.get(
+                            "width"
+                        )
+                    ),
+
+                "height":
+                    (
+                        best_thumbnail.get(
+                            "height"
+                        )
+                        or item.get(
+                            "height"
+                        )
+                    ),
+            }
         )
 
-        entries_by_index[
-            index
-        ] = {
-            "index":
-                index,
-
-            "id":
-                (
-                    str(
-                        media_id
-                    )
-                    if (
-                        media_id
-                        is not None
-                    )
-                    else None
-                ),
-
-            "title":
-                None,
-
-            "duration":
-                None,
-
-            "thumbnail":
-                metadata.get(
-                    "display_url"
-                ),
-
-            "formats":
-                [],
-
-            "media_type":
-                media_type,
-
-            "media_url":
-                media_url,
-
-            "extension":
-                (
-                    extension
-                    or None
-                ),
-
-            "width":
-                metadata.get(
-                    "width_original"
-                )
-                or metadata.get(
-                    "width"
-                ),
-
-            "height":
-                metadata.get(
-                    "height_original"
-                )
-                or metadata.get(
-                    "height"
-                ),
-        }
-
-    if not entries_by_index:
+    if not entries:
 
         return None
 
-    entries = [
-        entries_by_index[
-            index
+    media_types = {
+        item[
+            "media_type"
         ]
-        for index
-        in sorted(
-            entries_by_index
-        )
-    ]
-
-    username = (
-        post_metadata.get(
-            "username"
-        )
-    )
-
-    if username:
-
-        title = (
-            f"Post by {username}"
-        )
-
-    else:
-
-        title = (
-            post_metadata.get(
-                "description"
-            )
-        )
+        for item in entries
+    }
 
     return {
         "source_url":
             source_url,
 
         "title":
-            title,
+            raw_info.get(
+                "title"
+            ),
 
         "duration":
             None,
 
         "thumbnail":
-            (
-                entries[0].get(
-                    "thumbnail"
-                )
-                if entries
-                else None
+            entries[0].get(
+                "thumbnail"
             ),
 
         "formats":
@@ -1722,13 +1565,7 @@ def _get_instagram_gallery_info(
             (
                 "mixed"
                 if len(
-                    {
-                        item[
-                            "media_type"
-                        ]
-                        for item
-                        in entries
-                    }
+                    media_types
                 )
                 > 1
                 else entries[0][
@@ -1763,11 +1600,6 @@ def _get_instagram_gallery_info(
             entries,
     }
 
-
-
-# ============================================================
-# X / Twitter image helpers
-# ============================================================
 
 def _is_x_url(
     source_url: str,
@@ -2827,6 +2659,15 @@ class DownloadService:
         playlist_index: int | None = None,
     ) -> dict[str, Any]:
 
+        if _is_instagram_story_url(
+            source_url
+        ):
+
+            raise ValueError(
+                "Instagram Stories and Highlights "
+                "are unavailable in public-only mode"
+            )
+
         # ====================================================
         # Instagram mixed media
         # ====================================================
@@ -3016,10 +2857,12 @@ class DownloadService:
                         False,
 
                     "entry_count":
-                        0,
+                        1,
 
                     "entries":
-                        [],
+                        [
+                            selected_entry
+                        ],
                 }
 
         # ====================================================
@@ -3227,34 +3070,14 @@ class DownloadService:
             )
         )
 
-        temporary_cookie = (
-            options.get(
-                "cookiefile"
-            )
-        )
+        with yt_dlp.YoutubeDL(
+            options
+        ) as ydl:
 
-        try:
-
-            with yt_dlp.YoutubeDL(
-                options
-            ) as ydl:
-
-                info = (
-                    ydl.extract_info(
-                        source_url,
-                        download=False,
-                    )
-                )
-
-        finally:
-
-            _cleanup_instagram_yt_dlp_cookie_file(
-                (
-                    str(
-                        temporary_cookie
-                    )
-                    if temporary_cookie
-                    else None
+            info = (
+                ydl.extract_info(
+                    source_url,
+                    download=False,
                 )
             )
 

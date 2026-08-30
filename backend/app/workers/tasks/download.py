@@ -8,7 +8,6 @@ from typing import Any
 from urllib.parse import urlparse
 import json
 import os
-import tempfile
 import subprocess
 import requests
 
@@ -48,17 +47,6 @@ MAX_DOWNLOAD_BYTES = (
     * 1024
 )
 
-from app.services.instagram_auth_monitor import (
-    notify_instagram_story_auth_issue,
-    notify_instagram_story_auth_recovery,
-)
-
-INSTAGRAM_COOKIE_PATH = Path(
-    os.getenv(
-        "INSTAGRAM_COOKIE_PATH",
-        "/app/secrets/instagram-cookies.txt",
-    )
-)
 
 
 def _is_instagram_story_url(
@@ -89,107 +77,8 @@ def _is_instagram_story_url(
     )
 
 
-def _prepare_instagram_yt_dlp_cookie_file(
-) -> str:
-
-    source_path = os.fspath(
-        INSTAGRAM_COOKIE_PATH
-    )
-
-    if not os.path.isfile(
-        source_path
-    ):
-
-        raise RuntimeError(
-            "Instagram cookie file not found: "
-            f"{source_path}"
-        )
-
-    temporary_path: str | None = None
-
-    try:
-
-        with tempfile.NamedTemporaryFile(
-            mode="wb",
-            prefix="mediahub-instagram-",
-            suffix=".cookies.txt",
-            dir="/tmp",
-            delete=False,
-        ) as temporary_file:
-
-            temporary_path = (
-                temporary_file.name
-            )
-
-            os.chmod(
-                temporary_path,
-                0o600,
-            )
-
-            with open(
-                source_path,
-                "rb",
-            ) as source_file:
-
-                while True:
-
-                    chunk = (
-                        source_file.read(
-                            1024 * 1024
-                        )
-                    )
-
-                    if not chunk:
-                        break
-
-                    temporary_file.write(
-                        chunk
-                    )
-
-        return temporary_path
-
-    except Exception:
-
-        if temporary_path:
-
-            try:
-
-                os.remove(
-                    temporary_path
-                )
-
-            except FileNotFoundError:
-
-                pass
-
-        raise
 
 
-def _cleanup_instagram_yt_dlp_cookie_file(
-    cookie_path: str | None,
-) -> None:
-
-    if not cookie_path:
-        return
-
-    try:
-
-        os.remove(
-            cookie_path
-        )
-
-    except FileNotFoundError:
-
-        pass
-
-    except OSError as exc:
-
-        print(
-            "Failed to remove temporary "
-            "Instagram cookie file: "
-            f"{type(exc).__name__}: "
-            f"{exc}"
-        )
 
 IMAGE_EXTENSIONS = {
     "jpg",
@@ -663,121 +552,196 @@ def _extract_instagram_image(
             "Instagram URLs only"
         )
 
-    if not INSTAGRAM_COOKIE_PATH.is_file():
+    if _is_instagram_story_url(
+        source_url
+    ):
 
-        raise RuntimeError(
-            "Instagram cookie file not found: "
-            f"{INSTAGRAM_COOKIE_PATH}"
+        raise ValueError(
+            "Instagram Stories and Highlights "
+            "are unavailable in public-only mode"
         )
 
-    command = [
-        "gallery-dl",
-        "--cookies",
-        str(
-            INSTAGRAM_COOKIE_PATH
-        ),
-        "-j",
-        source_url,
-    ]
+    options = {
+        "quiet": True,
+        "no_warnings": True,
+        "skip_download": True,
+        "noplaylist": False,
+        "socket_timeout": 15,
+        "ignore_no_formats_error": True,
+    }
 
-    result = subprocess.run(
-        command,
-        capture_output=True,
-        text=True,
-        timeout=90,
-        check=False,
-    )
+    with yt_dlp.YoutubeDL(
+        options
+    ) as ydl:
 
-    if result.returncode != 0:
-
-        raise RuntimeError(
-            "gallery-dl failed while extracting "
-            "Instagram image: "
-            f"{result.stderr[-1000:]}"
+        raw_info = ydl.extract_info(
+            source_url,
+            download=False,
+            process=False,
         )
-
-    try:
-
-        payload = json.loads(
-            result.stdout
-        )
-
-    except Exception as exc:
-
-        raise RuntimeError(
-            "Invalid gallery-dl JSON output"
-        ) from exc
 
     if not isinstance(
-        payload,
-        list,
+        raw_info,
+        dict,
     ):
 
         raise RuntimeError(
-            "Unexpected gallery-dl output"
+            "Invalid Instagram extractor result"
         )
+
+    if (
+        raw_info.get(
+            "_type"
+        )
+        == "playlist"
+    ):
+
+        raw_entries = (
+            raw_info.get(
+                "entries"
+            )
+            or []
+        )
+
+    else:
+
+        raw_entries = [
+            raw_info
+        ]
 
     image_entries: list[
         dict[str, Any]
     ] = []
 
-    for event in payload:
-
-        if (
-            not isinstance(
-                event,
-                list,
-            )
-            or len(
-                event
-            )
-            < 3
-            or event[0] != 3
-        ):
-
-            continue
-
-        raw_url = event[1]
-        metadata = event[2]
+    for index, item in enumerate(
+        raw_entries,
+        start=1,
+    ):
 
         if not isinstance(
-            raw_url,
-            str,
-        ):
-
-            continue
-
-        if not isinstance(
-            metadata,
+            item,
             dict,
         ):
 
             continue
 
-        extension = (
-            _normalize_image_extension(
-                metadata.get(
-                    "extension"
-                )
-            )
-        )
-
-        if extension is None:
+        # Entries containing formats are videos.
+        if item.get(
+            "formats"
+        ):
 
             continue
 
-        try:
+        thumbnails = [
+            thumbnail
+            for thumbnail in (
+                item.get(
+                    "thumbnails"
+                )
+                or []
+            )
+            if isinstance(
+                thumbnail,
+                dict,
+            )
+            and isinstance(
+                thumbnail.get(
+                    "url"
+                ),
+                str,
+            )
+        ]
 
-            index = int(
-                metadata.get(
-                    "num",
-                    1,
+        if not thumbnails:
+
+            thumbnail_url = (
+                item.get(
+                    "thumbnail"
                 )
             )
 
-        except (
-            TypeError,
-            ValueError,
+            if not isinstance(
+                thumbnail_url,
+                str,
+            ):
+
+                continue
+
+            best_thumbnail = {
+                "url":
+                    thumbnail_url
+            }
+
+        else:
+
+            def thumbnail_score(
+                thumbnail: dict[str, Any],
+            ) -> tuple[
+                int,
+                int,
+                int,
+            ]:
+
+                try:
+                    width = int(
+                        thumbnail.get(
+                            "width"
+                        )
+                        or 0
+                    )
+                except (
+                    TypeError,
+                    ValueError,
+                ):
+                    width = 0
+
+                try:
+                    height = int(
+                        thumbnail.get(
+                            "height"
+                        )
+                        or 0
+                    )
+                except (
+                    TypeError,
+                    ValueError,
+                ):
+                    height = 0
+
+                return (
+                    width * height,
+                    width,
+                    height,
+                )
+
+            # yt-dlp normally orders Instagram thumbnails
+            # from smaller to larger variants.
+            #
+            # Image-only posts may omit width/height metadata.
+            # When all resolution scores are equal, prefer the
+            # last candidate so the worker downloads the
+            # highest-quality public image variant.
+            best_thumbnail = max(
+                enumerate(
+                    thumbnails
+                ),
+                key=lambda pair: (
+                    *thumbnail_score(
+                        pair[1]
+                    ),
+                    pair[0],
+                ),
+            )[1]
+
+        raw_url = (
+            best_thumbnail.get(
+                "url"
+            )
+        )
+
+        if not isinstance(
+            raw_url,
+            str,
         ):
 
             continue
@@ -790,6 +754,41 @@ def _extract_instagram_image(
                 "Extractor returned an unexpected "
                 "Instagram image host"
             )
+
+        extension = (
+            _normalize_image_extension(
+                best_thumbnail.get(
+                    "ext"
+                )
+                or item.get(
+                    "ext"
+                )
+            )
+        )
+
+        if extension is None:
+
+            try:
+
+                extension = (
+                    _normalize_image_extension(
+                        Path(
+                            urlparse(
+                                raw_url
+                            ).path
+                        ).suffix.lstrip(
+                            "."
+                        )
+                    )
+                )
+
+            except Exception:
+
+                extension = None
+
+        if extension is None:
+
+            extension = "jpg"
 
         image_entries.append(
             {
@@ -834,16 +833,22 @@ def _extract_instagram_image(
 
         return selected
 
-    # Single-photo Instagram post.
-    if len(
-        image_entries
-    ) == 1:
+    if (
+        len(
+            raw_entries
+        )
+        == 1
+        and len(
+            image_entries
+        )
+        == 1
+    ):
 
         return image_entries[0]
 
     raise ValueError(
         "playlist_index is required for an "
-        "Instagram post containing multiple images"
+        "Instagram post containing multiple items"
     )
 
 
@@ -1413,18 +1418,13 @@ def _get_yt_dlp_options(
         options
     )
 
-    # --------------------------------------------------------
-    # Instagram Story authentication
-    # --------------------------------------------------------
-
     if _is_instagram_story_url(
         source_url
     ):
 
-        ydl_options[
-            "cookiefile"
-        ] = (
-            _prepare_instagram_yt_dlp_cookie_file()
+        raise ValueError(
+            "Instagram Stories and Highlights "
+            "are unavailable in public-only mode"
         )
 
     if not _is_youtube_url(
@@ -2886,33 +2886,13 @@ def _get_non_youtube_format_selector(
             playlist_index
         )
 
-    temporary_cookie = (
-        ydl_options.get(
-            "cookiefile"
-        )
-    )
+    with yt_dlp.YoutubeDL(
+        ydl_options
+    ) as ydl:
 
-    try:
-
-        with yt_dlp.YoutubeDL(
-            ydl_options
-        ) as ydl:
-
-            info = ydl.extract_info(
-                source_url,
-                download=False,
-            )
-
-    finally:
-
-        _cleanup_instagram_yt_dlp_cookie_file(
-            (
-                str(
-                    temporary_cookie
-                )
-                if temporary_cookie
-                else None
-            )
+        info = ydl.extract_info(
+            source_url,
+            download=False,
         )
 
     if (
@@ -3936,6 +3916,14 @@ def download_task(
     # Progress hook
     # ========================================================
 
+    download_part_stats: dict[
+        str,
+        dict[
+            str,
+            int | None,
+        ],
+    ] = {}
+
     def progress_hook(
         data: dict,
     ) -> None:
@@ -4025,6 +4013,89 @@ def download_task(
                 total_bytes = None
 
         # ----------------------------------------------------
+        # Aggregate separate video/audio downloads.
+        #
+        # yt-dlp downloads DASH video and audio as separate
+        # files. Without aggregation the second (small audio)
+        # stream overwrites DB stats from the main video and
+        # users see values such as 358 KB / 358 KB.
+        # --------------------------------------------------------
+
+        info_dict = (
+            data.get(
+                "info_dict"
+            )
+        )
+
+        if not isinstance(
+            info_dict,
+            dict,
+        ):
+
+            info_dict = {}
+
+        part_key = (
+            f"{data.get('filename') or data.get('tmpfilename') or 'download'}"
+            "|"
+            f"{info_dict.get('format_id') or ''}"
+        )
+
+        download_part_stats[
+            part_key
+        ] = {
+            "downloaded":
+                downloaded_bytes,
+
+            "total":
+                total_bytes,
+        }
+
+        downloaded_bytes = sum(
+            int(
+                part.get(
+                    "downloaded"
+                )
+                or 0
+            )
+            for part
+            in download_part_stats.values()
+        )
+
+        part_totals = [
+            part.get(
+                "total"
+            )
+            for part
+            in download_part_stats.values()
+        ]
+
+        if (
+            part_totals
+            and all(
+                isinstance(
+                    value,
+                    int,
+                )
+                and value > 0
+                for value
+                in part_totals
+            )
+        ):
+
+            total_bytes = sum(
+                int(
+                    value
+                )
+                for value
+                in part_totals
+                if value is not None
+            )
+
+        else:
+
+            total_bytes = None
+
+        # ----------------------------------------------------
         # Speed
         # --------------------------------------------------------
 
@@ -4079,6 +4150,45 @@ def download_task(
             ):
 
                 eta = None
+
+        # ----------------------------------------------------
+        # ETA fallback
+        #
+        # Some extractors report eta=0/None. Calculate it from
+        # remaining bytes and current speed when possible.
+        # --------------------------------------------------------
+
+        if (
+            eta is not None
+            and eta <= 0
+        ):
+
+            eta = None
+
+        if (
+            eta is None
+            and total_bytes
+            is not None
+            and total_bytes > 0
+            and downloaded_bytes
+            < total_bytes
+            and speed
+            is not None
+            and speed > 0
+        ):
+
+            remaining_bytes = (
+                total_bytes
+                - downloaded_bytes
+            )
+
+            eta = max(
+                1,
+                int(
+                    remaining_bytes
+                    / speed
+                ),
+            )
 
         # ----------------------------------------------------
         # Progress
@@ -4340,40 +4450,15 @@ def download_task(
                 f"{format_selector}"
             )
 
-            temporary_cookie = (
-                ydl_options.get(
-                    "cookiefile"
+            with yt_dlp.YoutubeDL(
+                ydl_options
+            ) as ydl:
+
+                ydl.download(
+                    [
+                        source_url,
+                    ]
                 )
-            )
-
-            try:
-
-                with yt_dlp.YoutubeDL(
-                    ydl_options
-                ) as ydl:
-
-                    ydl.download(
-                        [
-                            source_url,
-                        ]
-                    )
-
-            finally:
-
-                _cleanup_instagram_yt_dlp_cookie_file(
-                    (
-                        str(
-                            temporary_cookie
-                        )
-                        if temporary_cookie
-                        else None
-                    )
-                )
-
-            notify_instagram_story_auth_recovery(
-                source_url=source_url,
-                service="Worker",
-            )
 
             _check_job_control(
                 job_id
@@ -4627,12 +4712,6 @@ def download_task(
         # ====================================================
         # Final failure
         # ====================================================
-
-        notify_instagram_story_auth_issue(
-            source_url=source_url,
-            error=exc,
-            service="Worker",
-        )
 
         _cleanup_job_files(
             job_id
