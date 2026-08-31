@@ -12,7 +12,6 @@ from fastapi import (
 from fastapi.responses import (
     FileResponse,
 )
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import (
     AsyncSession,
 )
@@ -28,15 +27,8 @@ from app.schemas.download import (
 from app.services.download import (
     DownloadService,
 )
-from app.services.quota import (
-    DailyDownloadLimitExceeded,
-)
 from app.models.download_job import (
     DownloadJobStatus,
-)
-from app.models.user import (
-    User,
-    UserStatus,
 )
 
 
@@ -62,69 +54,20 @@ async def create_download(
         get_db
     ),
 ):
-    result = await db.execute(
-        select(User).where(
-            User.telegram_id
-            == data.telegram_id
-        )
-    )
-
-    user = result.scalar_one_or_none()
-
-    if user is None:
-
-        raise HTTPException(
-            status_code=404,
-            detail=(
-                "Telegram user is not registered"
-            ),
-        )
-
-    if user.status != UserStatus.ACTIVE:
-
-        raise HTTPException(
-            status_code=403,
-            detail=(
-                "User account is not active"
-            ),
-        )
-
     service = DownloadService(
         db
     )
 
-    try:
-
-        job = await service.create_job(
-            source_url=data.source_url,
-            user_id=user.id,
-            format_id=data.format_id,
-            quality=data.quality,
-            media_type=data.media_type,
-            playlist_index=(
-                data.playlist_index
-            ),
-        )
-
-    except DailyDownloadLimitExceeded as exc:
-
-        raise HTTPException(
-            status_code=429,
-            detail={
-                "code":
-                    "daily_download_limit_reached",
-                "plan":
-                    exc.plan_slug,
-                "limit":
-                    exc.limit,
-                "used":
-                    exc.used,
-                "remaining":
-                    0,
-                "reset_at":
-                    exc.reset_at.isoformat(),
-            },
-        ) from exc
+    job = await service.create_job(
+        source_url=data.source_url,
+        user_id=None,
+        format_id=data.format_id,
+        quality=data.quality,
+        media_type=data.media_type,
+        playlist_index=(
+            data.playlist_index
+        ),
+    )
 
     return job
 

@@ -62,8 +62,7 @@ async def get_or_create_telegram_user(
         user.language_code = language_code
         user.last_activity_at = now
 
-        if is_configured_admin:
-            user.is_admin = True
+        user.is_admin = is_configured_admin
 
     await db.commit()
     await db.refresh(user)

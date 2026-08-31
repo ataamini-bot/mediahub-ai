@@ -73,6 +73,12 @@ class Plan(Base, TimestampMixin):
         nullable=False,
     )
 
+    is_unlimited: Mapped[bool] = mapped_column(
+        Boolean,
+        default=False,
+        nullable=False,
+    )
+
     is_active: Mapped[bool] = mapped_column(
         Boolean,
         default=True,

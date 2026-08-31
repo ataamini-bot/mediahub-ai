@@ -1,4 +1,5 @@
 import re
+from decimal import Decimal
 from functools import lru_cache
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -28,6 +29,16 @@ class Settings(BaseSettings):
 
     telegram_bot_token: str
     telegram_admin_ids: str = ""
+    bot_backend_api_key: str = ""
+
+    payment_card_number: str = ""
+    payment_card_holder: str = ""
+    payment_bank_name: str = ""
+    payment_price_1_month: Decimal = Decimal("0")
+    payment_price_3_months: Decimal = Decimal("0")
+    payment_price_6_months: Decimal = Decimal("0")
+    payment_price_12_months: Decimal = Decimal("0")
+    payment_receipt_max_size_mb: int = 10
 
     free_daily_download_limit: int = 3
     free_max_file_size_mb: int = 300

@@ -8,7 +8,9 @@ from pathlib import Path
 from aiogram import Bot, Dispatcher, F
 from aiogram.client.session.aiohttp import AiohttpSession
 from aiogram.client.telegram import TelegramAPIServer
-from aiogram.filters import CommandStart
+from aiogram.filters import CommandStart, StateFilter
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.storage.redis import RedisStorage
 from aiogram.types import (
     CallbackQuery,
     FSInputFile,
@@ -32,6 +34,12 @@ from app.keyboards.media import (
 
 from app.keyboards.quality import (
     build_quality_keyboard,
+)
+from app.keyboards.payment import (
+    build_home_keyboard,
+)
+from app.handlers.payments import (
+    router as payments_router,
 )
 
 from app.utils.formatting import (
@@ -68,6 +76,11 @@ TELEGRAM_BOT_API = os.getenv(
     "http://telegram-api:8081",
 )
 
+REDIS_URL = os.getenv(
+    "REDIS_URL",
+    "redis://redis:6379/0",
+)
+
 DOWNLOAD_DIR = Path(
     os.getenv(
         "DOWNLOAD_DIR",
@@ -91,7 +104,14 @@ MAX_DOWNLOAD_SIZE_BYTES = (
     * 1024
 )
 
-dp = Dispatcher()
+dp = Dispatcher(
+    storage=RedisStorage.from_url(
+        REDIS_URL
+    )
+)
+dp.include_router(
+    payments_router
+)
 
 
 # ============================================================
@@ -2397,6 +2417,7 @@ async def send_downloaded_file(
 )
 async def start_handler(
     message: Message,
+    state: FSMContext,
 ):
 
     try:
@@ -2409,6 +2430,8 @@ async def start_handler(
             message.from_user.id
         )
 
+        await state.clear()
+
         await message.answer(
             (
                 "👋 <b>به MediaHub AI خوش آمدید!</b>\n\n"
@@ -2420,6 +2443,9 @@ async def start_handler(
                 f"<code>{telegram_id}</code>"
             ),
             parse_mode="HTML",
+            reply_markup=(
+                build_home_keyboard()
+            ),
         )
 
     except Exception as exc:
@@ -3117,9 +3143,6 @@ async def media_entry_callback(
             job = (
                 await create_download_job(
                     source_url=source_url,
-                    telegram_id=(
-                        callback.from_user.id
-                    ),
                     quality=None,
                     media_type="image",
                     playlist_index=index,
@@ -3575,9 +3598,6 @@ async def quality_callback(
         job = (
             await create_download_job(
                 source_url=source_url,
-                telegram_id=(
-                    callback.from_user.id
-                ),
                 quality=quality,
                 playlist_index=(
                     playlist_index
@@ -3768,6 +3788,7 @@ async def quality_callback(
 # ============================================================
 
 @dp.message(
+    StateFilter(None),
     F.text
 )
 async def download_handler(
@@ -3782,30 +3803,6 @@ async def download_handler(
     )
 
     if not source_url:
-
-        return
-
-    try:
-
-        await register_telegram_user(
-            message
-        )
-
-    except Exception as exc:
-
-        print(
-            "User registration before download failed: "
-            f"{type(exc).__name__}: "
-            f"{exc}"
-        )
-
-        await message.answer(
-            (
-                "❌ <b>ثبت اطلاعات کاربر انجام نشد</b>\n\n"
-                "لطفاً چند لحظه بعد دوباره تلاش کنید."
-            ),
-            parse_mode="HTML",
-        )
 
         return
 
@@ -3973,9 +3970,6 @@ async def download_handler(
             job = (
                 await create_download_job(
                     source_url=source_url,
-                    telegram_id=(
-                        message.from_user.id
-                    ),
                     quality=None,
                     media_type="image",
                     playlist_index=(
@@ -4229,6 +4223,10 @@ async def main():
         )
 
     finally:
+
+        await (
+            dp.storage.close()
+        )
 
         await (
             bot.session.close()

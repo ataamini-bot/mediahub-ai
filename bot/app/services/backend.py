@@ -9,6 +9,32 @@ BACKEND_URL = os.getenv(
     "http://backend:8000",
 ).rstrip("/")
 
+BOT_BACKEND_API_KEY = os.getenv(
+    "BOT_BACKEND_API_KEY",
+    "",
+).strip()
+
+
+class BackendAPIError(RuntimeError):
+    def __init__(
+        self,
+        *,
+        status_code: int,
+        detail: object,
+    ):
+        self.status_code = status_code
+        self.detail = detail
+        super().__init__(str(detail))
+
+
+def _internal_headers() -> dict[str, str]:
+    if not BOT_BACKEND_API_KEY:
+        return {}
+
+    return {
+        "X-Internal-API-Key": BOT_BACKEND_API_KEY,
+    }
+
 
 async def register_telegram_user(
     message: Message,
@@ -119,7 +145,6 @@ async def get_media_info(
 
 async def create_download_job(
     source_url: str,
-    telegram_id: int,
     quality: str | None = None,
     media_type: str = "video",
     playlist_index: int | None = None,
@@ -132,9 +157,6 @@ async def create_download_job(
     )
 
     payload = {
-        "telegram_id":
-            telegram_id,
-
         "source_url":
             source_url,
 
@@ -156,41 +178,6 @@ async def create_download_job(
             f"{BACKEND_URL}/downloads",
             json=payload,
         ) as response:
-
-            if response.status == 429:
-
-                payload = await response.json(
-                    content_type=None
-                )
-
-                detail = payload.get(
-                    "detail"
-                )
-
-                if not isinstance(
-                    detail,
-                    dict,
-                ):
-
-                    detail = {}
-
-                limit = detail.get(
-                    "limit",
-                    "?",
-                )
-
-                used = detail.get(
-                    "used",
-                    limit,
-                )
-
-                raise RuntimeError(
-                    "سهمیه روزانه دانلود شما "
-                    "تکمیل شده است "
-                    f"({used}/{limit} فایل). "
-                    "پس از شروع روز جدید "
-                    "دوباره تلاش کنید."
-                )
 
             response.raise_for_status()
 
@@ -325,4 +312,134 @@ async def cancel_download_job(
         job_id,
         "cancel",
         "Cancel failed",
+    )
+
+
+# ============================================================
+# Backend - manual payments
+# ============================================================
+
+async def _payment_request(
+    method: str,
+    path: str,
+    *,
+    payload: dict | None = None,
+) -> dict:
+    timeout = aiohttp.ClientTimeout(total=30)
+
+    async with aiohttp.ClientSession(timeout=timeout) as session:
+        async with session.request(
+            method,
+            f"{BACKEND_URL}{path}",
+            json=payload,
+            headers=_internal_headers(),
+        ) as response:
+            if response.status >= 400:
+                try:
+                    body = await response.json(content_type=None)
+                    detail = body.get("detail", body)
+                except Exception:
+                    detail = await response.text() or "Backend request failed"
+
+                raise BackendAPIError(
+                    status_code=response.status,
+                    detail=detail,
+                )
+
+            return await response.json(content_type=None)
+
+
+async def get_payment_configuration() -> dict:
+    return await _payment_request(
+        "GET",
+        "/payments/configuration",
+    )
+
+
+async def create_manual_payment(
+    *,
+    telegram_id: int,
+    offer_code: str,
+    receipt_file_id: str,
+    receipt_file_unique_id: str | None,
+    receipt_file_type: str,
+    receipt_file_size: int | None,
+    receipt_mime_type: str | None,
+    receipt_file_name: str | None,
+    user_receipt_message_id: int,
+) -> dict:
+    return await _payment_request(
+        "POST",
+        "/payments",
+        payload={
+            "telegram_id": telegram_id,
+            "offer_code": offer_code,
+            "receipt_file_id": receipt_file_id,
+            "receipt_file_unique_id": receipt_file_unique_id,
+            "receipt_file_type": receipt_file_type,
+            "receipt_file_size": receipt_file_size,
+            "receipt_mime_type": receipt_mime_type,
+            "receipt_file_name": receipt_file_name,
+            "user_receipt_message_id": user_receipt_message_id,
+        },
+    )
+
+
+async def set_payment_admin_message(
+    *,
+    payment_id: int,
+    admin_chat_id: int,
+    admin_message_id: int,
+    admin_message_thread_id: int | None,
+) -> dict:
+    return await _payment_request(
+        "PATCH",
+        f"/payments/{payment_id}/admin-message",
+        payload={
+            "admin_chat_id": admin_chat_id,
+            "admin_message_id": admin_message_id,
+            "admin_message_thread_id": admin_message_thread_id,
+        },
+    )
+
+
+async def mark_payment_delivery_failed(payment_id: int) -> dict:
+    return await _payment_request(
+        "POST",
+        f"/payments/{payment_id}/delivery-failed",
+    )
+
+
+async def approve_manual_payment(
+    *,
+    payment_id: int,
+    admin_telegram_id: int,
+) -> dict:
+    return await _payment_request(
+        "POST",
+        f"/payments/{payment_id}/approve",
+        payload={"admin_telegram_id": admin_telegram_id},
+    )
+
+
+async def reject_manual_payment(
+    *,
+    payment_id: int,
+    admin_telegram_id: int,
+    reason: str,
+) -> dict:
+    return await _payment_request(
+        "POST",
+        f"/payments/{payment_id}/reject",
+        payload={
+            "admin_telegram_id": admin_telegram_id,
+            "reason": reason,
+        },
+    )
+
+
+async def get_current_subscription(telegram_id: int) -> dict:
+    return await _payment_request(
+        "GET",
+        f"/payments/subscription/{telegram_id}",
     )
