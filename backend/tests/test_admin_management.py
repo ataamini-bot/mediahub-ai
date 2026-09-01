@@ -19,7 +19,11 @@ os.environ.setdefault("TELEGRAM_BOT_TOKEN", "123456789:test-token")
 
 
 from app.db.session import AsyncSessionLocal, engine  # noqa: E402
-from app.models.admin import AdminAccount  # noqa: E402
+from app.models.admin import (  # noqa: E402
+    AdminAccount,
+    AdminRole,
+    AdminRoleAssignment,
+)
 from app.models.audit_log import AuditLog  # noqa: E402
 from app.models.user import User, UserStatus  # noqa: E402
 from app.services.admin_management import (  # noqa: E402
@@ -169,8 +173,32 @@ async def test_concurrent_demotions_preserve_one_superadmin():
     telegram_ids = [first_telegram_id, second_telegram_id]
 
     async with AsyncSessionLocal() as setup_session:
-        await add_superadmin(setup_session, first_telegram_id)
-        await add_superadmin(setup_session, second_telegram_id)
+        first_user, first_account = await add_superadmin(
+            setup_session,
+            first_telegram_id,
+        )
+        second_user, second_account = await add_superadmin(
+            setup_session,
+            second_telegram_id,
+        )
+        role_result = await setup_session.execute(
+            select(AdminRole).where(AdminRole.code == "support")
+        )
+        support_role = role_result.scalar_one()
+        setup_session.add_all(
+            [
+                AdminRoleAssignment(
+                    admin_account_id=first_account.id,
+                    role_id=support_role.id,
+                    assigned_by_user_id=first_user.id,
+                ),
+                AdminRoleAssignment(
+                    admin_account_id=second_account.id,
+                    role_id=support_role.id,
+                    assigned_by_user_id=second_user.id,
+                ),
+            ]
+        )
         await setup_session.commit()
 
     async def demote_self(telegram_id: int) -> str:
