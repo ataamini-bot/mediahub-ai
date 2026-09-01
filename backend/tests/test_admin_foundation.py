@@ -104,11 +104,18 @@ def test_sensitive_setting_rejects_placeholder_key(monkeypatch):
 
 @pytest.mark.parametrize(
     "invalid_key",
-    ["", "UPPERCASE", "contains space", "../unsafe", "a"],
+    ["", "contains space", "../unsafe", "a"],
 )
 def test_setting_key_validation(invalid_key):
     with pytest.raises(SettingValidationError):
         ApplicationSettingsService.normalize_key(invalid_key)
+
+
+def test_setting_key_is_normalized_to_lowercase():
+    assert (
+        ApplicationSettingsService.normalize_key("PAYMENT.Card-Number")
+        == "payment.card-number"
+    )
 
 
 def test_audit_details_are_recursively_redacted():
