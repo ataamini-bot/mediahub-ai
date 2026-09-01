@@ -23,6 +23,10 @@ from app.core.language import (  # noqa: E402
     normalize_language,
 )
 from app.services.admin_access import AdminContext  # noqa: E402
+from app.services.admin_management import (  # noqa: E402
+    AdminManagementService,
+    AdminRoleValidationError,
+)
 from app.services.application_settings import (  # noqa: E402
     ApplicationSettingsService,
     SettingEncryptionError,
@@ -136,3 +140,24 @@ def test_audit_details_are_recursively_redacted():
         },
         "items": [{"private_key": "[REDACTED]"}],
     }
+
+
+@pytest.mark.parametrize(
+    ("raw_code", "expected"),
+    [
+        ("Support_Lead", "support_lead"),
+        ("finance.review", "finance.review"),
+        ("ops-2", "ops-2"),
+    ],
+)
+def test_role_code_normalization(raw_code, expected):
+    assert AdminManagementService.normalize_role_code(raw_code) == expected
+
+
+@pytest.mark.parametrize(
+    "invalid_code",
+    ["", "1admin", "contains space", "../unsafe", "a"],
+)
+def test_role_code_validation(invalid_code):
+    with pytest.raises(AdminRoleValidationError):
+        AdminManagementService.normalize_role_code(invalid_code)

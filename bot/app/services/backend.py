@@ -122,6 +122,161 @@ async def list_application_settings(
     return list(result)
 
 
+async def list_admin_accounts(
+    actor_telegram_id: int,
+) -> list[dict]:
+    result = await _payment_request(
+        "GET",
+        f"/admin/accounts?actor_telegram_id={actor_telegram_id}",
+    )
+    return list(result)
+
+
+async def get_admin_account(
+    *,
+    actor_telegram_id: int,
+    target_telegram_id: int,
+) -> dict:
+    return await _payment_request(
+        "GET",
+        f"/admin/accounts/{target_telegram_id}"
+        f"?actor_telegram_id={actor_telegram_id}",
+    )
+
+
+async def create_admin_account(
+    *,
+    actor_telegram_id: int,
+    target_telegram_id: int,
+    role_codes: list[str],
+    is_superadmin: bool,
+    reason: str,
+) -> dict:
+    return await _payment_request(
+        "POST",
+        "/admin/accounts",
+        payload={
+            "actor_telegram_id": actor_telegram_id,
+            "target_telegram_id": target_telegram_id,
+            "role_codes": role_codes,
+            "is_superadmin": is_superadmin,
+            "reason": reason,
+        },
+    )
+
+
+async def update_admin_account(
+    *,
+    actor_telegram_id: int,
+    target_telegram_id: int,
+    reason: str,
+    role_codes: list[str] | None = None,
+    is_superadmin: bool | None = None,
+    is_active: bool | None = None,
+) -> dict:
+    payload: dict = {
+        "actor_telegram_id": actor_telegram_id,
+        "reason": reason,
+    }
+
+    if role_codes is not None:
+        payload["role_codes"] = role_codes
+
+    if is_superadmin is not None:
+        payload["is_superadmin"] = is_superadmin
+
+    if is_active is not None:
+        payload["is_active"] = is_active
+
+    return await _payment_request(
+        "PATCH",
+        f"/admin/accounts/{target_telegram_id}",
+        payload=payload,
+    )
+
+
+async def list_admin_roles(
+    actor_telegram_id: int,
+    *,
+    include_inactive: bool = True,
+) -> list[dict]:
+    flag = "true" if include_inactive else "false"
+    result = await _payment_request(
+        "GET",
+        f"/admin/roles?actor_telegram_id={actor_telegram_id}"
+        f"&include_inactive={flag}",
+    )
+    return list(result)
+
+
+async def list_admin_permissions(
+    actor_telegram_id: int,
+) -> list[dict]:
+    result = await _payment_request(
+        "GET",
+        f"/admin/permissions?actor_telegram_id={actor_telegram_id}",
+    )
+    return list(result)
+
+
+async def create_admin_role(
+    *,
+    actor_telegram_id: int,
+    code: str,
+    name: str,
+    description: str | None,
+    permission_codes: list[str],
+    reason: str,
+) -> dict:
+    return await _payment_request(
+        "POST",
+        "/admin/roles",
+        payload={
+            "actor_telegram_id": actor_telegram_id,
+            "code": code,
+            "name": name,
+            "description": description,
+            "permission_codes": permission_codes,
+            "reason": reason,
+        },
+    )
+
+
+async def update_admin_role(
+    *,
+    actor_telegram_id: int,
+    role_id: int,
+    reason: str,
+    name: str | None = None,
+    description: str | None = None,
+    description_supplied: bool = False,
+    permission_codes: list[str] | None = None,
+    is_active: bool | None = None,
+) -> dict:
+    payload: dict = {
+        "actor_telegram_id": actor_telegram_id,
+        "reason": reason,
+    }
+
+    if name is not None:
+        payload["name"] = name
+
+    if description_supplied:
+        payload["description"] = description
+
+    if permission_codes is not None:
+        payload["permission_codes"] = permission_codes
+
+    if is_active is not None:
+        payload["is_active"] = is_active
+
+    return await _payment_request(
+        "PATCH",
+        f"/admin/roles/{role_id}",
+        payload=payload,
+    )
+
+
 # ============================================================
 # Backend - media info
 # ============================================================

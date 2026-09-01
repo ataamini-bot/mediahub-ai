@@ -185,3 +185,24 @@ class AdminAccessService:
             )
 
         return context
+
+    async def require_any_permission(
+        self,
+        telegram_id: int,
+        *permissions: str,
+    ) -> AdminContext:
+        if not permissions:
+            raise ValueError("At least one permission must be supplied")
+
+        context = await self.get_context(telegram_id)
+
+        if not context.is_admin or not any(
+            context.has_permission(permission)
+            for permission in permissions
+        ):
+            required = ", ".join(permissions)
+            raise AdminAccessDenied(
+                f"One administrator permission is required: {required}"
+            )
+
+        return context
