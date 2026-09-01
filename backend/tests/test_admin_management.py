@@ -18,7 +18,7 @@ os.environ.setdefault(
 os.environ.setdefault("TELEGRAM_BOT_TOKEN", "123456789:test-token")
 
 
-from app.db.session import AsyncSessionLocal  # noqa: E402
+from app.db.session import AsyncSessionLocal, engine  # noqa: E402
 from app.models.admin import AdminAccount  # noqa: E402
 from app.models.audit_log import AuditLog  # noqa: E402
 from app.models.user import User, UserStatus  # noqa: E402
@@ -78,6 +78,7 @@ async def test_last_active_superadmin_cannot_be_demoted():
                 )
         finally:
             await transaction.rollback()
+            await engine.dispose()
 
 
 @pytest.mark.asyncio
@@ -118,6 +119,7 @@ async def test_admin_can_receive_multiple_roles_and_audit_reason():
             assert audit_log.details["reason"] == reason
         finally:
             await transaction.rollback()
+            await engine.dispose()
 
 
 @pytest.mark.asyncio
@@ -157,6 +159,7 @@ async def test_role_cannot_strand_active_administrator():
                 )
         finally:
             await transaction.rollback()
+            await engine.dispose()
 
 
 @pytest.mark.asyncio
@@ -218,3 +221,5 @@ async def test_concurrent_demotions_preserve_one_superadmin():
                 delete(User).where(User.telegram_id.in_(telegram_ids))
             )
             await cleanup_session.commit()
+
+        await engine.dispose()
