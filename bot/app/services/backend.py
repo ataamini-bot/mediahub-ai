@@ -84,6 +84,7 @@ async def register_telegram_user(
         async with session.post(
             f"{BACKEND_URL}/users/telegram",
             params=params,
+            headers=_internal_headers(),
         ) as response:
 
             response.raise_for_status()
@@ -91,6 +92,34 @@ async def register_telegram_user(
             return (
                 await response.json()
             )
+
+
+async def set_user_language(
+    telegram_id: int,
+    language: str,
+) -> dict:
+    return await _payment_request(
+        "PATCH",
+        f"/users/{telegram_id}/language",
+        payload={"language": language},
+    )
+
+
+async def get_admin_context(telegram_id: int) -> dict:
+    return await _payment_request(
+        "GET",
+        f"/admin/context/{telegram_id}",
+    )
+
+
+async def list_application_settings(
+    actor_telegram_id: int,
+) -> list[dict]:
+    result = await _payment_request(
+        "GET",
+        f"/admin/settings?actor_telegram_id={actor_telegram_id}",
+    )
+    return list(result)
 
 
 # ============================================================

@@ -10,6 +10,13 @@ from app.db.base import Base
 
 # Import all models so SQLAlchemy registers them in Base.metadata.
 from app.models import (  # noqa: F401
+    AdminAccount,
+    AdminPermission,
+    AdminRole,
+    AdminRoleAssignment,
+    AdminRolePermission,
+    ApplicationSetting,
+    AuditLog,
     DownloadJob,
     Payment,
     Plan,

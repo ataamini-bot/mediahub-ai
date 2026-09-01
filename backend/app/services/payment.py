@@ -12,6 +12,7 @@ from app.models.plan import Plan
 from app.models.subscription import Subscription, SubscriptionStatus
 from app.models.user import User, UserStatus
 from app.schemas.payment import PaymentCreate
+from app.services.admin_access import AdminAccessService, PermissionCode
 from app.services.payment_offers import get_payment_offer
 
 
@@ -76,10 +77,11 @@ class PaymentService:
     def __init__(self, session: AsyncSession):
         self.session = session
 
-    @staticmethod
-    def ensure_admin(admin_telegram_id: int) -> None:
-        if admin_telegram_id not in settings.telegram_admin_id_set:
-            raise PermissionError("Telegram user is not a configured admin")
+    async def ensure_admin(self, admin_telegram_id: int) -> None:
+        await AdminAccessService(self.session).require_permission(
+            admin_telegram_id,
+            PermissionCode.PAYMENTS_REVIEW,
+        )
 
     @staticmethod
     def validate_receipt(data: PaymentCreate) -> None:
@@ -240,7 +242,7 @@ class PaymentService:
         payment_id: int,
         admin_telegram_id: int,
     ) -> PaymentActionResult:
-        self.ensure_admin(admin_telegram_id)
+        await self.ensure_admin(admin_telegram_id)
         payment = await self._get_payment_for_update(payment_id)
         user = await self._get_user_for_update(payment.user_id)
 
@@ -329,7 +331,7 @@ class PaymentService:
         admin_telegram_id: int,
         reason: str,
     ) -> PaymentActionResult:
-        self.ensure_admin(admin_telegram_id)
+        await self.ensure_admin(admin_telegram_id)
         payment = await self._get_payment_for_update(payment_id)
         user = await self._get_user(payment.user_id)
 

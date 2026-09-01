@@ -1,6 +1,5 @@
 import html
 import os
-import re
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
@@ -20,6 +19,7 @@ from app.services.backend import (
     BackendAPIError,
     approve_manual_payment,
     create_manual_payment,
+    get_admin_context,
     get_current_subscription,
     get_payment_configuration,
     mark_payment_delivery_failed,
@@ -43,23 +43,6 @@ def _parse_int_env(name: str) -> int | None:
         return int(raw_value)
     except ValueError:
         return None
-
-
-def _admin_id_set() -> frozenset[int]:
-    raw_value = os.getenv("TELEGRAM_ADMIN_IDS", "")
-    values = re.split(r"[\s,;]+", raw_value.strip())
-    result = set()
-
-    for value in values:
-        if not value.strip():
-            continue
-
-        try:
-            result.add(int(value.strip()))
-        except ValueError:
-            continue
-
-    return frozenset(result)
 
 
 ADMIN_PAYMENT_CHAT_ID = _parse_int_env("ADMIN_NOTIFICATIONS_CHAT_ID")
@@ -533,11 +516,36 @@ def _parse_admin_payment_id(callback: CallbackQuery) -> int | None:
 
 
 async def _ensure_admin(callback: CallbackQuery) -> bool:
-    if callback.from_user.id in _admin_id_set():
-        return True
+    try:
+        context = await get_admin_context(callback.from_user.id)
+        permissions = set(context.get("permissions", []))
+
+        if context.get("is_superadmin") or "payments.review" in permissions:
+            return True
+    except BackendAPIError:
+        await callback.answer(
+            "بررسی دسترسی مدیر ممکن نشد.",
+            show_alert=True,
+        )
+        return False
 
     await callback.answer("شما دسترسی مدیر ندارید.", show_alert=True)
     return False
+
+
+async def _ensure_message_admin(message: Message) -> bool:
+    if message.from_user is None:
+        return False
+
+    try:
+        context = await get_admin_context(message.from_user.id)
+        permissions = set(context.get("permissions", []))
+        return bool(
+            context.get("is_superadmin")
+            or "payments.review" in permissions
+        )
+    except BackendAPIError:
+        return False
 
 
 @router.callback_query(F.data.startswith("payment_admin:approve:"))
@@ -620,8 +628,9 @@ async def receive_rejection_reason(
     message: Message,
     state: FSMContext,
 ) -> None:
-    if message.from_user is None or message.from_user.id not in _admin_id_set():
+    if not await _ensure_message_admin(message):
         await state.clear()
+        await message.answer("شما دسترسی بررسی پرداخت‌ها را ندارید.")
         return
 
     reason = (message.text or "").strip()

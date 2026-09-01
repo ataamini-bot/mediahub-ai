@@ -13,6 +13,7 @@ redis
 celery
 
 python-jose[cryptography]
+cryptography
 passlib[bcrypt]
 python-multipart
 

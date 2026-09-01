@@ -1,5 +1,7 @@
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
+from app.i18n import translate
+
 
 def format_toman(value: object) -> str:
     try:
@@ -10,22 +12,44 @@ def format_toman(value: object) -> str:
     return f"{amount:,} تومان"
 
 
-def build_home_keyboard() -> InlineKeyboardMarkup:
+def build_home_keyboard(
+    language: str = "fa",
+    *,
+    include_admin: bool = False,
+) -> InlineKeyboardMarkup:
+    rows = [
+        [
+            InlineKeyboardButton(
+                text=translate(language, "home.buy"),
+                callback_data="payment:open",
+            )
+        ],
+        [
+            InlineKeyboardButton(
+                text=translate(language, "home.subscription"),
+                callback_data="payment:status",
+            )
+        ],
+        [
+            InlineKeyboardButton(
+                text=translate(language, "home.language"),
+                callback_data="language:open",
+            )
+        ],
+    ]
+
+    if include_admin:
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text=translate(language, "home.admin"),
+                    callback_data="admin:open",
+                )
+            ]
+        )
+
     return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [
-                InlineKeyboardButton(
-                    text="💎 خرید اشتراک",
-                    callback_data="payment:open",
-                )
-            ],
-            [
-                InlineKeyboardButton(
-                    text="👤 وضعیت اشتراک من",
-                    callback_data="payment:status",
-                )
-            ],
-        ]
+        inline_keyboard=rows
     )
 
 

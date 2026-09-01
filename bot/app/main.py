@@ -38,9 +38,16 @@ from app.keyboards.quality import (
 from app.keyboards.payment import (
     build_home_keyboard,
 )
+from app.handlers.admin import (
+    router as admin_router,
+)
+from app.handlers.language import (
+    router as language_router,
+)
 from app.handlers.payments import (
     router as payments_router,
 )
+from app.i18n import normalize_language, translate
 
 from app.utils.formatting import (
     format_file_size,
@@ -111,6 +118,12 @@ dp = Dispatcher(
 )
 dp.include_router(
     payments_router
+)
+dp.include_router(
+    admin_router
+)
+dp.include_router(
+    language_router
 )
 
 
@@ -2422,8 +2435,13 @@ async def start_handler(
 
     try:
 
-        await register_telegram_user(
+        user = await register_telegram_user(
             message
+        )
+
+        language = user.get(
+            "effective_language",
+            normalize_language(message.from_user.language_code),
         )
 
         telegram_id = (
@@ -2434,17 +2452,16 @@ async def start_handler(
 
         await message.answer(
             (
-                "👋 <b>به MediaHub AI خوش آمدید!</b>\n\n"
-
-                "🎬 لینک ویدئو را ارسال کنید "
-                "تا دانلود شود.\n\n"
-
-                f"🆔 Telegram ID شما: "
-                f"<code>{telegram_id}</code>"
+                f"{translate(language, 'start.welcome')}\n\n"
+                f"{translate(language, 'start.instruction')}\n\n"
+                f"{translate(language, 'start.telegram_id', telegram_id=telegram_id)}"
             ),
             parse_mode="HTML",
             reply_markup=(
-                build_home_keyboard()
+                build_home_keyboard(
+                    language=language,
+                    include_admin=bool(user.get("is_admin")),
+                )
             ),
         )
 
@@ -2457,10 +2474,13 @@ async def start_handler(
         )
 
         await message.answer(
-            (
-                "❌ <b>خطا در ثبت اطلاعات کاربر</b>\n\n"
-
-                "لطفاً چند لحظه بعد دوباره تلاش کنید."
+            translate(
+                normalize_language(
+                    message.from_user.language_code
+                    if message.from_user
+                    else None
+                ),
+                "start.registration_error",
             ),
             parse_mode="HTML",
         )

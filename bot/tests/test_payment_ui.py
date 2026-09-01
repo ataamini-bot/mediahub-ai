@@ -1,6 +1,7 @@
 from app.handlers.payments import _status_caption
 from app.keyboards.payment import (
     build_admin_payment_keyboard,
+    build_home_keyboard,
     build_payment_offers_keyboard,
     format_toman,
 )
@@ -8,6 +9,19 @@ from app.keyboards.payment import (
 
 def test_format_toman():
     assert format_toman("79000.00") == "79,000 تومان"
+
+
+def test_home_keyboard_supports_language_and_admin_entry():
+    keyboard = build_home_keyboard(language="en", include_admin=True)
+    buttons = [row[0] for row in keyboard.inline_keyboard]
+
+    assert [button.callback_data for button in buttons] == [
+        "payment:open",
+        "payment:status",
+        "language:open",
+        "admin:open",
+    ]
+    assert buttons[2].text == "🌐 Change language"
 
 
 def test_offer_keyboard_contains_exact_four_durations():

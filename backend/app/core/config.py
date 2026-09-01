@@ -2,6 +2,7 @@ import re
 from decimal import Decimal
 from functools import lru_cache
 
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -28,8 +29,10 @@ class Settings(BaseSettings):
     redis_url: str = "redis://redis:6379/0"
 
     telegram_bot_token: str
+    telegram_superadmin_id: int | None = None
     telegram_admin_ids: str = ""
     bot_backend_api_key: str = ""
+    data_encryption_key: str = ""
 
     payment_card_number: str = ""
     payment_card_holder: str = ""
@@ -45,21 +48,35 @@ class Settings(BaseSettings):
     max_concurrent_downloads: int = 3
     quota_timezone: str = "Asia/Tehran"
 
+    @field_validator("telegram_superadmin_id", mode="before")
+    @classmethod
+    def empty_superadmin_id_is_none(cls, value):
+        if value is None or str(value).strip() == "":
+            return None
+
+        return value
+
     @property
     def telegram_admin_id_set(
         self,
     ) -> frozenset[int]:
+        """Return legacy bootstrap admins plus the primary superadmin.
+
+        Runtime authorization is moving to database-backed RBAC.  This
+        property remains during the migration so the existing payment
+        review flow does not lose its configured administrators.
+        """
         values = re.split(
             r"[\s,;]+",
             self.telegram_admin_ids.strip(),
         )
 
         try:
-            return frozenset(
+            admin_ids = {
                 int(value)
                 for value in values
                 if value
-            )
+            }
 
         except ValueError as exc:
             raise ValueError(
@@ -67,6 +84,23 @@ class Settings(BaseSettings):
                 "integer IDs separated by comma, "
                 "semicolon, or whitespace"
             ) from exc
+
+        if self.telegram_superadmin_id is not None:
+            admin_ids.add(self.telegram_superadmin_id)
+
+        return frozenset(admin_ids)
+
+    @property
+    def bootstrap_superadmin_id_set(self) -> frozenset[int]:
+        """Return identities allowed to bootstrap database superadmins.
+
+        The explicit singular value is preferred.  Legacy admin IDs are
+        accepted until the installer and production environment migrate.
+        """
+        if self.telegram_superadmin_id is not None:
+            return frozenset({self.telegram_superadmin_id})
+
+        return self.telegram_admin_id_set
 
     model_config = SettingsConfigDict(
         env_file=".env",

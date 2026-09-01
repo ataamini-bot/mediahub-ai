@@ -1,6 +1,7 @@
 import os
 from datetime import datetime, timezone
 from decimal import Decimal
+from unittest.mock import AsyncMock
 
 import pytest
 from fastapi import HTTPException
@@ -127,13 +128,25 @@ def test_receipt_validation_rejects_unknown_document_type():
         PaymentService.validate_receipt(data)
 
 
-def test_admin_validation_uses_real_telegram_ids(monkeypatch):
-    monkeypatch.setattr(settings, "telegram_admin_ids", "123, 456")
+@pytest.mark.asyncio
+async def test_admin_validation_uses_database_rbac(monkeypatch):
+    access_service = AsyncMock()
 
-    PaymentService.ensure_admin(456)
+    def access_factory(session):
+        return access_service
 
-    with pytest.raises(PermissionError):
-        PaymentService.ensure_admin(999)
+    monkeypatch.setattr(
+        "app.services.payment.AdminAccessService",
+        access_factory,
+    )
+    service = PaymentService(session=AsyncMock())
+
+    await service.ensure_admin(456)
+
+    access_service.require_permission.assert_awaited_once_with(
+        456,
+        "payments.review",
+    )
 
 
 @pytest.mark.asyncio

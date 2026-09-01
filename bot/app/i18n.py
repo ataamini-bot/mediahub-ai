@@ -1,0 +1,55 @@
+from typing import Any
+
+
+SUPPORTED_LANGUAGES = frozenset({"fa", "en"})
+DEFAULT_LANGUAGE = "en"
+
+
+MESSAGES: dict[str, dict[str, str]] = {
+    "fa": {
+        "start.welcome": "👋 <b>به MediaHub AI خوش آمدید!</b>",
+        "start.instruction": "🎬 لینک رسانه را ارسال کنید تا بررسی شود.",
+        "start.telegram_id": "🆔 Telegram ID شما: <code>{telegram_id}</code>",
+        "start.registration_error": (
+            "❌ <b>خطا در ثبت اطلاعات کاربر</b>\n\n"
+            "لطفاً چند لحظه بعد دوباره تلاش کنید."
+        ),
+        "home.buy": "💎 خرید اشتراک",
+        "home.subscription": "👤 وضعیت اشتراک من",
+        "home.language": "🌐 تغییر زبان",
+        "home.admin": "⚙️ پنل مدیریت",
+        "language.changed": "✅ زبان ربات به فارسی تغییر کرد.",
+        "language.failed": "❌ تغییر زبان انجام نشد. دوباره تلاش کنید.",
+    },
+    "en": {
+        "start.welcome": "👋 <b>Welcome to MediaHub AI!</b>",
+        "start.instruction": "🎬 Send a media link and I will inspect it.",
+        "start.telegram_id": "🆔 Your Telegram ID: <code>{telegram_id}</code>",
+        "start.registration_error": (
+            "❌ <b>Could not register your account</b>\n\n"
+            "Please try again in a moment."
+        ),
+        "home.buy": "💎 Buy subscription",
+        "home.subscription": "👤 My subscription",
+        "home.language": "🌐 Change language",
+        "home.admin": "⚙️ Admin panel",
+        "language.changed": "✅ The bot language was changed to English.",
+        "language.failed": "❌ Could not change the language. Please retry.",
+    },
+}
+
+
+def normalize_language(value: str | None) -> str:
+    normalized = str(value or "").strip().lower().replace("_", "-")
+    primary = normalized.split("-", 1)[0]
+    return primary if primary in SUPPORTED_LANGUAGES else DEFAULT_LANGUAGE
+
+
+def translate(language: str | None, key: str, **values: Any) -> str:
+    normalized = normalize_language(language)
+    template = MESSAGES.get(normalized, MESSAGES[DEFAULT_LANGUAGE]).get(key)
+
+    if template is None:
+        template = MESSAGES[DEFAULT_LANGUAGE].get(key, key)
+
+    return template.format(**values)
