@@ -8,7 +8,7 @@ from pathlib import Path
 from aiogram import Bot, Dispatcher, F
 from aiogram.client.session.aiohttp import AiohttpSession
 from aiogram.client.telegram import TelegramAPIServer
-from aiogram.filters import CommandStart, StateFilter
+from aiogram.filters import BaseFilter, CommandStart, StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.storage.redis import RedisStorage
 from aiogram.types import (
@@ -134,6 +134,27 @@ dp.include_router(
 # ============================================================
 # URL helpers
 # ============================================================
+
+class DownloadMessageFilter(
+    BaseFilter
+):
+    """Keep Telegram commands out of the generic download handler."""
+
+    async def __call__(
+        self,
+        message: Message,
+    ) -> bool:
+
+        text = (
+            message.text
+            or ""
+        )
+
+        return bool(
+            text.strip()
+            and not text.lstrip().startswith("/")
+        )
+
 
 def extract_url(
     text: str,
@@ -3809,7 +3830,8 @@ async def quality_callback(
 
 @dp.message(
     StateFilter(None),
-    F.text
+    F.text,
+    DownloadMessageFilter(),
 )
 async def download_handler(
     message: Message,
