@@ -1,5 +1,7 @@
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
+from app.admin_labels import permission_label_fa, role_label_fa
+
 
 def build_admin_home_keyboard(
     permissions: set[str],
@@ -131,9 +133,9 @@ def build_admin_account_detail_keyboard(
         [
             InlineKeyboardButton(
                 text=(
-                    "⬇️ لغو Superadmin"
+                    "⬇️ لغو سوپرادمین"
                     if account.get("is_superadmin")
-                    else "⬆️ ارتقا به Superadmin"
+                    else "⬆️ ارتقا به سوپرادمین"
                 ),
                 callback_data=f"admin:account:super:{telegram_id}",
             )
@@ -177,7 +179,10 @@ def build_role_picker_keyboard(
             [
                 InlineKeyboardButton(
                     text=("✅ " if selected else "⬜️ ")
-                    + str(role["name"])[:45],
+                    + role_label_fa(
+                        code,
+                        str(role.get("name") or code),
+                    )[:45],
                     callback_data=f"admin:rolepick:{int(role['id'])}",
                 )
             ]
@@ -188,9 +193,9 @@ def build_role_picker_keyboard(
             [
                 InlineKeyboardButton(
                     text=(
-                        "👑 Superadmin: بله"
+                        "👑 سوپرادمین: بله"
                         if is_superadmin
-                        else "👑 Superadmin: خیر"
+                        else "👑 سوپرادمین: خیر"
                     ),
                     callback_data="admin:rolepick:super",
                 )
@@ -272,7 +277,13 @@ def build_admin_roles_keyboard(
         rows.append(
             [
                 InlineKeyboardButton(
-                    text=f"{status} {system} {str(role['name'])[:45]}",
+                    text=(
+                        f"{status} {system} "
+                        + role_label_fa(
+                            str(role.get("code") or ""),
+                            str(role.get("name") or role.get("code") or ""),
+                        )[:45]
+                    ),
                     callback_data=f"admin:role:{int(role['id'])}",
                 )
             ]
@@ -355,7 +366,8 @@ def build_permission_picker_keyboard(
         rows.append(
             [
                 InlineKeyboardButton(
-                    text=("✅ " if selected else "⬜️ ") + code[:50],
+                    text=("✅ " if selected else "⬜️ ")
+                    + permission_label_fa(code)[:50],
                     callback_data=f"admin:permpick:{int(permission['id'])}",
                 )
             ]

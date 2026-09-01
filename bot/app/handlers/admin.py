@@ -6,6 +6,11 @@ from aiogram.filters import Command, StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, ForceReply, Message
 
+from app.admin_labels import (
+    permission_label_fa,
+    role_description_fa,
+    role_label_fa,
+)
 from app.keyboards.admin import (
     build_admin_account_detail_keyboard,
     build_admin_accounts_keyboard,
@@ -47,8 +52,15 @@ def _can(context: dict, permission: str) -> bool:
 
 
 def _admin_panel_text(context: dict) -> str:
-    role_names = context.get("roles", [])
-    role_text = ", ".join(role_names) if role_names else "Superadmin"
+    role_names = [
+        role_label_fa(str(code))
+        for code in context.get("roles", [])
+    ]
+
+    if context.get("is_superadmin"):
+        role_names.insert(0, "سوپرادمین")
+
+    role_text = ", ".join(dict.fromkeys(role_names)) or "مدیر"
     return (
         "⚙️ <b>پنل مدیریت MediaHub AI</b>\n\n"
         f"👮 نقش: <code>{html.escape(role_text)}</code>\n"
@@ -75,7 +87,7 @@ def _backend_error_text(exc: BackendAPIError) -> str:
         "admin_account_not_found": "حساب مدیر پیدا نشد.",
         "admin_account_conflict": "این کاربر هم‌اکنون مدیر فعال است.",
         "last_superadmin": (
-            "آخرین Superadmin فعال را نمی‌توان غیرفعال یا تنزل داد."
+            "آخرین سوپرادمین فعال را نمی‌توان غیرفعال یا تنزل داد."
         ),
         "admin_role_not_found": "یک یا چند نقش انتخاب‌شده معتبر نیست.",
         "admin_role_conflict": "کد این نقش قبلاً ثبت شده است.",
@@ -114,12 +126,15 @@ def _account_identity(account: dict) -> str:
 def _admin_account_text(account: dict) -> str:
     roles = account.get("roles", [])
     role_text = ", ".join(
-        str(role.get("name") or role.get("code"))
+        role_label_fa(
+            str(role.get("code") or ""),
+            str(role.get("name") or role.get("code") or ""),
+        )
         for role in roles
     )[:1200] or "بدون نقش"
     status = "فعال ✅" if account.get("is_active") else "غیرفعال ⛔️"
     authority = (
-        "Superadmin 👑" if account.get("is_superadmin") else "Admin 👮"
+        "سوپرادمین 👑" if account.get("is_superadmin") else "مدیر 👮"
     )
     return (
         "👤 <b>مشخصات مدیر</b>\n\n"
@@ -134,20 +149,25 @@ def _admin_account_text(account: dict) -> str:
 def _admin_role_text(role: dict) -> str:
     permissions = role.get("permission_codes", [])
     permission_lines = "\n".join(
-        f"• <code>{html.escape(str(code))}</code>"
+        f"• {html.escape(permission_label_fa(str(code)))}"
         for code in permissions[:50]
     ) or "• بدون دسترسی"
     status = "فعال ✅" if role.get("is_active") else "غیرفعال ⛔️"
     kind = "سیستمی 🔒" if role.get("is_system") else "سفارشی 🧩"
-    description = role.get("description") or "—"
+    role_code = str(role.get("code") or "")
+    role_name = role_label_fa(role_code, str(role.get("name") or role_code))
+    description = role_description_fa(
+        role_code,
+        str(role.get("description") or "—"),
+    )
     return (
         "🔐 <b>مشخصات نقش</b>\n\n"
-        f"نام: <b>{html.escape(str(role['name']))}</b>\n"
-        f"کد: <code>{html.escape(str(role['code']))}</code>\n"
+        f"نام: <b>{html.escape(role_name)}</b>\n"
+        f"شناسه فنی: <code>{html.escape(role_code)}</code>\n"
         f"نوع: {kind}\n"
         f"وضعیت: {status}\n"
         f"مدیران دارای نقش: <code>{int(role.get('assignment_count', 0))}</code>\n"
-        f"توضیح: {html.escape(str(description))}\n\n"
+        f"توضیح: {html.escape(description)}\n\n"
         f"<b>دسترسی‌ها:</b>\n{permission_lines}"
     )
 
@@ -218,7 +238,10 @@ async def _show_role_detail(
 
 def _selected_names(rows: list[dict], selected_codes: set[str]) -> str:
     return ", ".join(
-        str(row.get("name") or row.get("code"))
+        role_label_fa(
+            str(row.get("code") or ""),
+            str(row.get("name") or row.get("code") or ""),
+        )
         for row in rows
         if str(row.get("code")) in selected_codes
     ) or "بدون نقش"
@@ -267,13 +290,11 @@ async def admin_command(message: Message, state: FSMContext) -> None:
     try:
         await register_telegram_user(message)
     except Exception:
-        await message.answer("❌ اتصال به Backend برقرار نشد.")
         return
 
     context = await _context_or_none(message.from_user.id)
 
     if context is None:
-        await message.answer("⛔️ شما به پنل مدیریت دسترسی ندارید.")
         return
 
     await state.clear()
@@ -496,7 +517,7 @@ async def toggle_admin_role(
 
         if not selected and not is_superadmin:
             await callback.answer(
-                "برای Admin معمولی حداقل یک نقش انتخاب کنید.",
+                "برای مدیر معمولی حداقل یک نقش انتخاب کنید.",
                 show_alert=True,
             )
             return
@@ -656,7 +677,7 @@ async def start_change_superadmin(
         await state.set_state(AdminManagementStates.waiting_for_admin_reason)
         await callback.message.edit_text(
             (
-                "⚠️ <b>تغییر سطح Superadmin</b>\n\n"
+                "⚠️ <b>تغییر سطح سوپرادمین</b>\n\n"
                 "دلیل این تغییر حساس را بنویسید."
             ),
             parse_mode="HTML",
@@ -751,7 +772,7 @@ async def receive_admin_change_reason(
             f"Telegram ID: <code>{int(data['target_telegram_id'])}</code>\n"
             "نقش‌ها: "
             f"<code>{html.escape(_selected_names(roles, selected))}</code>\n"
-            "Superadmin: "
+            "سوپرادمین: "
             f"<b>{'بله' if data.get('is_superadmin') else 'خیر'}</b>"
         )
     elif workflow == "admin_roles_update":
@@ -763,7 +784,7 @@ async def receive_admin_change_reason(
         )
     elif workflow == "admin_super_update":
         summary = (
-            "👑 تغییر سطح Superadmin\n"
+            "👑 تغییر سطح سوپرادمین\n"
             f"Telegram ID: <code>{int(data['target_telegram_id'])}</code>\n"
             f"مقدار جدید: <b>{'بله' if data.get('is_superadmin') else 'خیر'}</b>"
         )
