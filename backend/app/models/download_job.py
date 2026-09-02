@@ -9,6 +9,7 @@ from sqlalchemy import (
     Float,
     ForeignKey,
     Integer,
+    JSON,
     String,
     Text,
 )
@@ -67,6 +68,31 @@ class DownloadJob(
             ondelete="SET NULL",
         ),
         index=True,
+        nullable=True,
+    )
+
+    plan_id: Mapped[
+        Optional[int]
+    ] = mapped_column(
+        ForeignKey(
+            "plans.id",
+            ondelete="SET NULL",
+        ),
+        index=True,
+        nullable=True,
+    )
+
+    plan_name_snapshot: Mapped[
+        Optional[str]
+    ] = mapped_column(
+        String(100),
+        nullable=True,
+    )
+
+    plan_limits_snapshot: Mapped[
+        Optional[dict]
+    ] = mapped_column(
+        JSON,
         nullable=True,
     )
 
@@ -236,6 +262,16 @@ class DownloadJob(
             timezone=True
         ),
         nullable=True,
+    )
+
+    delivered_at: Mapped[
+        Optional[datetime]
+    ] = mapped_column(
+        DateTime(
+            timezone=True
+        ),
+        nullable=True,
+        index=True,
     )
 
     paused_at: Mapped[

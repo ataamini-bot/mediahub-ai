@@ -16,6 +16,7 @@ from sqlalchemy.ext.asyncio import (
     AsyncSession,
 )
 
+from app.core.internal_auth import require_internal_api_key
 from app.db.session import (
     get_db,
 )
@@ -27,6 +28,10 @@ from app.schemas.download import (
 from app.services.download import (
     DownloadService,
 )
+from app.services.download_access import (
+    DownloadAccessError,
+    DownloadAccessService,
+)
 from app.models.download_job import (
     DownloadJobStatus,
 )
@@ -37,6 +42,7 @@ router = APIRouter(
     tags=[
         "downloads",
     ],
+    dependencies=[Depends(require_internal_api_key)],
 )
 
 
@@ -58,18 +64,43 @@ async def create_download(
         db
     )
 
-    job = await service.create_job(
-        source_url=data.source_url,
-        user_id=None,
-        format_id=data.format_id,
-        quality=data.quality,
-        media_type=data.media_type,
-        playlist_index=(
-            data.playlist_index
-        ),
-    )
+    try:
+        job = await service.create_job(
+            source_url=data.source_url,
+            telegram_id=data.telegram_id,
+            format_id=data.format_id,
+            quality=data.quality,
+            media_type=data.media_type,
+            playlist_index=data.playlist_index,
+            estimated_size_bytes=data.estimated_size_bytes,
+        )
+    except DownloadAccessError as exc:
+        raise HTTPException(
+            status_code=exc.status_code,
+            detail=exc.detail(),
+        ) from exc
 
     return job
+
+
+# ============================================================
+# Confirm successful Telegram delivery
+# ============================================================
+
+@router.post(
+    "/{job_id}/delivered",
+    response_model=DownloadResponse,
+)
+async def mark_download_delivered(
+    job_id: int,
+    db: AsyncSession = Depends(get_db),
+):
+    try:
+        return await DownloadAccessService(db).mark_delivered(job_id)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 # ============================================================
@@ -110,7 +141,6 @@ async def get_media_info(
                 f"{str(exc)[:1000]}"
             ),
         )
-
 
 # ============================================================
 # Get download
@@ -234,6 +264,12 @@ async def resume_download(
                 exc
             ),
         )
+
+    except DownloadAccessError as exc:
+        raise HTTPException(
+            status_code=exc.status_code,
+            detail=exc.detail(),
+        ) from exc
 
 
 # ============================================================

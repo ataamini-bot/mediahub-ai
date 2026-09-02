@@ -19,6 +19,10 @@ from app.models.download_job import (
 class DownloadCreate(
     BaseModel
 ):
+    telegram_id: int = Field(
+        gt=0,
+    )
+
     source_url: str = Field(
         min_length=5,
         max_length=2048,
@@ -38,6 +42,14 @@ class DownloadCreate(
         str
         | None
     ) = None
+
+    estimated_size_bytes: (
+        int
+        | None
+    ) = Field(
+        default=None,
+        ge=0,
+    )
 
     # --------------------------------------------------------
     # Multi-video / playlist entry
@@ -112,6 +124,21 @@ class DownloadResponse(
     id: int
     source_url: str
 
+    plan_id: (
+        int
+        | None
+    )
+
+    plan_name_snapshot: (
+        str
+        | None
+    )
+
+    plan_limits_snapshot: (
+        dict
+        | None
+    )
+
     format_id: (
         str
         | None
@@ -176,6 +203,11 @@ class DownloadResponse(
     )
 
     completed_at: (
+        datetime
+        | None
+    )
+
+    delivered_at: (
         datetime
         | None
     )

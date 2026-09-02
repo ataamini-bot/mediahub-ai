@@ -25,6 +25,9 @@ from app.models.download_job import (
 from app.repositories.download_job import (
     DownloadJobRepository,
 )
+from app.services.download_access import (
+    DownloadAccessService,
+)
 from app.workers.tasks.download import (
     cleanup_paused_download,
     download_task,
@@ -2288,28 +2291,31 @@ class DownloadService:
     async def create_job(
         self,
         source_url: str,
-        user_id: int | None = None,
+        telegram_id: int,
         format_id: str | None = None,
         quality: str | None = None,
         media_type: str | None = None,
         playlist_index: int | None = None,
+        estimated_size_bytes: int | None = None,
     ) -> DownloadJob:
 
-        # ----------------------------------------------------
-        # Keep repository backward-compatible.
-        #
-        # The current repository does not yet need to know
-        # about playlist_index; we save it after creation.
-        # ----------------------------------------------------
+        entitlement = await DownloadAccessService(
+            self.session
+        ).authorize_job(
+            telegram_id=telegram_id,
+            quality=quality,
+            estimated_size_bytes=estimated_size_bytes,
+        )
 
         job = (
             await self.repository.create(
                 source_url=(
                     source_url
                 ),
-                user_id=(
-                    user_id
-                ),
+                user_id=entitlement.user_id,
+                plan_id=entitlement.plan_id,
+                plan_name_snapshot=entitlement.plan_name,
+                plan_limits_snapshot=entitlement.limits_snapshot(),
                 format_id=(
                     format_id
                 ),
@@ -2319,37 +2325,28 @@ class DownloadService:
                 media_type=(
                     media_type
                 ),
+                playlist_index=playlist_index,
             )
         )
-
-        if (
-            playlist_index
-            is not None
-        ):
-
-            job.playlist_index = (
-                playlist_index
-            )
-
-            await (
-                self.session.commit()
-            )
-
-            await (
-                self.session.refresh(
-                    job
-                )
-            )
 
         # ----------------------------------------------------
         # Queue Celery task
         # ----------------------------------------------------
 
-        task = (
-            download_task.delay(
-                job.id
+        try:
+            task = download_task.apply_async(
+                args=[job.id],
+                priority=(
+                    0
+                    if entitlement.priority_processing
+                    else 5
+                ),
             )
-        )
+        except Exception as exc:
+            job.status = DownloadJobStatus.FAILED
+            job.error_message = "Unable to queue download task"
+            await self.session.commit()
+            raise RuntimeError("Unable to queue download task") from exc
 
         # ----------------------------------------------------
         # Save Celery task ID
@@ -2527,6 +2524,10 @@ class DownloadService:
                 "can be resumed"
             )
 
+        priority_processing = await DownloadAccessService(
+            self.session
+        ).authorize_resume(job)
+
         job.status = (
             DownloadJobStatus.PENDING
         )
@@ -2548,11 +2549,21 @@ class DownloadService:
             )
         )
 
-        task = (
-            download_task.delay(
-                job.id
+        try:
+            task = download_task.apply_async(
+                args=[job.id],
+                priority=(
+                    0
+                    if priority_processing
+                    else 5
+                ),
             )
-        )
+        except Exception as exc:
+            job.status = DownloadJobStatus.PAUSED
+            job.paused_at = datetime.now(timezone.utc)
+            job.error_message = "Unable to queue resumed download task"
+            await self.session.commit()
+            raise RuntimeError("Unable to queue resumed download task") from exc
 
         job.celery_task_id = (
             task.id

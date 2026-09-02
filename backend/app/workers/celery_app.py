@@ -15,6 +15,10 @@ celery_app.conf.update(
     result_serializer="json",
     timezone="UTC",
     enable_utc=True,
+    broker_transport_options={
+        "queue_order_strategy": "priority",
+        "priority_steps": list(range(10)),
+    },
 )
 
 celery_app.conf.imports = (

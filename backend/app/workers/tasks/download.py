@@ -48,6 +48,23 @@ MAX_DOWNLOAD_BYTES = (
 )
 
 
+def _resolve_max_download_bytes(plan_limits_snapshot: object) -> int:
+    snapshot = (
+        plan_limits_snapshot
+        if isinstance(plan_limits_snapshot, dict)
+        else {}
+    )
+    try:
+        max_file_size_mb = int(snapshot.get("max_file_size_mb") or 1900)
+    except (TypeError, ValueError):
+        max_file_size_mb = 1900
+
+    return min(
+        MAX_DOWNLOAD_BYTES,
+        max(1, max_file_size_mb) * 1024 * 1024,
+    )
+
+
 
 def _is_instagram_story_url(
     source_url: str,
@@ -856,6 +873,7 @@ def _download_social_image(
     job_id: int,
     source_url: str,
     playlist_index: int | None,
+    max_download_bytes: int,
 ) -> Path:
 
     if _is_instagram_url(
@@ -952,7 +970,7 @@ def _download_social_image(
 
         if (
             existing_bytes
-            > MAX_DOWNLOAD_BYTES
+            > max_download_bytes
         ):
 
             raise RuntimeError(
@@ -1141,14 +1159,13 @@ def _download_social_image(
     if (
         total_bytes is not None
         and total_bytes
-        > MAX_DOWNLOAD_BYTES
+        > max_download_bytes
     ):
 
         response.close()
 
         raise RuntimeError(
-            "Image exceeds the 1900 MB "
-            "download limit"
+            "Image exceeds the plan file-size limit"
         )
 
     mode = (
@@ -1202,12 +1219,11 @@ def _download_social_image(
 
                 if (
                     downloaded_bytes
-                    > MAX_DOWNLOAD_BYTES
+                    > max_download_bytes
                 ):
 
                     raise RuntimeError(
-                        "Image exceeds the 1900 MB "
-                        "download limit"
+                        "Image exceeds the plan file-size limit"
                     )
 
                 if (
@@ -2184,6 +2200,7 @@ def _probe_video_codec_for_ios(
 def _normalize_instagram_video_for_ios(
     job_id: int,
     file_path: Path,
+    max_download_bytes: int,
 ) -> Path:
 
     codec_name, pixel_format = (
@@ -2243,7 +2260,7 @@ def _normalize_instagram_video_for_ios(
     if (
         source_size <= 0
         or source_size
-        > MAX_DOWNLOAD_BYTES
+        > max_download_bytes
     ):
 
         return file_path
@@ -3872,6 +3889,10 @@ def download_task(
             job.playlist_index
         )
 
+        max_download_bytes = _resolve_max_download_bytes(
+            job.plan_limits_snapshot
+        )
+
     # ========================================================
     # Processing
     # ========================================================
@@ -4061,6 +4082,11 @@ def download_task(
             in download_part_stats.values()
         )
 
+        if downloaded_bytes > max_download_bytes:
+            raise RuntimeError(
+                "Downloaded data exceeds the plan file-size limit"
+            )
+
         part_totals = [
             part.get(
                 "total"
@@ -4090,6 +4116,11 @@ def download_task(
                 in part_totals
                 if value is not None
             )
+
+            if total_bytes > max_download_bytes:
+                raise RuntimeError(
+                    "Estimated output exceeds the plan file-size limit"
+                )
 
         else:
 
@@ -4340,6 +4371,7 @@ def download_task(
                     playlist_index=(
                         playlist_index
                     ),
+                    max_download_bytes=max_download_bytes,
                 )
             )
 
@@ -4501,6 +4533,7 @@ def download_task(
                 _normalize_instagram_video_for_ios(
                     job_id=job_id,
                     file_path=file_path,
+                    max_download_bytes=max_download_bytes,
                 )
             )
 
@@ -4526,12 +4559,12 @@ def download_task(
 
         if (
             file_size
-            > MAX_DOWNLOAD_BYTES
+            > max_download_bytes
         ):
 
             raise RuntimeError(
                 "Downloaded file exceeds "
-                "the 1900 MB limit"
+                "the plan file-size limit"
             )
 
         print(

@@ -64,10 +64,12 @@ from app.state.pending import (
 
 
 from app.services.backend import (
+    BackendAPIError,
     cancel_download_job,
     create_download_job,
     get_download_job,
     get_media_info,
+    mark_download_delivered,
     pause_download_job,
     register_telegram_user,
     resume_download_job,
@@ -154,6 +156,43 @@ class DownloadMessageFilter(
             text.strip()
             and not text.lstrip().startswith("/")
         )
+
+
+def download_error_text(exc: Exception) -> str:
+    if not isinstance(exc, BackendAPIError) or not isinstance(exc.detail, dict):
+        return str(exc)[:1000]
+
+    code = str(exc.detail.get("code") or "")
+    plan_name = str(exc.detail.get("plan_name") or "پلن فعلی")
+
+    if code == "daily_download_limit_reached":
+        return (
+            f"سهمیه روزانه {plan_name} تمام شده است "
+            f"({exc.detail.get('used', 0)}/{exc.detail.get('limit', 0)})."
+        )
+    if code == "concurrent_download_limit_reached":
+        return (
+            f"تعداد دانلودهای هم‌زمان {plan_name} به سقف "
+            f"{exc.detail.get('limit', 1)} رسیده است."
+        )
+    if code == "download_quality_limit_exceeded":
+        return (
+            f"حداکثر کیفیت مجاز در {plan_name}، "
+            f"{exc.detail.get('max_quality', 0)}p است."
+        )
+    if code == "download_file_size_limit_exceeded":
+        return (
+            f"حداکثر حجم مجاز در {plan_name}، "
+            f"{exc.detail.get('max_file_size_mb', 0)} مگابایت است."
+        )
+    if code == "download_user_blocked":
+        return "حساب شما اجازه ایجاد دانلود جدید ندارد."
+    if code == "download_user_not_found":
+        return "ابتدا دستور /start را بفرستید و دوباره تلاش کنید."
+    if code == "download_plan_unavailable":
+        return "پلن دانلود در حال حاضر در دسترس نیست؛ با پشتیبانی تماس بگیرید."
+
+    return str(exc.detail.get("message") or exc)[:1000]
 
 
 def extract_url(
@@ -2412,6 +2451,27 @@ async def send_downloaded_file(
             parse_mode="HTML",
         )
 
+        delivery_confirmed = False
+        for attempt in range(3):
+            try:
+                await mark_download_delivered(job_id)
+                delivery_confirmed = True
+                break
+            except Exception as exc:
+                print(
+                    "Delivery confirmation failed: "
+                    f"job={job_id}, attempt={attempt + 1}, "
+                    f"{type(exc).__name__}: {exc}"
+                )
+                if attempt < 2:
+                    await asyncio.sleep(1)
+
+        if not delivery_confirmed:
+            print(
+                "Delivery confirmation requires reconciliation: "
+                f"job={job_id}"
+            )
+
         print(
             "Successfully sent file: "
             f"{path}"
@@ -2588,7 +2648,7 @@ async def download_pause_callback(
     except Exception as exc:
 
         await callback.answer(
-            f"❌ {str(exc)[:150]}",
+            f"❌ {download_error_text(exc)[:150]}",
             show_alert=True,
         )
 
@@ -2708,7 +2768,7 @@ async def download_resume_callback(
     except Exception as exc:
 
         await callback.answer(
-            f"❌ {str(exc)[:150]}",
+            f"❌ {download_error_text(exc)[:150]}",
             show_alert=True,
         )
 
@@ -2815,7 +2875,7 @@ async def download_cancel_callback(
     except Exception as exc:
 
         await callback.answer(
-            f"❌ {str(exc)[:150]}",
+            f"❌ {download_error_text(exc)[:150]}",
             show_alert=True,
         )
 
@@ -3184,6 +3244,7 @@ async def media_entry_callback(
             job = (
                 await create_download_job(
                     source_url=source_url,
+                    telegram_id=callback.from_user.id,
                     quality=None,
                     media_type="image",
                     playlist_index=index,
@@ -3254,7 +3315,7 @@ async def media_entry_callback(
                     "❌ <b>دانلود عکس با خطا مواجه شد</b>\n\n"
                     "⚠️ خطا:\n"
                     f"<code>"
-                    f"{html.escape(str(exc)[:1000])}"
+                    f"{html.escape(download_error_text(exc))}"
                     f"</code>"
                 ),
                 reply_markup=None,
@@ -3639,10 +3700,12 @@ async def quality_callback(
         job = (
             await create_download_job(
                 source_url=source_url,
+                telegram_id=callback.from_user.id,
                 quality=quality,
                 playlist_index=(
                     playlist_index
                 ),
+                estimated_size_bytes=estimated_size,
             )
         )
 
@@ -3734,11 +3797,13 @@ async def quality_callback(
             f"{exc}"
         )
 
-        error_text = (
+        raw_error_text = (
             str(
                 exc
             )[:1000]
         )
+
+        error_text = download_error_text(exc)
 
         if (
             is_youtube_url(
@@ -3746,7 +3811,7 @@ async def quality_callback(
             )
             and height > 360
             and "403"
-            in error_text
+            in raw_error_text
         ):
 
             fallback_options = [
@@ -3846,6 +3911,21 @@ async def download_handler(
 
     if not source_url:
 
+        return
+
+    if not message.from_user:
+        return
+
+    try:
+        await register_telegram_user(message)
+    except Exception as exc:
+        print(
+            "Download user registration failed: "
+            f"{type(exc).__name__}: {exc}"
+        )
+        await message.answer(
+            "❌ ثبت حساب کاربری انجام نشد؛ چند لحظه بعد دوباره تلاش کنید."
+        )
         return
 
     status_message = (
@@ -4012,6 +4092,7 @@ async def download_handler(
             job = (
                 await create_download_job(
                     source_url=source_url,
+                    telegram_id=message.from_user.id,
                     quality=None,
                     media_type="image",
                     playlist_index=(
@@ -4205,9 +4286,7 @@ async def download_handler(
 
         safe_error = (
             html.escape(
-                str(
-                    exc
-                )[:1000]
+                download_error_text(exc)
             )
         )
 

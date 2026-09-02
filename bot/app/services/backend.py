@@ -374,6 +374,7 @@ async def get_media_info(
                     else {}
                 ),
             },
+            headers=_internal_headers(),
         ) as response:
 
             response.raise_for_status()
@@ -389,9 +390,11 @@ async def get_media_info(
 
 async def create_download_job(
     source_url: str,
+    telegram_id: int,
     quality: str | None = None,
     media_type: str = "video",
     playlist_index: int | None = None,
+    estimated_size_bytes: int | None = None,
 ) -> dict:
 
     timeout = (
@@ -401,6 +404,9 @@ async def create_download_job(
     )
 
     payload = {
+        "telegram_id":
+            telegram_id,
+
         "source_url":
             source_url,
 
@@ -412,6 +418,9 @@ async def create_download_job(
 
         "playlist_index":
             playlist_index,
+
+        "estimated_size_bytes":
+            estimated_size_bytes,
     }
 
     async with aiohttp.ClientSession(
@@ -421,9 +430,20 @@ async def create_download_job(
         async with session.post(
             f"{BACKEND_URL}/downloads",
             json=payload,
+            headers=_internal_headers(),
         ) as response:
 
-            response.raise_for_status()
+            if response.status >= 400:
+                try:
+                    body = await response.json(content_type=None)
+                    detail = body.get("detail", body)
+                except Exception:
+                    detail = await response.text() or "Download request failed"
+
+                raise BackendAPIError(
+                    status_code=response.status,
+                    detail=detail,
+                )
 
             return (
                 await response.json()
@@ -452,6 +472,7 @@ async def get_download_job(
                 f"{BACKEND_URL}"
                 f"/downloads/{job_id}"
             ),
+            headers=_internal_headers(),
         ) as response:
 
             response.raise_for_status()
@@ -488,6 +509,7 @@ async def _post_job_action(
                 f"{job_id}/"
                 f"{action}"
             ),
+            headers=_internal_headers(),
         ) as response:
 
             if (
@@ -515,10 +537,9 @@ async def _post_job_action(
                         or fallback_error
                     )
 
-                raise RuntimeError(
-                    str(
-                        detail
-                    )
+                raise BackendAPIError(
+                    status_code=response.status,
+                    detail=detail,
                 )
 
             return (
@@ -556,6 +577,16 @@ async def cancel_download_job(
         job_id,
         "cancel",
         "Cancel failed",
+    )
+
+
+async def mark_download_delivered(
+    job_id: int,
+) -> dict:
+    return await _post_job_action(
+        job_id,
+        "delivered",
+        "Delivery confirmation failed",
     )
 
 
