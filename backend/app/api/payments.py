@@ -54,9 +54,11 @@ def serialize_action(result: PaymentActionResult) -> PaymentActionResponse:
     "/configuration",
     response_model=PaymentConfigurationResponse,
 )
-async def payment_configuration() -> dict:
+async def payment_configuration(
+    db: AsyncSession = Depends(get_db),
+) -> dict:
     try:
-        return get_payment_configuration()
+        return await get_payment_configuration(db)
     except PaymentConfigurationError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
 
@@ -208,6 +210,7 @@ async def current_subscription(
     return CurrentSubscriptionResponse(
         is_active=True,
         plan_slug=plan.slug,
+        plan_name=plan.name,
         started_at=subscription.started_at,
         expires_at=subscription.expires_at,
     )

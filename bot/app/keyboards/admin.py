@@ -40,6 +40,16 @@ def build_admin_home_keyboard(
             ]
         )
 
+    if is_superadmin or "plans.manage" in permissions:
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text="📦 مدیریت پلن‌ها",
+                    callback_data="admin:plans",
+                )
+            ]
+        )
+
     if is_superadmin or "payments.view" in permissions:
         rows.append(
             [
@@ -390,3 +400,244 @@ def build_permission_picker_keyboard(
         ]
     )
     return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def build_admin_plans_keyboard(plans: list[dict]) -> InlineKeyboardMarkup:
+    rows: list[list[InlineKeyboardButton]] = []
+
+    for plan in plans:
+        status = "🟢" if plan.get("is_active") else "⚫️"
+        kind = "🆓" if plan.get("is_system") else "💎"
+        duration = (
+            "همیشگی"
+            if plan.get("is_system")
+            else f"{int(plan.get('duration_days', 0))} روز"
+        )
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text=(
+                        f"{status} {kind} {str(plan.get('name') or 'بدون نام')[:28]}"
+                        f" — {duration}"
+                    ),
+                    callback_data=f"admin:plan:{int(plan['id'])}",
+                )
+            ]
+        )
+
+    rows.extend(
+        [
+            [
+                InlineKeyboardButton(
+                    text="➕ ایجاد پلن جدید",
+                    callback_data="admin:plan:add",
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="🔙 بازگشت به پنل",
+                    callback_data="admin:open",
+                )
+            ],
+        ]
+    )
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def build_admin_plan_detail_keyboard(plan: dict) -> InlineKeyboardMarkup:
+    plan_id = int(plan["id"])
+    rows: list[list[InlineKeyboardButton]] = []
+
+    if not plan.get("is_system"):
+        rows.extend(
+            [
+                [
+                    InlineKeyboardButton(
+                        text="✏️ نام",
+                        callback_data=f"admin:plan:edit:name:{plan_id}",
+                    ),
+                    InlineKeyboardButton(
+                        text="📝 توضیح",
+                        callback_data=f"admin:plan:edit:description:{plan_id}",
+                    ),
+                ],
+                [
+                    InlineKeyboardButton(
+                        text="📅 مدت",
+                        callback_data=f"admin:plan:edit:duration:{plan_id}",
+                    ),
+                    InlineKeyboardButton(
+                        text="💰 مبلغ",
+                        callback_data=f"admin:plan:edit:price:{plan_id}",
+                    ),
+                ],
+                [
+                    InlineKeyboardButton(
+                        text="↕️ ترتیب نمایش",
+                        callback_data=f"admin:plan:edit:order:{plan_id}",
+                    )
+                ],
+            ]
+        )
+
+    rows.extend(
+        [
+            [
+                InlineKeyboardButton(
+                    text="📊 سقف روزانه",
+                    callback_data=f"admin:plan:edit:daily:{plan_id}",
+                ),
+                InlineKeyboardButton(
+                    text="📦 حداکثر حجم",
+                    callback_data=f"admin:plan:edit:size:{plan_id}",
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text="🎞 حداکثر کیفیت",
+                    callback_data=f"admin:plan:edit:quality:{plan_id}",
+                ),
+                InlineKeyboardButton(
+                    text="⚙️ دانلود هم‌زمان",
+                    callback_data=f"admin:plan:edit:concurrency:{plan_id}",
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text="🚀 تغییر اولویت",
+                    callback_data=f"admin:plan:toggle:priority:{plan_id}",
+                ),
+                InlineKeyboardButton(
+                    text="📣 تغییر عضویت اجباری",
+                    callback_data=f"admin:plan:toggle:forced_join:{plan_id}",
+                ),
+            ],
+        ]
+    )
+
+    if not plan.get("is_system"):
+        rows.extend(
+            [
+                [
+                    InlineKeyboardButton(
+                        text=(
+                            "⛔️ غیرفعال‌سازی"
+                            if plan.get("is_active")
+                            else "✅ فعال‌سازی"
+                        ),
+                        callback_data=f"admin:plan:toggle:active:{plan_id}",
+                    )
+                ],
+                [
+                    InlineKeyboardButton(
+                        text="🗑 حذف نرم پلن",
+                        callback_data=f"admin:plan:delete:{plan_id}",
+                    )
+                ],
+            ]
+        )
+
+    rows.append(
+        [
+            InlineKeyboardButton(
+                text="🔙 فهرست پلن‌ها",
+                callback_data="admin:plans",
+            )
+        ]
+    )
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def build_plan_quality_keyboard(*, mode: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text=f"{quality}p",
+                    callback_data=f"admin:plan:choice:{mode}:quality:{quality}",
+                )
+                for quality in qualities
+            ]
+            for qualities in (
+                (144, 240, 360),
+                (480, 720, 1080),
+                (1440, 2160),
+            )
+        ]
+        + [
+            [
+                InlineKeyboardButton(
+                    text="انصراف",
+                    callback_data="admin:plan:cancel",
+                )
+            ]
+        ]
+    )
+
+
+def build_plan_concurrency_keyboard(*, mode: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text=str(value),
+                    callback_data=(
+                        f"admin:plan:choice:{mode}:concurrency:{value}"
+                    ),
+                )
+                for value in (1, 2, 3)
+            ],
+            [
+                InlineKeyboardButton(
+                    text="انصراف",
+                    callback_data="admin:plan:cancel",
+                )
+            ],
+        ]
+    )
+
+
+def build_plan_boolean_keyboard(
+    *,
+    mode: str,
+    field: str,
+) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="✅ بله",
+                    callback_data=f"admin:plan:choice:{mode}:{field}:yes",
+                ),
+                InlineKeyboardButton(
+                    text="❌ خیر",
+                    callback_data=f"admin:plan:choice:{mode}:{field}:no",
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text="انصراف",
+                    callback_data="admin:plan:cancel",
+                )
+            ],
+        ]
+    )
+
+
+def build_plan_confirmation_keyboard(*, action: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="✅ تأیید و ثبت",
+                    callback_data=f"admin:plan:{action}:confirm",
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="انصراف",
+                    callback_data="admin:plan:cancel",
+                )
+            ],
+        ]
+    )

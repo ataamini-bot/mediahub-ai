@@ -1,6 +1,6 @@
 from datetime import datetime
 from decimal import Decimal
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -10,9 +10,15 @@ from app.models.payment import PaymentStatus
 class PaymentOfferResponse(BaseModel):
     code: str
     label: str
-    duration_months: Literal[1, 3, 6, 12]
+    duration_days: int = Field(gt=0)
     price: Decimal
     currency: Literal["IRT"] = "IRT"
+    daily_download_limit: int | None
+    max_file_size_mb: int | None
+    max_quality: int | None
+    max_concurrent_downloads: int
+    priority_processing: bool
+    forced_join_required: bool
 
 
 class PaymentDestinationResponse(BaseModel):
@@ -34,7 +40,7 @@ class PaymentConfigurationResponse(BaseModel):
 
 class PaymentCreate(BaseModel):
     telegram_id: int = Field(gt=0)
-    offer_code: str = Field(min_length=3, max_length=32)
+    offer_code: str = Field(min_length=3, max_length=100)
     receipt_file_id: str = Field(min_length=1, max_length=512)
     receipt_file_unique_id: str | None = Field(
         default=None,
@@ -77,7 +83,10 @@ class PaymentResponse(BaseModel):
     plan_id: int
     amount: Decimal
     offer_code: str
-    duration_months: Literal[1, 3, 6, 12]
+    duration_months: Literal[1, 3, 6, 12] | None
+    duration_days: int
+    plan_name_snapshot: str
+    plan_limits_snapshot: dict[str, Any]
     status: PaymentStatus
     receipt_file_id: str
     receipt_file_unique_id: str | None
@@ -127,5 +136,6 @@ class PaymentActionResponse(BaseModel):
 class CurrentSubscriptionResponse(BaseModel):
     is_active: bool
     plan_slug: str | None = None
+    plan_name: str | None = None
     started_at: datetime | None = None
     expires_at: datetime | None = None

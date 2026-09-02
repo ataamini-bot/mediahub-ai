@@ -10,9 +10,11 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     Integer,
+    JSON,
     Numeric,
     String,
     Text,
+    text,
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -36,6 +38,10 @@ class Payment(Base, TimestampMixin):
         CheckConstraint(
             "amount > 0",
             name="ck_payments_amount_positive",
+        ),
+        CheckConstraint(
+            "duration_days > 0",
+            name="ck_payments_duration_days_positive",
         ),
         Index(
             "uq_payments_receipt_file_unique_id",
@@ -74,12 +80,29 @@ class Payment(Base, TimestampMixin):
     )
 
     offer_code: Mapped[str] = mapped_column(
-        String(32),
+        String(100),
         nullable=False,
     )
 
-    duration_months: Mapped[int] = mapped_column(
+    duration_months: Mapped[int | None] = mapped_column(
         Integer,
+        nullable=True,
+    )
+
+    duration_days: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+    )
+
+    plan_name_snapshot: Mapped[str] = mapped_column(
+        String(100),
+        nullable=False,
+    )
+
+    plan_limits_snapshot: Mapped[dict] = mapped_column(
+        JSON,
+        default=dict,
+        server_default=text("'{}'::json"),
         nullable=False,
     )
 

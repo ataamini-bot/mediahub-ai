@@ -11,6 +11,8 @@ from app.handlers.admin import (
 from app.keyboards.admin import (
     build_admin_account_detail_keyboard,
     build_admin_home_keyboard,
+    build_admin_plan_detail_keyboard,
+    build_admin_plans_keyboard,
     build_role_picker_keyboard,
 )
 from app.services.backend import BackendAPIError
@@ -24,6 +26,7 @@ def test_superadmin_sees_all_foundation_menu_entries():
         "admin:accounts",
         "admin:roles",
         "admin:settings",
+        "admin:plans",
         "payment:open",
         "admin:close",
     ]
@@ -177,3 +180,67 @@ def test_unauthorized_admin_command_is_silent(monkeypatch):
     )
 
     assert answers == []
+
+
+def test_plan_list_supports_unlimited_custom_plans():
+    plans = [
+        {
+            "id": 1,
+            "name": "Free",
+            "duration_days": 0,
+            "is_system": True,
+            "is_active": True,
+        },
+        {
+            "id": 2,
+            "name": "ویژه ۴۵ روزه",
+            "duration_days": 45,
+            "is_system": False,
+            "is_active": True,
+        },
+    ]
+    keyboard = build_admin_plans_keyboard(plans)
+    callbacks = [row[0].callback_data for row in keyboard.inline_keyboard]
+
+    assert callbacks[:2] == ["admin:plan:1", "admin:plan:2"]
+    assert "admin:plan:add" in callbacks
+
+
+def test_free_plan_only_exposes_limit_editing():
+    keyboard = build_admin_plan_detail_keyboard(
+        {
+            "id": 1,
+            "name": "Free",
+            "is_system": True,
+            "is_active": True,
+        }
+    )
+    callbacks = [
+        button.callback_data
+        for row in keyboard.inline_keyboard
+        for button in row
+    ]
+
+    assert "admin:plan:edit:daily:1" in callbacks
+    assert "admin:plan:edit:size:1" in callbacks
+    assert "admin:plan:edit:price:1" not in callbacks
+    assert "admin:plan:edit:order:1" not in callbacks
+    assert "admin:plan:delete:1" not in callbacks
+
+
+def test_custom_plan_exposes_display_order_editing():
+    keyboard = build_admin_plan_detail_keyboard(
+        {
+            "id": 22,
+            "name": "پلن سفارشی",
+            "is_system": False,
+            "is_active": True,
+        }
+    )
+    callbacks = [
+        button.callback_data
+        for row in keyboard.inline_keyboard
+        for button in row
+    ]
+
+    assert "admin:plan:edit:order:22" in callbacks

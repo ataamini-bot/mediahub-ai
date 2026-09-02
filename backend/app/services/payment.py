@@ -1,6 +1,5 @@
-import calendar
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import select, update
 from sqlalchemy.exc import IntegrityError
@@ -54,23 +53,11 @@ class PaymentActionResult:
     already_reviewed: bool = False
 
 
-def add_calendar_months(value: datetime, months: int) -> datetime:
-    if months not in {1, 3, 6, 12}:
-        raise ValueError("Unsupported subscription duration")
+def add_duration_days(value: datetime, days: int) -> datetime:
+    if days <= 0:
+        raise ValueError("Subscription duration must be positive")
 
-    month_index = value.month - 1 + months
-    target_year = value.year + month_index // 12
-    target_month = month_index % 12 + 1
-    target_day = min(
-        value.day,
-        calendar.monthrange(target_year, target_month)[1],
-    )
-
-    return value.replace(
-        year=target_year,
-        month=target_month,
-        day=target_day,
-    )
+    return value + timedelta(days=days)
 
 
 class PaymentService:
@@ -108,7 +95,7 @@ class PaymentService:
         data: PaymentCreate,
     ) -> PaymentActionResult:
         self.validate_receipt(data)
-        offer = get_payment_offer(data.offer_code)
+        offer = await get_payment_offer(self.session, data.offer_code)
 
         result = await self.session.execute(
             select(User)
@@ -152,23 +139,15 @@ class PaymentService:
                     "This Telegram receipt file was already submitted"
                 )
 
-        result = await self.session.execute(
-            select(Plan).where(
-                Plan.slug == "premium",
-                Plan.is_active.is_(True),
-            )
-        )
-        plan = result.scalar_one_or_none()
-
-        if plan is None:
-            raise RuntimeError("Active premium plan is not configured")
-
         payment = Payment(
             user_id=user.id,
-            plan_id=plan.id,
+            plan_id=offer.plan_id,
             amount=offer.price,
             offer_code=offer.code,
-            duration_months=offer.duration_months,
+            duration_months=None,
+            duration_days=offer.duration_days,
+            plan_name_snapshot=offer.label,
+            plan_limits_snapshot=offer.limits_snapshot(),
             status=PaymentStatus.PENDING,
             receipt_file_id=data.receipt_file_id,
             receipt_file_unique_id=data.receipt_file_unique_id,
@@ -294,18 +273,18 @@ class PaymentService:
                 plan_id=payment.plan_id,
                 status=SubscriptionStatus.ACTIVE,
                 started_at=now,
-                expires_at=add_calendar_months(
+                expires_at=add_duration_days(
                     now,
-                    payment.duration_months,
+                    payment.duration_days,
                 ),
                 auto_renew=False,
             )
             self.session.add(subscription)
             await self.session.flush()
         else:
-            subscription.expires_at = add_calendar_months(
+            subscription.expires_at = add_duration_days(
                 subscription.expires_at,
-                payment.duration_months,
+                payment.duration_days,
             )
 
         payment.status = PaymentStatus.APPROVED
@@ -370,7 +349,6 @@ class PaymentService:
                 Subscription.status == SubscriptionStatus.ACTIVE,
                 Subscription.started_at <= now,
                 Subscription.expires_at > now,
-                Plan.is_active.is_(True),
             )
             .order_by(
                 Subscription.expires_at.desc(),

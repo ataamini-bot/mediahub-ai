@@ -1,6 +1,6 @@
-from typing import Any
-
 from datetime import datetime
+from decimal import Decimal
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -34,6 +34,73 @@ class ApplicationSettingResponse(BaseModel):
     version: int
 
     model_config = ConfigDict(from_attributes=True)
+
+
+class AdminPlanResponse(BaseModel):
+    id: int
+    name: str
+    slug: str
+    description: str | None
+    price: Decimal
+    currency: str = "IRT"
+    duration_days: int
+    daily_download_limit: int | None
+    max_file_size_mb: int | None
+    max_quality: int | None
+    max_concurrent_downloads: int
+    priority_processing: bool
+    forced_join_required: bool
+    is_unlimited: bool
+    sort_order: int
+    is_system: bool
+    is_active: bool
+    is_deleted: bool
+    created_at: datetime
+    updated_at: datetime
+
+
+class AdminPlanCreate(BaseModel):
+    actor_telegram_id: int = Field(gt=0)
+    name: str = Field(min_length=2, max_length=100)
+    description: str | None = Field(default=None, max_length=2000)
+    price: Decimal = Field(gt=0, max_digits=12)
+    duration_days: int = Field(ge=1, le=3650)
+    daily_download_limit: int | None = Field(default=None, ge=0, le=1_000_000)
+    max_file_size_mb: int = Field(ge=1, le=1900)
+    max_quality: int
+    max_concurrent_downloads: int = Field(ge=1, le=3)
+    priority_processing: bool = False
+    forced_join_required: bool = False
+    sort_order: int = Field(default=0, ge=0, le=100000)
+    is_active: bool = True
+    reason: str = Field(min_length=3, max_length=500)
+
+
+class AdminPlanUpdate(BaseModel):
+    actor_telegram_id: int = Field(gt=0)
+    name: str | None = Field(default=None, min_length=2, max_length=100)
+    description: str | None = Field(default=None, max_length=2000)
+    price: Decimal | None = Field(default=None, gt=0, max_digits=12)
+    duration_days: int | None = Field(default=None, ge=1, le=3650)
+    daily_download_limit: int | None = Field(default=None, ge=0, le=1_000_000)
+    max_file_size_mb: int | None = Field(default=None, ge=1, le=1900)
+    max_quality: int | None = None
+    max_concurrent_downloads: int | None = Field(default=None, ge=1, le=3)
+    priority_processing: bool | None = None
+    forced_join_required: bool | None = None
+    sort_order: int | None = Field(default=None, ge=0, le=100000)
+    is_active: bool | None = None
+    is_deleted: bool | None = None
+    reason: str = Field(min_length=3, max_length=500)
+
+    @model_validator(mode="after")
+    def at_least_one_change(self):
+        supplied = self.model_fields_set - {"actor_telegram_id", "reason"}
+
+        if not supplied:
+            raise ValueError("At least one plan field must change")
+
+        return self
 
 
 class AdminRoleSummary(BaseModel):

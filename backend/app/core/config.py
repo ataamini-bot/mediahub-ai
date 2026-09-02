@@ -1,5 +1,4 @@
 import re
-from decimal import Decimal
 from functools import lru_cache
 
 from pydantic import field_validator
@@ -37,14 +36,8 @@ class Settings(BaseSettings):
     payment_card_number: str = ""
     payment_card_holder: str = ""
     payment_bank_name: str = ""
-    payment_price_1_month: Decimal = Decimal("0")
-    payment_price_3_months: Decimal = Decimal("0")
-    payment_price_6_months: Decimal = Decimal("0")
-    payment_price_12_months: Decimal = Decimal("0")
     payment_receipt_max_size_mb: int = 10
 
-    free_daily_download_limit: int = 3
-    free_max_file_size_mb: int = 300
     max_concurrent_downloads: int = 3
     quota_timezone: str = "Asia/Tehran"
 

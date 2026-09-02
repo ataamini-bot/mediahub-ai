@@ -27,82 +27,68 @@ from app.schemas.payment import PaymentCreate  # noqa: E402
 from app.services.payment import (  # noqa: E402
     InvalidReceipt,
     PaymentService,
-    add_calendar_months,
+    add_duration_days,
 )
-from app.services.payment_offers import (  # noqa: E402
-    PaymentConfigurationError,
-    get_payment_offer,
-    get_payment_offers,
-)
+from app.models.plan import Plan  # noqa: E402
+from app.services.payment_offers import PaymentOffer  # noqa: E402
 
 
-@pytest.mark.parametrize(
-    ("start", "months", "expected"),
-    [
-        (
-            datetime(2025, 1, 31, 12, tzinfo=timezone.utc),
-            1,
-            datetime(2025, 2, 28, 12, tzinfo=timezone.utc),
-        ),
-        (
-            datetime(2024, 1, 31, 12, tzinfo=timezone.utc),
-            1,
-            datetime(2024, 2, 29, 12, tzinfo=timezone.utc),
-        ),
-        (
-            datetime(2024, 2, 29, 12, tzinfo=timezone.utc),
-            12,
-            datetime(2025, 2, 28, 12, tzinfo=timezone.utc),
-        ),
-        (
-            datetime(2025, 8, 30, 12, tzinfo=timezone.utc),
-            6,
-            datetime(2026, 2, 28, 12, tzinfo=timezone.utc),
-        ),
-    ],
-)
-def test_add_calendar_months(start, months, expected):
-    assert add_calendar_months(start, months) == expected
+def test_add_duration_days_uses_exact_custom_duration():
+    start = datetime(2026, 1, 31, 12, tzinfo=timezone.utc)
+
+    assert add_duration_days(start, 45) == datetime(
+        2026,
+        3,
+        17,
+        12,
+        tzinfo=timezone.utc,
+    )
 
 
-def test_add_calendar_months_rejects_unknown_duration():
+def test_add_duration_days_rejects_nonpositive_duration():
     with pytest.raises(ValueError):
-        add_calendar_months(datetime.now(timezone.utc), 2)
+        add_duration_days(datetime.now(timezone.utc), 0)
 
 
-def test_payment_offers_have_exact_supported_durations(monkeypatch):
-    monkeypatch.setattr(settings, "payment_price_1_month", Decimal("100"))
-    monkeypatch.setattr(settings, "payment_price_3_months", Decimal("250"))
-    monkeypatch.setattr(settings, "payment_price_6_months", Decimal("450"))
-    monkeypatch.setattr(settings, "payment_price_12_months", Decimal("800"))
+def test_payment_offer_snapshots_custom_plan_limits():
+    plan = Plan(
+        id=91,
+        name="پلن ویژه ۴۵ روزه",
+        slug="plan_test",
+        price=Decimal("125000"),
+        duration_days=45,
+        daily_download_limit=75,
+        max_file_size_mb=900,
+        max_quality=1080,
+        max_concurrent_downloads=2,
+        priority_processing=True,
+        forced_join_required=False,
+        is_unlimited=False,
+        ai_enabled=False,
+        sort_order=0,
+        is_system=False,
+        is_active=True,
+    )
 
-    offers = get_payment_offers()
+    offer = PaymentOffer.from_plan(plan)
 
-    assert [offer.code for offer in offers] == [
-        "premium_1m",
-        "premium_3m",
-        "premium_6m",
-        "premium_12m",
-    ]
-    assert [offer.duration_months for offer in offers] == [1, 3, 6, 12]
-    assert get_payment_offer(" PREMIUM_3M ").duration_months == 3
-
-
-def test_payment_offers_reject_zero_price(monkeypatch):
-    monkeypatch.setattr(settings, "payment_price_1_month", Decimal("100"))
-    monkeypatch.setattr(settings, "payment_price_3_months", Decimal("250"))
-    monkeypatch.setattr(settings, "payment_price_6_months", Decimal("450"))
-    monkeypatch.setattr(settings, "payment_price_12_months", Decimal("0"))
-
-    with pytest.raises(PaymentConfigurationError):
-        get_payment_offers()
+    assert offer.duration_days == 45
+    assert offer.price == Decimal("125000")
+    assert offer.limits_snapshot() == {
+        "daily_download_limit": 75,
+        "max_file_size_mb": 900,
+        "max_quality": 1080,
+        "max_concurrent_downloads": 2,
+        "priority_processing": True,
+        "forced_join_required": False,
+    }
 
 
 def test_receipt_validation_rejects_large_file(monkeypatch):
     monkeypatch.setattr(settings, "payment_receipt_max_size_mb", 1)
     data = PaymentCreate(
         telegram_id=123,
-        offer_code="premium_1m",
+        offer_code="plan_test",
         receipt_file_id="file-id",
         receipt_file_type="photo",
         receipt_file_size=1024 * 1024 + 1,
@@ -116,7 +102,7 @@ def test_receipt_validation_rejects_large_file(monkeypatch):
 def test_receipt_validation_rejects_unknown_document_type():
     data = PaymentCreate(
         telegram_id=123,
-        offer_code="premium_1m",
+        offer_code="plan_test",
         receipt_file_id="file-id",
         receipt_file_type="document",
         receipt_file_size=100,
@@ -165,12 +151,39 @@ async def test_internal_api_key_is_required(monkeypatch):
 def test_payment_configuration_endpoint(monkeypatch):
     key = "b" * 64
     monkeypatch.setattr(settings, "bot_backend_api_key", key)
-    monkeypatch.setattr(settings, "payment_card_number", "0000-0000-0000-0000")
-    monkeypatch.setattr(settings, "payment_card_holder", "Test User")
-    monkeypatch.setattr(settings, "payment_price_1_month", Decimal("100"))
-    monkeypatch.setattr(settings, "payment_price_3_months", Decimal("250"))
-    monkeypatch.setattr(settings, "payment_price_6_months", Decimal("450"))
-    monkeypatch.setattr(settings, "payment_price_12_months", Decimal("800"))
+
+    async def fake_configuration(_db):
+        return {
+            "offers": [
+                {
+                    "code": "plan_test",
+                    "label": "پلن تست",
+                    "duration_days": 45,
+                    "price": Decimal("125000"),
+                    "currency": "IRT",
+                    "daily_download_limit": 75,
+                    "max_file_size_mb": 900,
+                    "max_quality": 1080,
+                    "max_concurrent_downloads": 2,
+                    "priority_processing": True,
+                    "forced_join_required": False,
+                }
+            ],
+            "destination": {
+                "card_number": "0000000000000000",
+                "card_holder": "Test User",
+                "bank_name": None,
+            },
+            "receipt": {
+                "max_size_mb": 10,
+                "allowed_types": ["photo", "application/pdf"],
+            },
+        }
+
+    monkeypatch.setattr(
+        "app.api.payments.get_payment_configuration",
+        fake_configuration,
+    )
 
     client = TestClient(app)
     response = client.get(
@@ -179,12 +192,7 @@ def test_payment_configuration_endpoint(monkeypatch):
     )
 
     assert response.status_code == 200
-    assert [offer["duration_months"] for offer in response.json()["offers"]] == [
-        1,
-        3,
-        6,
-        12,
-    ]
+    assert response.json()["offers"][0]["duration_days"] == 45
 
     unauthorized = client.get(
         "/payments/configuration",

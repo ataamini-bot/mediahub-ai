@@ -24,14 +24,20 @@ def test_home_keyboard_supports_language_and_admin_entry():
     assert buttons[2].text == "🌐 Change language"
 
 
-def test_offer_keyboard_contains_exact_four_durations():
+def test_offer_keyboard_supports_arbitrary_custom_plan_durations():
     offers = [
         {
-            "code": f"premium_{months}m",
-            "label": f"اشتراک {months} ماهه",
-            "price": months * 1000,
+            "code": "plan_45_days",
+            "label": "ویژه ۴۵ روزه",
+            "duration_days": 45,
+            "price": 125000,
+        },
+        {
+            "code": "plan_120_days",
+            "label": "حرفه‌ای",
+            "duration_days": 120,
+            "price": 300000,
         }
-        for months in (1, 3, 6, 12)
     ]
 
     keyboard = build_payment_offers_keyboard(offers)
@@ -41,11 +47,10 @@ def test_offer_keyboard_contains_exact_four_durations():
     ]
 
     assert callbacks == [
-        "payment:offer:premium_1m",
-        "payment:offer:premium_3m",
-        "payment:offer:premium_6m",
-        "payment:offer:premium_12m",
+        "payment:offer:plan_45_days",
+        "payment:offer:plan_120_days",
     ]
+    assert "45 روز" in keyboard.inline_keyboard[0][0].text
 
 
 def test_admin_callback_data_stays_within_telegram_limit():

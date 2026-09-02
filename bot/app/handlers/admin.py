@@ -16,26 +16,36 @@ from app.keyboards.admin import (
     build_admin_accounts_keyboard,
     build_admin_back_keyboard,
     build_admin_home_keyboard,
+    build_admin_plan_detail_keyboard,
+    build_admin_plans_keyboard,
     build_admin_role_detail_keyboard,
     build_admin_roles_keyboard,
     build_change_confirmation_keyboard,
     build_final_danger_confirmation_keyboard,
     build_permission_picker_keyboard,
+    build_plan_boolean_keyboard,
+    build_plan_concurrency_keyboard,
+    build_plan_confirmation_keyboard,
+    build_plan_quality_keyboard,
     build_role_picker_keyboard,
 )
-from app.keyboards.payment import build_home_keyboard
+from app.keyboards.payment import build_home_keyboard, format_toman
 from app.services.backend import (
     BackendAPIError,
     create_admin_account,
+    create_admin_plan,
     create_admin_role,
     get_admin_account,
     get_admin_context,
+    get_admin_plan,
     list_admin_accounts,
     list_admin_permissions,
+    list_admin_plans,
     list_admin_roles,
     list_application_settings,
     register_telegram_user,
     update_admin_account,
+    update_admin_plan,
     update_admin_role,
 )
 from app.state.admin import AdminManagementStates
@@ -97,6 +107,13 @@ def _backend_error_text(exc: BackendAPIError) -> str:
             "ابتدا نقش آن مدیران را عوض کنید."
         ),
         "system_role_protected": "نقش سیستمی قابل غیرفعال‌سازی نیست.",
+        "plan_not_found": "پلن پیدا نشد.",
+        "plan_conflict": "پلنی با این نام از قبل وجود دارد.",
+        "plan_validation": "اطلاعات پلن معتبر نیست.",
+        "system_plan_protected": (
+            "نام، قیمت، مدت و وضعیت پلن رایگان قابل تغییر نیست؛ "
+            "محدودیت‌های آن قابل ویرایش است."
+        ),
     }
 
     if code in messages:
@@ -169,6 +186,163 @@ def _admin_role_text(role: dict) -> str:
         f"مدیران دارای نقش: <code>{int(role.get('assignment_count', 0))}</code>\n"
         f"توضیح: {html.escape(description)}\n\n"
         f"<b>دسترسی‌ها:</b>\n{permission_lines}"
+    )
+
+
+_PLAN_DIGIT_TRANSLATION = str.maketrans(
+    "۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩",
+    "01234567890123456789",
+)
+
+
+def _parse_plan_integer(value: str) -> int | None:
+    normalized = (
+        str(value or "")
+        .strip()
+        .translate(_PLAN_DIGIT_TRANSLATION)
+        .replace(",", "")
+        .replace("٬", "")
+    )
+
+    if not normalized.isdigit():
+        return None
+
+    return int(normalized)
+
+
+def _plan_daily_limit_text(value: object) -> str:
+    if value is None:
+        return "نامحدود"
+
+    return f"{int(value):,} خروجی"
+
+
+def _admin_plan_text(plan: dict) -> str:
+    is_free = bool(plan.get("is_system"))
+    status = "فعال ✅" if plan.get("is_active") else "غیرفعال ⛔️"
+    plan_type = "رایگان و سیستمی 🆓" if is_free else "سفارشی 💎"
+    duration = "همیشگی" if is_free else f"{int(plan['duration_days'])} روز"
+    price = "رایگان" if is_free else format_toman(plan.get("price", 0))
+    file_size = (
+        f"{int(plan['max_file_size_mb'])} MB"
+        if plan.get("max_file_size_mb") is not None
+        else "نامحدود"
+    )
+    quality = (
+        f"{int(plan['max_quality'])}p"
+        if plan.get("max_quality") is not None
+        else "نامحدود"
+    )
+    priority = "بالا" if plan.get("priority_processing") else "عادی"
+    forced_join = "بله" if plan.get("forced_join_required") else "خیر"
+    description = html.escape(str(plan.get("description") or "—"))
+    return (
+        "📦 <b>مشخصات پلن</b>\n\n"
+        f"نام: <b>{html.escape(str(plan['name']))}</b>\n"
+        f"نوع: {plan_type}\n"
+        f"وضعیت: <b>{status}</b>\n"
+        f"مدت: <code>{duration}</code>\n"
+        f"مبلغ: <b>{price}</b>\n\n"
+        f"📊 سقف روزانه: <code>{_plan_daily_limit_text(plan.get('daily_download_limit'))}</code>\n"
+        f"📦 حداکثر حجم: <code>{file_size}</code>\n"
+        f"🎞 حداکثر کیفیت: <code>{quality}</code>\n"
+        "⚙️ دانلود هم‌زمان: "
+        f"<code>{int(plan.get('max_concurrent_downloads', 1))}</code>\n"
+        f"🚀 اولویت پردازش: <code>{priority}</code>\n"
+        f"📣 عضویت اجباری: <code>{forced_join}</code>\n"
+        f"↕️ ترتیب نمایش: <code>{int(plan.get('sort_order', 0))}</code>\n\n"
+        f"📝 توضیح: {description}"
+    )
+
+
+def _plan_create_summary(data: dict) -> str:
+    daily_limit = data.get("daily_download_limit")
+    description = html.escape(str(data.get("description") or "—"))
+    return (
+        "➕ <b>مرور پلن جدید</b>\n\n"
+        f"نام: <b>{html.escape(str(data['name']))}</b>\n"
+        f"مدت: <code>{int(data['duration_days'])} روز</code>\n"
+        f"مبلغ: <b>{format_toman(data['price'])}</b>\n"
+        f"سقف روزانه: <code>{_plan_daily_limit_text(daily_limit)}</code>\n"
+        f"حداکثر حجم: <code>{int(data['max_file_size_mb'])} MB</code>\n"
+        f"حداکثر کیفیت: <code>{int(data['max_quality'])}p</code>\n"
+        "دانلود هم‌زمان: "
+        f"<code>{int(data['max_concurrent_downloads'])}</code>\n"
+        "اولویت پردازش: "
+        f"<code>{'بالا' if data['priority_processing'] else 'عادی'}</code>\n"
+        "عضویت اجباری: "
+        f"<code>{'بله' if data['forced_join_required'] else 'خیر'}</code>\n"
+        f"توضیح: {description}"
+    )
+
+
+def _plan_update_summary(plan: dict, changes: dict) -> str:
+    labels = {
+        "name": "نام",
+        "description": "توضیح",
+        "duration_days": "مدت به روز",
+        "price": "مبلغ تومان",
+        "daily_download_limit": "سقف روزانه",
+        "max_file_size_mb": "حداکثر حجم MB",
+        "max_quality": "حداکثر کیفیت",
+        "max_concurrent_downloads": "دانلود هم‌زمان",
+        "priority_processing": "اولویت پردازش",
+        "forced_join_required": "عضویت اجباری",
+        "sort_order": "ترتیب نمایش",
+        "is_active": "وضعیت فعال",
+        "is_deleted": "حذف نرم",
+    }
+    lines = [
+        "✏️ <b>مرور تغییر پلن</b>",
+        "",
+        f"پلن: <b>{html.escape(str(plan['name']))}</b>",
+    ]
+
+    for key, value in changes.items():
+        if isinstance(value, bool):
+            rendered = "بله" if value else "خیر"
+        elif value is None:
+            rendered = "نامحدود / خالی"
+        elif key == "price":
+            rendered = format_toman(value)
+        else:
+            rendered = str(value)
+
+        lines.append(
+            f"{labels.get(key, key)}: <code>{html.escape(rendered)}</code>"
+        )
+
+    return "\n".join(lines)
+
+
+async def _show_plans(message: Message, actor_telegram_id: int) -> None:
+    plans = await list_admin_plans(actor_telegram_id)
+    custom_count = sum(not bool(plan.get("is_system")) for plan in plans)
+    await message.edit_text(
+        (
+            "📦 <b>مدیریت پلن‌ها</b>\n\n"
+            "پلن Free همیشه وجود دارد و محدودیت‌هایش قابل ویرایش است.\n"
+            f"تعداد پلن‌های سفارشی: <code>{custom_count}</code>"
+        ),
+        parse_mode="HTML",
+        reply_markup=build_admin_plans_keyboard(plans),
+    )
+
+
+async def _show_plan_detail(
+    message: Message,
+    *,
+    actor_telegram_id: int,
+    plan_id: int,
+) -> None:
+    plan = await get_admin_plan(
+        actor_telegram_id=actor_telegram_id,
+        plan_id=plan_id,
+    )
+    await message.edit_text(
+        _admin_plan_text(plan),
+        parse_mode="HTML",
+        reply_markup=build_admin_plan_detail_keyboard(plan),
     )
 
 
@@ -1440,6 +1614,647 @@ async def confirm_role_change(
             reply_markup=build_admin_role_detail_keyboard(role),
         )
         await callback.answer("ثبت شد")
+    except BackendAPIError as exc:
+        await callback.answer(_backend_error_text(exc), show_alert=True)
+
+
+@router.callback_query(F.data == "admin:plans")
+async def show_admin_plans(
+    callback: CallbackQuery,
+    state: FSMContext,
+) -> None:
+    if not isinstance(callback.message, Message):
+        return
+
+    context = await _context_or_none(callback.from_user.id)
+
+    if context is None or not _can(context, "plans.manage"):
+        await callback.answer("دسترسی مدیریت پلن‌ها ندارید.", show_alert=True)
+        return
+
+    try:
+        await state.clear()
+        await _show_plans(callback.message, callback.from_user.id)
+        await callback.answer()
+    except BackendAPIError as exc:
+        await callback.answer(_backend_error_text(exc), show_alert=True)
+
+
+@router.callback_query(F.data.regexp(r"^admin:plan:\d+$"))
+async def show_admin_plan_detail(callback: CallbackQuery) -> None:
+    if not callback.data or not isinstance(callback.message, Message):
+        return
+
+    context = await _context_or_none(callback.from_user.id)
+
+    if context is None or not _can(context, "plans.manage"):
+        await callback.answer("دسترسی مدیریت پلن‌ها ندارید.", show_alert=True)
+        return
+
+    try:
+        plan_id = int(callback.data.rsplit(":", 1)[-1])
+        await _show_plan_detail(
+            callback.message,
+            actor_telegram_id=callback.from_user.id,
+            plan_id=plan_id,
+        )
+        await callback.answer()
+    except BackendAPIError as exc:
+        await callback.answer(_backend_error_text(exc), show_alert=True)
+
+
+@router.callback_query(F.data == "admin:plan:add")
+async def start_create_plan(
+    callback: CallbackQuery,
+    state: FSMContext,
+) -> None:
+    if not isinstance(callback.message, Message):
+        return
+
+    context = await _context_or_none(callback.from_user.id)
+
+    if context is None or not _can(context, "plans.manage"):
+        await callback.answer("دسترسی ایجاد پلن ندارید.", show_alert=True)
+        return
+
+    await state.clear()
+    await state.update_data(workflow="plan_create")
+    await state.set_state(AdminManagementStates.waiting_for_plan_name)
+    await callback.message.edit_text(
+        (
+            "➕ <b>ایجاد پلن جدید</b>\n\n"
+            "نام نمایشی پلن را ارسال کنید؛ مثلاً «ویژه ۴۵ روزه»."
+        ),
+        parse_mode="HTML",
+        reply_markup=None,
+    )
+    await callback.message.answer(
+        "نام پلن را بفرستید:",
+        reply_markup=ForceReply(selective=True),
+    )
+    await callback.answer()
+
+
+@router.message(StateFilter(AdminManagementStates.waiting_for_plan_name))
+async def receive_plan_name(message: Message, state: FSMContext) -> None:
+    name = " ".join(str(message.text or "").split())
+
+    if not 2 <= len(name) <= 100:
+        await message.answer(
+            "❌ نام پلن باید بین ۲ تا ۱۰۰ کاراکتر باشد.",
+            reply_markup=ForceReply(selective=True),
+        )
+        return
+
+    await state.update_data(name=name)
+    await state.set_state(AdminManagementStates.waiting_for_plan_duration)
+    await message.answer(
+        "📅 مدت اعتبار پلن را به روز وارد کنید؛ مثلاً 30:",
+        reply_markup=ForceReply(selective=True),
+    )
+
+
+@router.message(StateFilter(AdminManagementStates.waiting_for_plan_duration))
+async def receive_plan_duration(message: Message, state: FSMContext) -> None:
+    duration_days = _parse_plan_integer(str(message.text or ""))
+
+    if duration_days is None or not 1 <= duration_days <= 3650:
+        await message.answer(
+            "❌ مدت باید عددی بین ۱ تا ۳۶۵۰ روز باشد.",
+            reply_markup=ForceReply(selective=True),
+        )
+        return
+
+    await state.update_data(duration_days=duration_days)
+    await state.set_state(AdminManagementStates.waiting_for_plan_price)
+    await message.answer(
+        "💰 مبلغ پلن را به تومان وارد کنید؛ مثلاً 79000:",
+        reply_markup=ForceReply(selective=True),
+    )
+
+
+@router.message(StateFilter(AdminManagementStates.waiting_for_plan_price))
+async def receive_plan_price(message: Message, state: FSMContext) -> None:
+    price = _parse_plan_integer(str(message.text or ""))
+
+    if price is None or price <= 0 or price > 9_999_999_999:
+        await message.answer(
+            "❌ مبلغ باید یک عدد صحیح بزرگ‌تر از صفر باشد.",
+            reply_markup=ForceReply(selective=True),
+        )
+        return
+
+    await state.update_data(price=price)
+    await state.set_state(AdminManagementStates.waiting_for_plan_daily_limit)
+    await message.answer(
+        (
+            "📊 حداکثر خروجی موفق روزانه را وارد کنید.\n"
+            "برای نامحدود عدد 0 را بفرستید:"
+        ),
+        reply_markup=ForceReply(selective=True),
+    )
+
+
+@router.message(StateFilter(AdminManagementStates.waiting_for_plan_daily_limit))
+async def receive_plan_daily_limit(message: Message, state: FSMContext) -> None:
+    daily_limit = _parse_plan_integer(str(message.text or ""))
+
+    if daily_limit is None or daily_limit > 1_000_000:
+        await message.answer(
+            "❌ یک عدد بین ۰ تا ۱٬۰۰۰٬۰۰۰ وارد کنید.",
+            reply_markup=ForceReply(selective=True),
+        )
+        return
+
+    await state.update_data(
+        daily_download_limit=(daily_limit or None),
+    )
+    await state.set_state(AdminManagementStates.waiting_for_plan_file_size)
+    await message.answer(
+        "📦 حداکثر حجم هر خروجی را به MB وارد کنید (۱ تا ۱۹۰۰):",
+        reply_markup=ForceReply(selective=True),
+    )
+
+
+@router.message(StateFilter(AdminManagementStates.waiting_for_plan_file_size))
+async def receive_plan_file_size(message: Message, state: FSMContext) -> None:
+    file_size = _parse_plan_integer(str(message.text or ""))
+
+    if file_size is None or not 1 <= file_size <= 1900:
+        await message.answer(
+            "❌ حجم باید عددی بین ۱ تا ۱۹۰۰ مگابایت باشد.",
+            reply_markup=ForceReply(selective=True),
+        )
+        return
+
+    await state.update_data(max_file_size_mb=file_size)
+    await state.set_state(AdminManagementStates.selecting_plan_quality)
+    await message.answer(
+        "🎞 حداکثر کیفیت مجاز را انتخاب کنید:",
+        reply_markup=build_plan_quality_keyboard(mode="create"),
+    )
+
+
+@router.callback_query(
+    StateFilter(AdminManagementStates.selecting_plan_quality),
+    F.data.startswith("admin:plan:choice:create:quality:"),
+)
+async def select_plan_quality(
+    callback: CallbackQuery,
+    state: FSMContext,
+) -> None:
+    if not callback.data or not isinstance(callback.message, Message):
+        return
+
+    quality = int(callback.data.rsplit(":", 1)[-1])
+    await state.update_data(max_quality=quality)
+    await state.set_state(AdminManagementStates.selecting_plan_concurrency)
+    await callback.message.edit_text(
+        "⚙️ تعداد دانلود هم‌زمان را انتخاب کنید:",
+        reply_markup=build_plan_concurrency_keyboard(mode="create"),
+    )
+    await callback.answer()
+
+
+@router.callback_query(
+    StateFilter(AdminManagementStates.selecting_plan_concurrency),
+    F.data.startswith("admin:plan:choice:create:concurrency:"),
+)
+async def select_plan_concurrency(
+    callback: CallbackQuery,
+    state: FSMContext,
+) -> None:
+    if not callback.data or not isinstance(callback.message, Message):
+        return
+
+    concurrency = int(callback.data.rsplit(":", 1)[-1])
+    await state.update_data(max_concurrent_downloads=concurrency)
+    await state.set_state(AdminManagementStates.selecting_plan_priority)
+    await callback.message.edit_text(
+        "🚀 آیا این پلن اولویت پردازش بالا داشته باشد؟",
+        reply_markup=build_plan_boolean_keyboard(
+            mode="create",
+            field="priority",
+        ),
+    )
+    await callback.answer()
+
+
+@router.callback_query(
+    StateFilter(AdminManagementStates.selecting_plan_priority),
+    F.data.startswith("admin:plan:choice:create:priority:"),
+)
+async def select_plan_priority(
+    callback: CallbackQuery,
+    state: FSMContext,
+) -> None:
+    if not callback.data or not isinstance(callback.message, Message):
+        return
+
+    enabled = callback.data.rsplit(":", 1)[-1] == "yes"
+    await state.update_data(priority_processing=enabled)
+    await state.set_state(AdminManagementStates.selecting_plan_forced_join)
+    await callback.message.edit_text(
+        "📣 آیا کاربران این پلن مشمول عضویت اجباری باشند؟",
+        reply_markup=build_plan_boolean_keyboard(
+            mode="create",
+            field="forced_join",
+        ),
+    )
+    await callback.answer()
+
+
+@router.callback_query(
+    StateFilter(AdminManagementStates.selecting_plan_forced_join),
+    F.data.startswith("admin:plan:choice:create:forced_join:"),
+)
+async def select_plan_forced_join(
+    callback: CallbackQuery,
+    state: FSMContext,
+) -> None:
+    if not callback.data or not isinstance(callback.message, Message):
+        return
+
+    enabled = callback.data.rsplit(":", 1)[-1] == "yes"
+    await state.update_data(forced_join_required=enabled)
+    await state.set_state(AdminManagementStates.waiting_for_plan_description)
+    await callback.message.edit_text(
+        "📝 توضیح کوتاه پلن را بفرستید؛ برای بدون توضیح، فقط - بفرستید.",
+        reply_markup=None,
+    )
+    await callback.message.answer(
+        "توضیح پلن:",
+        reply_markup=ForceReply(selective=True),
+    )
+    await callback.answer()
+
+
+@router.message(StateFilter(AdminManagementStates.waiting_for_plan_description))
+async def receive_plan_description(message: Message, state: FSMContext) -> None:
+    description = str(message.text or "").strip()
+
+    if len(description) > 2000:
+        await message.answer(
+            "❌ توضیح پلن حداکثر ۲۰۰۰ کاراکتر است.",
+            reply_markup=ForceReply(selective=True),
+        )
+        return
+
+    await state.update_data(description=None if description == "-" else description)
+    data = await state.get_data()
+    await state.set_state(AdminManagementStates.confirming_plan_create)
+    await message.answer(
+        _plan_create_summary(data),
+        parse_mode="HTML",
+        reply_markup=build_plan_confirmation_keyboard(action="create"),
+    )
+
+
+@router.callback_query(
+    StateFilter(AdminManagementStates.confirming_plan_create),
+    F.data == "admin:plan:create:confirm",
+)
+async def confirm_create_plan(
+    callback: CallbackQuery,
+    state: FSMContext,
+) -> None:
+    if not isinstance(callback.message, Message):
+        return
+
+    data = await state.get_data()
+    plan_payload = {
+        "name": data["name"],
+        "description": data.get("description"),
+        "duration_days": data["duration_days"],
+        "price": data["price"],
+        "daily_download_limit": data.get("daily_download_limit"),
+        "max_file_size_mb": data["max_file_size_mb"],
+        "max_quality": data["max_quality"],
+        "max_concurrent_downloads": data["max_concurrent_downloads"],
+        "priority_processing": data["priority_processing"],
+        "forced_join_required": data["forced_join_required"],
+        "sort_order": 0,
+        "is_active": True,
+    }
+
+    try:
+        plan = await create_admin_plan(
+            actor_telegram_id=callback.from_user.id,
+            plan=plan_payload,
+            reason="ایجاد پلن از پنل مدیریت تلگرام",
+        )
+        await state.clear()
+        await callback.message.edit_text(
+            "✅ پلن با موفقیت ایجاد شد.\n\n" + _admin_plan_text(plan),
+            parse_mode="HTML",
+            reply_markup=build_admin_plan_detail_keyboard(plan),
+        )
+        await callback.answer("پلن ایجاد شد")
+    except BackendAPIError as exc:
+        await callback.answer(_backend_error_text(exc), show_alert=True)
+
+
+@router.callback_query(
+    F.data.regexp(
+        r"^admin:plan:edit:(name|description|duration|price|daily|size|quality|concurrency|order):\d+$"
+    )
+)
+async def start_edit_plan_field(
+    callback: CallbackQuery,
+    state: FSMContext,
+) -> None:
+    if not callback.data or not isinstance(callback.message, Message):
+        return
+
+    parts = callback.data.split(":")
+    field = parts[3]
+    plan_id = int(parts[4])
+
+    try:
+        plan = await get_admin_plan(
+            actor_telegram_id=callback.from_user.id,
+            plan_id=plan_id,
+        )
+        await state.clear()
+        await state.update_data(
+            workflow="plan_update",
+            plan=plan,
+            plan_id=plan_id,
+            plan_edit_field=field,
+        )
+        await state.set_state(AdminManagementStates.waiting_for_plan_edit_value)
+
+        if field == "quality":
+            await callback.message.edit_text(
+                "🎞 حداکثر کیفیت جدید را انتخاب کنید:",
+                reply_markup=build_plan_quality_keyboard(mode="edit"),
+            )
+        elif field == "concurrency":
+            await callback.message.edit_text(
+                "⚙️ تعداد دانلود هم‌زمان جدید را انتخاب کنید:",
+                reply_markup=build_plan_concurrency_keyboard(mode="edit"),
+            )
+        else:
+            prompts = {
+                "name": "نام جدید پلن را بفرستید:",
+                "description": "توضیح جدید را بفرستید؛ برای حذف توضیح، - بفرستید:",
+                "duration": "مدت جدید را به روز وارد کنید:",
+                "price": "مبلغ جدید را به تومان وارد کنید:",
+                "daily": "سقف روزانه جدید را بفرستید؛ 0 یعنی نامحدود:",
+                "size": "حداکثر حجم جدید را به MB وارد کنید (۱ تا ۱۹۰۰):",
+                "order": "ترتیب نمایش را وارد کنید؛ عدد کوچک‌تر بالاتر نمایش داده می‌شود:",
+            }
+            await callback.message.edit_text(prompts[field], reply_markup=None)
+            await callback.message.answer(
+                "مقدار جدید را ارسال کنید:",
+                reply_markup=ForceReply(selective=True),
+            )
+
+        await callback.answer()
+    except BackendAPIError as exc:
+        await callback.answer(_backend_error_text(exc), show_alert=True)
+
+
+@router.message(StateFilter(AdminManagementStates.waiting_for_plan_edit_value))
+async def receive_plan_edit_value(message: Message, state: FSMContext) -> None:
+    data = await state.get_data()
+    field = str(data.get("plan_edit_field") or "")
+
+    if field in {"quality", "concurrency"}:
+        return
+
+    raw_value = str(message.text or "").strip()
+    changes: dict = {}
+    error: str | None = None
+
+    if field == "name":
+        normalized_name = " ".join(raw_value.split())
+        if 2 <= len(normalized_name) <= 100:
+            changes["name"] = normalized_name
+        else:
+            error = "نام باید بین ۲ تا ۱۰۰ کاراکتر باشد."
+    elif field == "description":
+        if len(raw_value) <= 2000:
+            changes["description"] = None if raw_value == "-" else raw_value
+        else:
+            error = "توضیح حداکثر ۲۰۰۰ کاراکتر است."
+    else:
+        number = _parse_plan_integer(raw_value)
+
+        if number is None:
+            error = "مقدار باید فقط عدد باشد."
+        elif field == "duration" and not 1 <= number <= 3650:
+            error = "مدت باید بین ۱ تا ۳۶۵۰ روز باشد."
+        elif field == "price" and number > 9_999_999_999:
+            error = "مبلغ واردشده بیش از حد مجاز است."
+        elif field == "daily" and number > 1_000_000:
+            error = "سقف روزانه بیش از حد مجاز است."
+        elif field == "size" and not 1 <= number <= 1900:
+            error = "حجم باید بین ۱ تا ۱۹۰۰ مگابایت باشد."
+        elif field == "order" and number > 100_000:
+            error = "ترتیب نمایش باید بین ۰ تا ۱۰۰٬۰۰۰ باشد."
+        elif field == "duration":
+            changes["duration_days"] = number
+        elif field == "price":
+            changes["price"] = number
+        elif field == "daily":
+            changes["daily_download_limit"] = number or None
+        elif field == "size":
+            changes["max_file_size_mb"] = number
+        elif field == "order":
+            changes["sort_order"] = number
+
+    if error:
+        await message.answer(
+            f"❌ {error}",
+            reply_markup=ForceReply(selective=True),
+        )
+        return
+
+    await state.update_data(plan_changes=changes)
+    await state.set_state(AdminManagementStates.confirming_plan_update)
+    await message.answer(
+        _plan_update_summary(data["plan"], changes),
+        parse_mode="HTML",
+        reply_markup=build_plan_confirmation_keyboard(action="update"),
+    )
+
+
+@router.callback_query(
+    StateFilter(AdminManagementStates.waiting_for_plan_edit_value),
+    F.data.regexp(r"^admin:plan:choice:edit:(quality|concurrency):\d+$"),
+)
+async def select_plan_edit_choice(
+    callback: CallbackQuery,
+    state: FSMContext,
+) -> None:
+    if not callback.data or not isinstance(callback.message, Message):
+        return
+
+    parts = callback.data.split(":")
+    field = parts[4]
+    value = int(parts[5])
+    data = await state.get_data()
+    expected_field = str(data.get("plan_edit_field") or "")
+
+    if field != expected_field:
+        await callback.answer("این فرم منقضی شده است.", show_alert=True)
+        return
+
+    changes = {
+        "max_quality" if field == "quality" else "max_concurrent_downloads": value
+    }
+    await state.update_data(plan_changes=changes)
+    await state.set_state(AdminManagementStates.confirming_plan_update)
+    await callback.message.edit_text(
+        _plan_update_summary(data["plan"], changes),
+        parse_mode="HTML",
+        reply_markup=build_plan_confirmation_keyboard(action="update"),
+    )
+    await callback.answer()
+
+
+@router.callback_query(
+    F.data.regexp(r"^admin:plan:toggle:(priority|forced_join|active):\d+$")
+)
+async def toggle_plan_boolean(
+    callback: CallbackQuery,
+    state: FSMContext,
+) -> None:
+    if not callback.data or not isinstance(callback.message, Message):
+        return
+
+    parts = callback.data.split(":")
+    field = parts[3]
+    plan_id = int(parts[4])
+    field_map = {
+        "priority": "priority_processing",
+        "forced_join": "forced_join_required",
+        "active": "is_active",
+    }
+
+    try:
+        plan = await get_admin_plan(
+            actor_telegram_id=callback.from_user.id,
+            plan_id=plan_id,
+        )
+        target_field = field_map[field]
+        changes = {target_field: not bool(plan.get(target_field))}
+        await state.clear()
+        await state.update_data(
+            workflow="plan_update",
+            plan=plan,
+            plan_id=plan_id,
+            plan_changes=changes,
+        )
+        await state.set_state(AdminManagementStates.confirming_plan_update)
+        await callback.message.edit_text(
+            _plan_update_summary(plan, changes),
+            parse_mode="HTML",
+            reply_markup=build_plan_confirmation_keyboard(action="update"),
+        )
+        await callback.answer()
+    except BackendAPIError as exc:
+        await callback.answer(_backend_error_text(exc), show_alert=True)
+
+
+@router.callback_query(F.data.regexp(r"^admin:plan:delete:\d+$"))
+async def start_soft_delete_plan(
+    callback: CallbackQuery,
+    state: FSMContext,
+) -> None:
+    if not callback.data or not isinstance(callback.message, Message):
+        return
+
+    plan_id = int(callback.data.rsplit(":", 1)[-1])
+
+    try:
+        plan = await get_admin_plan(
+            actor_telegram_id=callback.from_user.id,
+            plan_id=plan_id,
+        )
+        changes = {"is_deleted": True}
+        await state.clear()
+        await state.update_data(
+            workflow="plan_update",
+            plan=plan,
+            plan_id=plan_id,
+            plan_changes=changes,
+        )
+        await state.set_state(AdminManagementStates.confirming_plan_update)
+        await callback.message.edit_text(
+            (
+                "⚠️ این عملیات پلن را غیرفعال و از فهرست فروش مخفی می‌کند.\n\n"
+                + _plan_update_summary(plan, changes)
+            ),
+            parse_mode="HTML",
+            reply_markup=build_plan_confirmation_keyboard(action="update"),
+        )
+        await callback.answer()
+    except BackendAPIError as exc:
+        await callback.answer(_backend_error_text(exc), show_alert=True)
+
+
+@router.callback_query(
+    StateFilter(AdminManagementStates.confirming_plan_update),
+    F.data == "admin:plan:update:confirm",
+)
+async def confirm_plan_update(
+    callback: CallbackQuery,
+    state: FSMContext,
+) -> None:
+    if not isinstance(callback.message, Message):
+        return
+
+    data = await state.get_data()
+    changes = dict(data.get("plan_changes") or {})
+
+    try:
+        plan = await update_admin_plan(
+            actor_telegram_id=callback.from_user.id,
+            plan_id=int(data["plan_id"]),
+            changes=changes,
+            reason="ویرایش پلن از پنل مدیریت تلگرام",
+        )
+        await state.clear()
+
+        if plan.get("is_deleted"):
+            await _show_plans(callback.message, callback.from_user.id)
+        else:
+            await callback.message.edit_text(
+                "✅ تغییر پلن ثبت شد.\n\n" + _admin_plan_text(plan),
+                parse_mode="HTML",
+                reply_markup=build_admin_plan_detail_keyboard(plan),
+            )
+
+        await callback.answer("ثبت شد")
+    except BackendAPIError as exc:
+        await callback.answer(_backend_error_text(exc), show_alert=True)
+
+
+@router.callback_query(F.data == "admin:plan:cancel")
+async def cancel_plan_workflow(
+    callback: CallbackQuery,
+    state: FSMContext,
+) -> None:
+    data = await state.get_data()
+    plan_id = data.get("plan_id")
+    await state.clear()
+
+    if not isinstance(callback.message, Message):
+        return
+
+    try:
+        if plan_id is not None:
+            await _show_plan_detail(
+                callback.message,
+                actor_telegram_id=callback.from_user.id,
+                plan_id=int(plan_id),
+            )
+        else:
+            await _show_plans(callback.message, callback.from_user.id)
+
+        await callback.answer("لغو شد")
     except BackendAPIError as exc:
         await callback.answer(_backend_error_text(exc), show_alert=True)
 

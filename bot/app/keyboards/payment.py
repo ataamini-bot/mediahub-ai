@@ -63,7 +63,7 @@ def build_payment_offers_keyboard(
             [
                 InlineKeyboardButton(
                     text=(
-                        f"{offer['label']} — "
+                        f"{offer['label']} — {int(offer['duration_days'])} روز — "
                         f"{format_toman(offer['price'])}"
                     ),
                     callback_data=f"payment:offer:{offer['code']}",

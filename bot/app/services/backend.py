@@ -122,6 +122,66 @@ async def list_application_settings(
     return list(result)
 
 
+async def list_admin_plans(
+    actor_telegram_id: int,
+    *,
+    include_inactive: bool = True,
+) -> list[dict]:
+    flag = "true" if include_inactive else "false"
+    result = await _payment_request(
+        "GET",
+        f"/admin/plans?actor_telegram_id={actor_telegram_id}"
+        f"&include_inactive={flag}",
+    )
+    return list(result)
+
+
+async def get_admin_plan(
+    *,
+    actor_telegram_id: int,
+    plan_id: int,
+) -> dict:
+    return await _payment_request(
+        "GET",
+        f"/admin/plans/{plan_id}?actor_telegram_id={actor_telegram_id}",
+    )
+
+
+async def create_admin_plan(
+    *,
+    actor_telegram_id: int,
+    plan: dict,
+    reason: str,
+) -> dict:
+    return await _payment_request(
+        "POST",
+        "/admin/plans",
+        payload={
+            "actor_telegram_id": actor_telegram_id,
+            **plan,
+            "reason": reason,
+        },
+    )
+
+
+async def update_admin_plan(
+    *,
+    actor_telegram_id: int,
+    plan_id: int,
+    changes: dict,
+    reason: str,
+) -> dict:
+    return await _payment_request(
+        "PATCH",
+        f"/admin/plans/{plan_id}",
+        payload={
+            "actor_telegram_id": actor_telegram_id,
+            **changes,
+            "reason": reason,
+        },
+    )
+
+
 async def list_admin_accounts(
     actor_telegram_id: int,
 ) -> list[dict]:

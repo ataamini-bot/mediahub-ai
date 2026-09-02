@@ -125,7 +125,7 @@ def _build_admin_caption(result: dict, offer: dict) -> str:
         f"📱 Telegram ID: <code>{user['telegram_id']}</code>\n\n"
         f"💎 بسته: <b>{html.escape(offer['label'])}</b>\n"
         f"💰 مبلغ: <b>{format_toman(payment['amount'])}</b>\n"
-        f"📅 مدت: <code>{payment['duration_months']} ماه</code>\n"
+        f"📅 مدت: <code>{payment['duration_days']} روز</code>\n"
         f"📎 نوع رسید: <code>{payment['receipt_file_type']}</code>\n\n"
         "⏳ وضعیت: <b>در انتظار بررسی</b>"
     )
@@ -192,7 +192,9 @@ async def _notify_user_approved(message: Message, result: dict) -> None:
         text=(
             "✅ <b>پرداخت شما تأیید شد</b>\n\n"
             f"🆔 شناسه پرداخت: <code>{payment['id']}</code>\n"
-            f"💎 مدت افزوده‌شده: <code>{payment['duration_months']} ماه</code>\n"
+            "💎 پلن: "
+            f"<b>{html.escape(str(payment['plan_name_snapshot']))}</b>\n"
+            f"💎 مدت افزوده‌شده: <code>{payment['duration_days']} روز</code>\n"
             "📅 اعتبار اشتراک تا: "
             f"<code>{_format_datetime(subscription.get('expires_at'))}</code>"
         ),
@@ -230,8 +232,8 @@ async def open_payment_offers(
         await state.clear()
         await callback.message.edit_text(
             (
-                "💎 <b>خرید اشتراک Premium</b>\n\n"
-                "مدت موردنظر را انتخاب کنید:"
+                "💎 <b>خرید اشتراک</b>\n\n"
+                "پلن موردنظر را انتخاب کنید:"
             ),
             parse_mode="HTML",
             reply_markup=build_payment_offers_keyboard(
@@ -261,12 +263,14 @@ async def payment_status(callback: CallbackQuery) -> None:
         if not result.get("is_active"):
             text = (
                 "👤 <b>وضعیت اشتراک</b>\n\n"
-                "در حال حاضر اشتراک Premium فعال ندارید."
+                "در حال حاضر اشتراک فعالی ندارید."
             )
         else:
+            plan_name = html.escape(str(result.get("plan_name") or "—"))
             text = (
                 "👤 <b>وضعیت اشتراک</b>\n\n"
-                "✅ اشتراک Premium شما فعال است.\n"
+                "✅ اشتراک شما فعال است.\n"
+                f"💎 پلن: <b>{plan_name}</b>\n"
                 "📅 اعتبار تا: "
                 f"<code>{_format_datetime(result.get('expires_at'))}</code>"
             )
@@ -277,7 +281,7 @@ async def payment_status(callback: CallbackQuery) -> None:
             reply_markup=build_home_keyboard(),
         )
         await callback.answer()
-    except BackendAPIError as exc:
+    except BackendAPIError:
         await callback.answer(
             "دریافت وضعیت اشتراک ممکن نشد.",
             show_alert=True,
@@ -317,6 +321,7 @@ async def select_payment_offer(
         await callback.message.edit_text(
             (
                 f"💎 <b>{html.escape(offer['label'])}</b>\n"
+                f"📅 مدت: <code>{int(offer['duration_days'])} روز</code>\n"
                 f"💰 مبلغ: <b>{format_toman(offer['price'])}</b>\n\n"
                 "لطفاً مبلغ را به کارت زیر واریز کنید:\n\n"
                 f"💳 <code>{html.escape(destination['card_number'])}</code>\n"

@@ -10,6 +10,9 @@ from app.schemas.admin import (
     AdminAccountResponse,
     AdminAccountUpdate,
     AdminContextResponse,
+    AdminPlanCreate,
+    AdminPlanResponse,
+    AdminPlanUpdate,
     AdminPermissionResponse,
     AdminRoleCreate,
     AdminRoleResponse,
@@ -42,6 +45,12 @@ from app.services.application_settings import (
     SettingConflict,
     SettingEncryptionError,
     SettingValidationError,
+)
+from app.services.plan_management import (
+    PlanConflict,
+    PlanManagementError,
+    PlanManagementService,
+    PlanNotFound,
 )
 
 
@@ -112,6 +121,30 @@ def serialize_admin_role(record: AdminRoleRecord) -> AdminRoleResponse:
     )
 
 
+def serialize_plan(plan) -> AdminPlanResponse:
+    return AdminPlanResponse(
+        id=plan.id,
+        name=plan.name,
+        slug=plan.slug,
+        description=plan.description,
+        price=plan.price,
+        duration_days=plan.duration_days,
+        daily_download_limit=plan.daily_download_limit,
+        max_file_size_mb=plan.max_file_size_mb,
+        max_quality=plan.max_quality,
+        max_concurrent_downloads=plan.max_concurrent_downloads,
+        priority_processing=plan.priority_processing,
+        forced_join_required=plan.forced_join_required,
+        is_unlimited=plan.is_unlimited,
+        sort_order=plan.sort_order,
+        is_system=plan.is_system,
+        is_active=plan.is_active,
+        is_deleted=plan.deleted_at is not None,
+        created_at=plan.created_at,
+        updated_at=plan.updated_at,
+    )
+
+
 def management_http_exception(exc: Exception) -> HTTPException:
     detail = {
         "code": getattr(exc, "code", "admin_management_error"),
@@ -144,6 +177,24 @@ def management_http_exception(exc: Exception) -> HTTPException:
                 "message": "The requested change conflicts with current data",
             }
 
+        return HTTPException(status_code=409, detail=detail)
+
+    return HTTPException(status_code=422, detail=detail)
+
+
+def plan_http_exception(exc: Exception) -> HTTPException:
+    detail = {
+        "code": getattr(exc, "code", "plan_management_error"),
+        "message": str(exc),
+    }
+
+    if isinstance(exc, AdminAccessDenied):
+        return HTTPException(status_code=403, detail=detail)
+
+    if isinstance(exc, PlanNotFound):
+        return HTTPException(status_code=404, detail=detail)
+
+    if isinstance(exc, (PlanConflict, IntegrityError)):
         return HTTPException(status_code=409, detail=detail)
 
     return HTTPException(status_code=422, detail=detail)
@@ -232,6 +283,138 @@ async def update_application_setting(
     except (SettingValidationError, SettingEncryptionError) as exc:
         await db.rollback()
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.get(
+    "/plans",
+    response_model=list[AdminPlanResponse],
+)
+async def list_plans(
+    actor_telegram_id: int = Query(),
+    include_inactive: bool = Query(default=True),
+    db: AsyncSession = Depends(get_db),
+) -> list[AdminPlanResponse]:
+    try:
+        await AdminAccessService(db).require_permission(
+            actor_telegram_id,
+            PermissionCode.PLANS_MANAGE,
+        )
+        plans = await PlanManagementService(db).list_plans(
+            include_inactive=include_inactive,
+        )
+        return [serialize_plan(plan) for plan in plans]
+    except (AdminAccessDenied, PlanManagementError) as exc:
+        raise plan_http_exception(exc) from exc
+
+
+@router.get(
+    "/plans/{plan_id}",
+    response_model=AdminPlanResponse,
+)
+async def get_plan(
+    plan_id: int,
+    actor_telegram_id: int = Query(),
+    db: AsyncSession = Depends(get_db),
+) -> AdminPlanResponse:
+    try:
+        await AdminAccessService(db).require_permission(
+            actor_telegram_id,
+            PermissionCode.PLANS_MANAGE,
+        )
+        plan = await PlanManagementService(db).get_plan(plan_id)
+        return serialize_plan(plan)
+    except (AdminAccessDenied, PlanManagementError) as exc:
+        raise plan_http_exception(exc) from exc
+
+
+@router.post(
+    "/plans",
+    response_model=AdminPlanResponse,
+    status_code=201,
+)
+async def create_plan(
+    data: AdminPlanCreate,
+    db: AsyncSession = Depends(get_db),
+) -> AdminPlanResponse:
+    try:
+        context = await AdminAccessService(db).require_permission(
+            data.actor_telegram_id,
+            PermissionCode.PLANS_MANAGE,
+        )
+
+        if context.user_id is None:
+            raise AdminAccessDenied("Administrator user is not registered")
+
+        plan = await PlanManagementService(db).create_plan(
+            actor_user_id=context.user_id,
+            actor_telegram_id=data.actor_telegram_id,
+            reason=data.reason,
+            name=data.name,
+            description=data.description,
+            duration_days=data.duration_days,
+            price=data.price,
+            daily_download_limit=data.daily_download_limit,
+            max_file_size_mb=data.max_file_size_mb,
+            max_quality=data.max_quality,
+            max_concurrent_downloads=data.max_concurrent_downloads,
+            priority_processing=data.priority_processing,
+            forced_join_required=data.forced_join_required,
+            sort_order=data.sort_order,
+            is_active=data.is_active,
+        )
+        await db.commit()
+        await db.refresh(plan)
+        return serialize_plan(plan)
+    except (AdminAccessDenied, PlanManagementError, IntegrityError) as exc:
+        await db.rollback()
+        raise plan_http_exception(exc) from exc
+
+
+@router.patch(
+    "/plans/{plan_id}",
+    response_model=AdminPlanResponse,
+)
+async def update_plan(
+    plan_id: int,
+    data: AdminPlanUpdate,
+    db: AsyncSession = Depends(get_db),
+) -> AdminPlanResponse:
+    try:
+        context = await AdminAccessService(db).require_permission(
+            data.actor_telegram_id,
+            PermissionCode.PLANS_MANAGE,
+        )
+
+        if context.user_id is None:
+            raise AdminAccessDenied("Administrator user is not registered")
+
+        plan = await PlanManagementService(db).update_plan(
+            plan_id=plan_id,
+            actor_user_id=context.user_id,
+            actor_telegram_id=data.actor_telegram_id,
+            reason=data.reason,
+            name=data.name,
+            description=data.description,
+            description_supplied="description" in data.model_fields_set,
+            duration_days=data.duration_days,
+            price=data.price,
+            daily_download_limit=data.daily_download_limit,
+            daily_limit_supplied="daily_download_limit" in data.model_fields_set,
+            max_file_size_mb=data.max_file_size_mb,
+            max_quality=data.max_quality,
+            max_concurrent_downloads=data.max_concurrent_downloads,
+            priority_processing=data.priority_processing,
+            forced_join_required=data.forced_join_required,
+            sort_order=data.sort_order,
+            is_active=data.is_active,
+            is_deleted=data.is_deleted,
+        )
+        await db.commit()
+        await db.refresh(plan)
+        return serialize_plan(plan)
+    except (AdminAccessDenied, PlanManagementError, IntegrityError) as exc:
+        await db.rollback()
+        raise plan_http_exception(exc) from exc
 
 
 @router.get(
