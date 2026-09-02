@@ -84,19 +84,16 @@ class Plan(Base, TimestampMixin):
 
     daily_download_limit: Mapped[int | None] = mapped_column(
         Integer,
-        default=3,
         nullable=True,
     )
 
     max_file_size_mb: Mapped[int | None] = mapped_column(
         Integer,
-        default=300,
         nullable=True,
     )
 
     max_quality: Mapped[int | None] = mapped_column(
         Integer,
-        default=720,
         nullable=True,
     )
 
