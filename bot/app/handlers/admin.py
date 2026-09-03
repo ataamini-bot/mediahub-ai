@@ -459,20 +459,26 @@ async def _edit_permission_picker(message: Message, data: dict) -> None:
     )
 
 
-@router.message(Command("admin"))
-async def admin_command(message: Message, state: FSMContext) -> None:
+async def show_admin_panel_message(
+    message: Message,
+    state: FSMContext,
+    *,
+    register_user: bool = True,
+) -> bool:
+    """Open the admin panel for an authorized private-chat user."""
     if message.from_user is None:
-        return
+        return False
 
-    try:
-        await register_telegram_user(message)
-    except Exception:
-        return
+    if register_user:
+        try:
+            await register_telegram_user(message)
+        except Exception:
+            return False
 
     context = await _context_or_none(message.from_user.id)
 
     if context is None:
-        return
+        return False
 
     await state.clear()
     permissions = set(context.get("permissions", []))
@@ -484,6 +490,12 @@ async def admin_command(message: Message, state: FSMContext) -> None:
             is_superadmin=bool(context.get("is_superadmin")),
         ),
     )
+    return True
+
+
+@router.message(Command("admin"))
+async def admin_command(message: Message, state: FSMContext) -> None:
+    await show_admin_panel_message(message, state)
 
 
 @router.callback_query(F.data == "admin:open")

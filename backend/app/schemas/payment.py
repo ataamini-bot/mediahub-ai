@@ -2,8 +2,9 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, computed_field, field_validator
 
+from app.core.language import effective_language as resolve_effective_language
 from app.models.payment import PaymentStatus
 
 
@@ -119,6 +120,17 @@ class PaymentUserResponse(BaseModel):
     username: str | None
     first_name: str | None
     last_name: str | None
+    language_code: str | None
+    preferred_language: str | None
+    is_admin: bool
+
+    @computed_field(return_type=str)
+    @property
+    def effective_language(self) -> str:
+        return resolve_effective_language(
+            preferred_language=self.preferred_language,
+            telegram_language_code=self.language_code,
+        )
 
     model_config = {"from_attributes": True}
 

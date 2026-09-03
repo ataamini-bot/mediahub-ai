@@ -11,10 +11,12 @@ from aiogram.types import CallbackQuery, ForceReply, Message
 from app.keyboards.payment import (
     build_admin_payment_keyboard,
     build_home_keyboard,
+    build_home_reply_keyboard,
     build_payment_offers_keyboard,
     build_receipt_cancel_keyboard,
     format_toman,
 )
+from app.i18n import normalize_language
 from app.services.backend import (
     BackendAPIError,
     approve_manual_payment,
@@ -50,6 +52,15 @@ ADMIN_PAYMENT_TOPIC_ID = _parse_int_env(
     "ADMIN_NOTIFICATIONS_PAYMENTS_TOPIC_ID"
 )
 DISPLAY_TIMEZONE = ZoneInfo(os.getenv("DISPLAY_TIMEZONE", "Asia/Tehran"))
+
+
+def _user_home_reply_keyboard(user: dict):
+    return build_home_reply_keyboard(
+        language=normalize_language(
+            user.get("effective_language") or user.get("language_code")
+        ),
+        include_admin=bool(user.get("is_admin")),
+    )
 
 
 def _find_offer(configuration: dict, code: str) -> dict | None:
@@ -217,6 +228,7 @@ async def _notify_user_approved(message: Message, result: dict) -> None:
             f"<code>{_format_datetime(subscription.get('expires_at'))}</code>"
         ),
         parse_mode="HTML",
+        reply_markup=_user_home_reply_keyboard(user),
     )
 
 
@@ -234,7 +246,67 @@ async def _notify_user_rejected(message: Message, result: dict) -> None:
             "می‌توانید پس از رفع مشکل، رسید جدیدی ثبت کنید."
         ),
         parse_mode="HTML",
+        reply_markup=_user_home_reply_keyboard(user),
     )
+
+
+async def send_payment_offers_menu(
+    message: Message,
+    state: FSMContext,
+) -> None:
+    """Open subscription offers from the persistent reply keyboard."""
+    try:
+        configuration = await get_payment_configuration(
+            select_destination=False,
+        )
+        await state.clear()
+        await message.answer(
+            (
+                "💎 <b>خرید اشتراک</b>\n\n"
+                "پلن موردنظر را انتخاب کنید:"
+            ),
+            parse_mode="HTML",
+            reply_markup=build_payment_offers_keyboard(
+                configuration["offers"]
+            ),
+        )
+    except BackendAPIError as exc:
+        await message.answer(
+            _payment_error_message(exc),
+            parse_mode="HTML",
+        )
+
+
+def _subscription_status_text(result: dict) -> str:
+    if not result.get("is_active"):
+        return (
+            "👤 <b>وضعیت اشتراک</b>\n\n"
+            "در حال حاضر اشتراک فعالی ندارید."
+        )
+
+    plan_name = html.escape(str(result.get("plan_name") or "—"))
+    return (
+        "👤 <b>وضعیت اشتراک</b>\n\n"
+        "✅ اشتراک شما فعال است.\n"
+        f"💎 پلن: <b>{plan_name}</b>\n"
+        "📅 اعتبار تا: "
+        f"<code>{_format_datetime(result.get('expires_at'))}</code>"
+    )
+
+
+async def send_subscription_status(
+    message: Message,
+    telegram_id: int,
+) -> None:
+    """Show subscription status from the persistent reply keyboard."""
+    try:
+        result = await get_current_subscription(telegram_id)
+        await message.answer(
+            _subscription_status_text(result),
+            parse_mode="HTML",
+        )
+    except BackendAPIError:
+        await message.answer("دریافت وضعیت اشتراک ممکن نشد.")
 
 
 @router.callback_query(F.data == "payment:open")
@@ -280,23 +352,8 @@ async def payment_status(callback: CallbackQuery) -> None:
     try:
         result = await get_current_subscription(callback.from_user.id)
 
-        if not result.get("is_active"):
-            text = (
-                "👤 <b>وضعیت اشتراک</b>\n\n"
-                "در حال حاضر اشتراک فعالی ندارید."
-            )
-        else:
-            plan_name = html.escape(str(result.get("plan_name") or "—"))
-            text = (
-                "👤 <b>وضعیت اشتراک</b>\n\n"
-                "✅ اشتراک شما فعال است.\n"
-                f"💎 پلن: <b>{plan_name}</b>\n"
-                "📅 اعتبار تا: "
-                f"<code>{_format_datetime(result.get('expires_at'))}</code>"
-            )
-
         await callback.message.edit_text(
-            text,
+            _subscription_status_text(result),
             parse_mode="HTML",
             reply_markup=build_home_keyboard(),
         )
@@ -509,7 +566,7 @@ async def receive_payment_receipt(
                 "پس از بررسی مدیر، نتیجه همین‌جا اطلاع داده می‌شود."
             ),
             parse_mode="HTML",
-            reply_markup=build_home_keyboard(),
+            reply_markup=_user_home_reply_keyboard(result["user"]),
         )
     except BackendAPIError as exc:
         if isinstance(exc.detail, dict) and exc.detail.get("code") == "pending_payment_exists":

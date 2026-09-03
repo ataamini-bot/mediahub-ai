@@ -18,6 +18,8 @@ MESSAGES: dict[str, dict[str, str]] = {
         "home.subscription": "👤 وضعیت اشتراک من",
         "home.language": "🌐 تغییر زبان",
         "home.admin": "⚙️ پنل مدیریت",
+        "home.placeholder": "لینک رسانه را بفرستید…",
+        "home.ready": "از منوی پایین یکی از گزینه‌ها را انتخاب کنید.",
         "language.changed": "✅ زبان ربات به فارسی تغییر کرد.",
         "language.failed": "❌ تغییر زبان انجام نشد. دوباره تلاش کنید.",
     },
@@ -33,6 +35,8 @@ MESSAGES: dict[str, dict[str, str]] = {
         "home.subscription": "👤 My subscription",
         "home.language": "🌐 Change language",
         "home.admin": "⚙️ Admin panel",
+        "home.placeholder": "Send a media link…",
+        "home.ready": "Choose an option from the menu below.",
         "language.changed": "✅ The bot language was changed to English.",
         "language.failed": "❌ Could not change the language. Please retry.",
     },
@@ -53,3 +57,23 @@ def translate(language: str | None, key: str, **values: Any) -> str:
         template = MESSAGES[DEFAULT_LANGUAGE].get(key, key)
 
     return template.format(**values)
+
+
+HOME_ACTION_KEYS: dict[str, str] = {
+    "home.buy": "buy",
+    "home.subscription": "subscription",
+    "home.language": "language",
+    "home.admin": "admin",
+}
+
+
+HOME_BUTTON_ACTIONS: dict[str, str] = {
+    translate(language, message_key): action
+    for language in SUPPORTED_LANGUAGES
+    for message_key, action in HOME_ACTION_KEYS.items()
+}
+
+
+def home_action_for_text(value: str | None) -> str | None:
+    """Resolve a localized persistent-menu button without fuzzy matching."""
+    return HOME_BUTTON_ACTIONS.get(str(value or "").strip())

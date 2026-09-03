@@ -16,6 +16,10 @@ def test_download_filter_rejects_telegram_commands():
         "/language",
         "/admin@MediaHubBot",
         "   /admin",
+        "💎 خرید اشتراک",
+        "👤 My subscription",
+        "🌐 تغییر زبان",
+        "⚙️ Admin panel",
     ):
         assert _matches_download_handler(text) is False
 

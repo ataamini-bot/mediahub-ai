@@ -1,6 +1,7 @@
 import os
 from datetime import datetime, timezone
 from decimal import Decimal
+from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
@@ -24,6 +25,7 @@ from app.core.config import settings  # noqa: E402
 from app.core.internal_auth import require_internal_api_key  # noqa: E402
 from app.main import app  # noqa: E402
 from app.schemas.payment import PaymentCreate  # noqa: E402
+from app.schemas.payment import PaymentUserResponse  # noqa: E402
 from app.services.payment import (  # noqa: E402
     InvalidReceipt,
     PaymentService,
@@ -97,6 +99,24 @@ def test_receipt_validation_rejects_large_file(monkeypatch):
 
     with pytest.raises(InvalidReceipt):
         PaymentService.validate_receipt(data)
+
+
+def test_payment_user_response_includes_home_menu_context():
+    response = PaymentUserResponse.model_validate(
+        SimpleNamespace(
+            telegram_id=123456789,
+            username="sample",
+            first_name="Sample",
+            last_name="User",
+            language_code="en-US",
+            preferred_language="fa",
+            is_admin=True,
+        )
+    )
+
+    assert response.effective_language == "fa"
+    assert response.is_admin is True
+    assert response.model_dump()["effective_language"] == "fa"
 
 
 def test_receipt_validation_rejects_unknown_document_type():

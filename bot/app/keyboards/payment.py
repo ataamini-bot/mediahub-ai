@@ -1,4 +1,9 @@
-from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+from aiogram.types import (
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    KeyboardButton,
+    ReplyKeyboardMarkup,
+)
 
 from app.i18n import translate
 
@@ -50,6 +55,34 @@ def build_home_keyboard(
 
     return InlineKeyboardMarkup(
         inline_keyboard=rows
+    )
+
+
+def build_home_reply_keyboard(
+    language: str = "fa",
+    *,
+    include_admin: bool = False,
+) -> ReplyKeyboardMarkup:
+    """Build the persistent menu displayed beside the Telegram input field."""
+    rows = [
+        [
+            KeyboardButton(text=translate(language, "home.buy")),
+            KeyboardButton(text=translate(language, "home.subscription")),
+        ],
+        [KeyboardButton(text=translate(language, "home.language"))],
+    ]
+
+    if include_admin:
+        rows.append(
+            [KeyboardButton(text=translate(language, "home.admin"))]
+        )
+
+    return ReplyKeyboardMarkup(
+        keyboard=rows,
+        resize_keyboard=True,
+        is_persistent=True,
+        one_time_keyboard=False,
+        input_field_placeholder=translate(language, "home.placeholder"),
     )
 
 

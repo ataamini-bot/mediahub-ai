@@ -36,7 +36,10 @@ from app.keyboards.quality import (
     build_quality_keyboard,
 )
 from app.keyboards.payment import (
-    build_home_keyboard,
+    build_home_reply_keyboard,
+)
+from app.handlers.home import (
+    router as home_router,
 )
 from app.handlers.admin import (
     router as admin_router,
@@ -53,7 +56,7 @@ from app.handlers.language import (
 from app.handlers.payments import (
     router as payments_router,
 )
-from app.i18n import normalize_language, translate
+from app.i18n import home_action_for_text, normalize_language, translate
 
 from app.utils.formatting import (
     format_file_size,
@@ -125,6 +128,9 @@ dp = Dispatcher(
     )
 )
 dp.include_router(
+    home_router
+)
+dp.include_router(
     payments_router
 )
 dp.include_router(
@@ -167,6 +173,7 @@ class DownloadMessageFilter(
         return bool(
             text.strip()
             and not text.lstrip().startswith("/")
+            and home_action_for_text(text) is None
         )
 
 
@@ -2560,7 +2567,7 @@ async def start_handler(
             ),
             parse_mode="HTML",
             reply_markup=(
-                build_home_keyboard(
+                build_home_reply_keyboard(
                     language=language,
                     include_admin=(
                         bool(user.get("is_admin"))
