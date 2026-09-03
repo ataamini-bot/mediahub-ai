@@ -23,6 +23,7 @@ class PermissionCode:
     SETTINGS_MANAGE = "settings.manage"
     PAYMENTS_VIEW = "payments.view"
     PAYMENTS_REVIEW = "payments.review"
+    PAYMENT_DESTINATIONS_MANAGE = "payment_destinations.manage"
     PLANS_MANAGE = "plans.manage"
     AUDIT_VIEW = "audit.view"
 

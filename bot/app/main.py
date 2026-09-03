@@ -41,6 +41,12 @@ from app.keyboards.payment import (
 from app.handlers.admin import (
     router as admin_router,
 )
+from app.handlers.admin_settings import (
+    router as admin_settings_router,
+)
+from app.handlers.admin_finance import (
+    router as admin_finance_router,
+)
 from app.handlers.language import (
     router as language_router,
 )
@@ -122,6 +128,12 @@ dp.include_router(
     payments_router
 )
 dp.include_router(
+    admin_settings_router
+)
+dp.include_router(
+    admin_finance_router
+)
+dp.include_router(
     admin_router
 )
 dp.include_router(
@@ -191,6 +203,15 @@ def download_error_text(exc: Exception) -> str:
         return "ابتدا دستور /start را بفرستید و دوباره تلاش کنید."
     if code == "download_plan_unavailable":
         return "پلن دانلود در حال حاضر در دسترس نیست؛ با پشتیبانی تماس بگیرید."
+    if code == "maintenance_mode":
+        return "🛠 ربات موقتاً در حالت تعمیرات است؛ کمی بعد تلاش کنید."
+    if code == "downloads_disabled":
+        return "⏸ دریافت لینک و دانلود جدید موقتاً غیرفعال است."
+    if code == "download_temporarily_unavailable":
+        reason_code = str(exc.detail.get("reason_code") or "")
+        if reason_code == "maintenance_mode":
+            return "🛠 ربات موقتاً در حالت تعمیرات است؛ کمی بعد تلاش کنید."
+        return "⏸ دریافت دانلود جدید موقتاً غیرفعال است."
 
     return str(exc.detail.get("message") or exc)[:1000]
 
@@ -2541,7 +2562,10 @@ async def start_handler(
             reply_markup=(
                 build_home_keyboard(
                     language=language,
-                    include_admin=bool(user.get("is_admin")),
+                    include_admin=(
+                        bool(user.get("is_admin"))
+                        and message.chat.type == "private"
+                    ),
                 )
             ),
         )

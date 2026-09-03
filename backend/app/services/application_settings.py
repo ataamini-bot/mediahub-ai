@@ -155,6 +155,25 @@ class ApplicationSettingsService:
         normalized_key = self.normalize_key(key)
         normalized_category = self.normalize_category(category)
 
+        # Import lazily to avoid a module cycle: managed settings use this
+        # service for reads, while writes receive stricter type validation.
+        from app.services.managed_settings import (
+            MANAGED_SETTINGS,
+            validate_managed_setting,
+        )
+
+        definition = MANAGED_SETTINGS.get(normalized_key)
+        if definition is not None:
+            if normalized_category != definition.category:
+                raise SettingValidationError(
+                    "Managed setting category cannot be changed"
+                )
+            if is_sensitive:
+                raise SettingValidationError(
+                    "Managed runtime setting cannot be sensitive"
+                )
+            value = validate_managed_setting(normalized_key, value)
+
         # Validate JSON even for public settings before touching the row.
         try:
             json.dumps(value, ensure_ascii=False)

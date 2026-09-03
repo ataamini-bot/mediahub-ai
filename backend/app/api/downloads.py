@@ -35,6 +35,10 @@ from app.services.download_access import (
 from app.models.download_job import (
     DownloadJobStatus,
 )
+from app.services.managed_settings import (
+    PublicOperationDisabled,
+    ensure_public_operation,
+)
 
 
 router = APIRouter(
@@ -121,8 +125,11 @@ async def get_media_info(
         default=None,
         ge=1,
     ),
+    db: AsyncSession = Depends(get_db),
 ):
     try:
+
+        await ensure_public_operation(db, "downloads")
 
         media_info = await asyncio.to_thread(
             DownloadService.get_media_info,
@@ -131,6 +138,13 @@ async def get_media_info(
         )
 
         return media_info
+
+    except PublicOperationDisabled as exc:
+
+        raise HTTPException(
+            status_code=503,
+            detail=exc.detail(),
+        ) from exc
 
     except Exception as exc:
 

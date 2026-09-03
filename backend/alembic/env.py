@@ -19,9 +19,11 @@ from app.models import (  # noqa: F401
     AuditLog,
     DownloadJob,
     Payment,
+    PaymentCard,
     Plan,
     Subscription,
     User,
+    UsdtDestination,
     Wallet,
 )
 

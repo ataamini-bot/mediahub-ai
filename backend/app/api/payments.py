@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.internal_auth import require_internal_api_key
@@ -28,6 +28,8 @@ from app.services.payment_offers import (
     PaymentConfigurationError,
     get_payment_configuration,
 )
+from app.services.managed_settings import PublicOperationDisabled
+from app.services.payment_management import PaymentDestinationValidation
 
 
 router = APIRouter(
@@ -55,12 +57,22 @@ def serialize_action(result: PaymentActionResult) -> PaymentActionResponse:
     response_model=PaymentConfigurationResponse,
 )
 async def payment_configuration(
+    select_destination: bool = Query(default=True),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     try:
-        return await get_payment_configuration(db)
+        result = await get_payment_configuration(
+            db,
+            select_destination=select_destination,
+        )
+        await db.commit()
+        return result
     except PaymentConfigurationError as exc:
+        await db.rollback()
         raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except PublicOperationDisabled as exc:
+        await db.rollback()
+        raise HTTPException(status_code=503, detail=exc.detail()) from exc
 
 
 @router.post("", response_model=PaymentActionResponse)
@@ -94,6 +106,10 @@ async def create_payment(
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except PermissionError as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except PublicOperationDisabled as exc:
+        raise HTTPException(status_code=503, detail=exc.detail()) from exc
+    except PaymentDestinationValidation as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 @router.patch(

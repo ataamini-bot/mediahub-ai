@@ -152,7 +152,8 @@ def test_payment_configuration_endpoint(monkeypatch):
     key = "b" * 64
     monkeypatch.setattr(settings, "bot_backend_api_key", key)
 
-    async def fake_configuration(_db):
+    async def fake_configuration(_db, *, select_destination=True):
+        assert select_destination is True
         return {
             "offers": [
                 {

@@ -12,6 +12,11 @@ from app.models.download_job import DownloadJob, DownloadJobStatus
 from app.models.plan import Plan
 from app.models.subscription import Subscription, SubscriptionStatus
 from app.models.user import User, UserStatus
+from app.services.managed_settings import (
+    PublicOperationDisabled,
+    ensure_public_operation,
+    get_managed_setting,
+)
 
 
 TECHNICAL_MAX_FILE_SIZE_MB = 1900
@@ -86,6 +91,11 @@ class DownloadFileSizeLimitExceeded(DownloadAccessError):
     status_code = 413
 
 
+class DownloadTemporarilyUnavailable(DownloadAccessError):
+    code = "download_temporarily_unavailable"
+    status_code = 503
+
+
 @dataclass(frozen=True, slots=True)
 class DownloadEntitlement:
     user_id: int
@@ -135,6 +145,14 @@ class DownloadAccessService:
         quality: str | None,
         estimated_size_bytes: int | None,
     ) -> DownloadEntitlement:
+        try:
+            await ensure_public_operation(self.session, "downloads")
+        except PublicOperationDisabled as exc:
+            raise DownloadTemporarilyUnavailable(
+                str(exc),
+                reason_code=exc.code,
+            ) from exc
+
         user_result = await self.session.execute(
             select(User)
             .where(User.telegram_id == telegram_id)
@@ -340,7 +358,11 @@ class DownloadAccessService:
         if limit is None:
             return
 
-        day_start = quota_day_start_utc()
+        timezone_name = await get_managed_setting(
+            self.session,
+            "quota.timezone",
+        )
+        day_start = quota_day_start_utc(timezone_name=timezone_name)
         reserved_statuses = (
             DownloadJobStatus.PENDING,
             DownloadJobStatus.PROCESSING,

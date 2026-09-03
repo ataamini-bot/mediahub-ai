@@ -122,6 +122,177 @@ async def list_application_settings(
     return list(result)
 
 
+async def update_application_setting(
+    *,
+    actor_telegram_id: int,
+    key: str,
+    category: str,
+    value: object,
+    expected_version: int,
+    description: str | None,
+) -> dict:
+    return await _payment_request(
+        "PUT",
+        f"/admin/settings/{key}",
+        payload={
+            "actor_telegram_id": actor_telegram_id,
+            "category": category,
+            "value": value,
+            "is_sensitive": False,
+            "description": description,
+            "expected_version": expected_version,
+        },
+    )
+
+
+async def get_admin_payment_summary(actor_telegram_id: int) -> dict:
+    return await _payment_request(
+        "GET",
+        f"/admin/payments/summary?actor_telegram_id={actor_telegram_id}",
+    )
+
+
+async def list_admin_payments(
+    actor_telegram_id: int,
+    *,
+    status: str | None,
+    page: int,
+    page_size: int = 8,
+) -> dict:
+    status_query = f"&status={status}" if status else ""
+    return await _payment_request(
+        "GET",
+        f"/admin/payments?actor_telegram_id={actor_telegram_id}"
+        f"&page={page}&page_size={page_size}{status_query}",
+    )
+
+
+async def get_admin_payment(
+    *,
+    actor_telegram_id: int,
+    payment_id: int,
+) -> dict:
+    return await _payment_request(
+        "GET",
+        f"/admin/payments/{payment_id}"
+        f"?actor_telegram_id={actor_telegram_id}",
+    )
+
+
+async def list_payment_cards(actor_telegram_id: int) -> list[dict]:
+    result = await _payment_request(
+        "GET",
+        f"/admin/payment-cards?actor_telegram_id={actor_telegram_id}",
+    )
+    return list(result)
+
+
+async def get_payment_card(
+    *,
+    actor_telegram_id: int,
+    card_id: int,
+) -> dict:
+    return await _payment_request(
+        "GET",
+        f"/admin/payment-cards/{card_id}"
+        f"?actor_telegram_id={actor_telegram_id}",
+    )
+
+
+async def create_payment_card(
+    *,
+    actor_telegram_id: int,
+    data: dict,
+) -> dict:
+    return await _payment_request(
+        "POST",
+        "/admin/payment-cards",
+        payload={"actor_telegram_id": actor_telegram_id, **data},
+    )
+
+
+async def update_payment_card(
+    *,
+    actor_telegram_id: int,
+    card_id: int,
+    changes: dict,
+) -> dict:
+    return await _payment_request(
+        "PATCH",
+        f"/admin/payment-cards/{card_id}",
+        payload={"actor_telegram_id": actor_telegram_id, **changes},
+    )
+
+
+async def delete_payment_card(
+    *,
+    actor_telegram_id: int,
+    card_id: int,
+) -> None:
+    await _payment_request(
+        "DELETE",
+        f"/admin/payment-cards/{card_id}"
+        f"?actor_telegram_id={actor_telegram_id}",
+    )
+
+
+async def list_usdt_destinations(actor_telegram_id: int) -> list[dict]:
+    result = await _payment_request(
+        "GET",
+        f"/admin/usdt-destinations?actor_telegram_id={actor_telegram_id}",
+    )
+    return list(result)
+
+
+async def get_usdt_destination(
+    *,
+    actor_telegram_id: int,
+    destination_id: int,
+) -> dict:
+    return await _payment_request(
+        "GET",
+        f"/admin/usdt-destinations/{destination_id}"
+        f"?actor_telegram_id={actor_telegram_id}",
+    )
+
+
+async def create_usdt_destination(
+    *,
+    actor_telegram_id: int,
+    data: dict,
+) -> dict:
+    return await _payment_request(
+        "POST",
+        "/admin/usdt-destinations",
+        payload={"actor_telegram_id": actor_telegram_id, **data},
+    )
+
+
+async def update_usdt_destination(
+    *,
+    actor_telegram_id: int,
+    destination_id: int,
+    changes: dict,
+) -> dict:
+    return await _payment_request(
+        "PATCH",
+        f"/admin/usdt-destinations/{destination_id}",
+        payload={"actor_telegram_id": actor_telegram_id, **changes},
+    )
+
+
+async def delete_usdt_destination(
+    *,
+    actor_telegram_id: int,
+    destination_id: int,
+) -> None:
+    await _payment_request(
+        "DELETE",
+        f"/admin/usdt-destinations/{destination_id}"
+        f"?actor_telegram_id={actor_telegram_id}",
+    )
+
+
 async def list_admin_plans(
     actor_telegram_id: int,
     *,
@@ -377,7 +548,17 @@ async def get_media_info(
             headers=_internal_headers(),
         ) as response:
 
-            response.raise_for_status()
+            if response.status >= 400:
+                try:
+                    body = await response.json(content_type=None)
+                    detail = body.get("detail", body)
+                except Exception:
+                    detail = await response.text() or "Media request failed"
+
+                raise BackendAPIError(
+                    status_code=response.status,
+                    detail=detail,
+                )
 
             return (
                 await response.json()
@@ -621,13 +802,20 @@ async def _payment_request(
                     detail=detail,
                 )
 
+            if response.status == 204:
+                return {}
+
             return await response.json(content_type=None)
 
 
-async def get_payment_configuration() -> dict:
+async def get_payment_configuration(
+    *,
+    select_destination: bool = True,
+) -> dict:
+    flag = "true" if select_destination else "false"
     return await _payment_request(
         "GET",
-        "/payments/configuration",
+        f"/payments/configuration?select_destination={flag}",
     )
 
 
@@ -642,6 +830,7 @@ async def create_manual_payment(
     receipt_mime_type: str | None,
     receipt_file_name: str | None,
     user_receipt_message_id: int,
+    payment_card_id: int | None,
 ) -> dict:
     return await _payment_request(
         "POST",
@@ -656,6 +845,7 @@ async def create_manual_payment(
             "receipt_mime_type": receipt_mime_type,
             "receipt_file_name": receipt_file_name,
             "user_receipt_message_id": user_receipt_message_id,
+            "payment_card_id": payment_card_id,
         },
     )
 

@@ -22,6 +22,8 @@ class PaymentOfferResponse(BaseModel):
 
 
 class PaymentDestinationResponse(BaseModel):
+    id: int | None = None
+    label: str | None = None
     card_number: str
     card_holder: str
     bank_name: str | None = None
@@ -34,13 +36,14 @@ class PaymentReceiptRulesResponse(BaseModel):
 
 class PaymentConfigurationResponse(BaseModel):
     offers: list[PaymentOfferResponse]
-    destination: PaymentDestinationResponse
+    destination: PaymentDestinationResponse | None
     receipt: PaymentReceiptRulesResponse
 
 
 class PaymentCreate(BaseModel):
     telegram_id: int = Field(gt=0)
     offer_code: str = Field(min_length=3, max_length=100)
+    payment_card_id: int | None = Field(default=None, gt=0)
     receipt_file_id: str = Field(min_length=1, max_length=512)
     receipt_file_unique_id: str | None = Field(
         default=None,
@@ -102,6 +105,9 @@ class PaymentResponse(BaseModel):
     reviewed_at: datetime | None
     rejection_reason: str | None
     subscription_id: int | None
+    payment_method: str
+    payment_card_id: int | None
+    payment_destination_snapshot: dict[str, Any]
     created_at: datetime
     updated_at: datetime
 

@@ -2,7 +2,16 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    field_validator,
+    model_validator,
+)
+
+from app.models.payment import PaymentStatus
+from app.services.payment_management import normalize_card_number
 
 
 class AdminContextResponse(BaseModel):
@@ -32,6 +41,255 @@ class ApplicationSettingResponse(BaseModel):
     is_configured: bool
     description: str | None
     version: int
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class AdminPaymentSummaryResponse(BaseModel):
+    pending: int
+    approved: int
+    rejected: int
+    cards: int
+    active_cards: int
+    usdt_destinations: int
+    active_usdt_destinations: int
+    legacy_card_configured: bool
+
+
+class AdminPaymentListItem(BaseModel):
+    id: int
+    status: PaymentStatus
+    amount: Decimal
+    payment_method: str
+    plan_name_snapshot: str
+    duration_days: int
+    receipt_file_id: str
+    receipt_file_type: str
+    receipt_mime_type: str | None
+    payment_destination_snapshot: dict
+    reviewed_by_telegram_id: int | None
+    reviewed_at: datetime | None
+    rejection_reason: str | None
+    created_at: datetime
+    user_telegram_id: int
+    username: str | None
+    first_name: str | None
+    last_name: str | None
+
+
+class AdminPaymentPageResponse(BaseModel):
+    items: list[AdminPaymentListItem]
+    total: int
+    page: int
+    page_size: int
+
+
+class AdminPaymentCardCreate(BaseModel):
+    actor_telegram_id: int = Field(gt=0)
+    label: str = Field(min_length=2, max_length=100)
+    card_number: str
+    card_holder: str = Field(min_length=2, max_length=120)
+    bank_name: str | None = Field(default=None, max_length=100)
+    sort_order: int = Field(default=0, ge=0, le=100000)
+    is_active: bool = True
+
+    @field_validator("card_number")
+    @classmethod
+    def valid_card_number(cls, value: str) -> str:
+        return normalize_card_number(value)
+
+    @field_validator("label", "card_holder")
+    @classmethod
+    def normalize_required_card_text(cls, value: str) -> str:
+        normalized = value.strip()
+        if len(normalized) < 2:
+            raise ValueError("Card text fields cannot be blank")
+        return normalized
+
+    @field_validator("bank_name")
+    @classmethod
+    def normalize_optional_card_text(cls, value: str | None) -> str | None:
+        normalized = str(value or "").strip()
+        return normalized or None
+
+
+class AdminPaymentCardUpdate(BaseModel):
+    actor_telegram_id: int = Field(gt=0)
+    label: str | None = Field(default=None, min_length=2, max_length=100)
+    card_number: str | None = None
+    card_holder: str | None = Field(default=None, min_length=2, max_length=120)
+    bank_name: str | None = Field(default=None, max_length=100)
+    sort_order: int | None = Field(default=None, ge=0, le=100000)
+    is_active: bool | None = None
+
+    @field_validator("card_number")
+    @classmethod
+    def valid_card_number(cls, value: str | None) -> str | None:
+        return normalize_card_number(value) if value is not None else None
+
+    @field_validator("label", "card_holder")
+    @classmethod
+    def normalize_required_card_text(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        if len(normalized) < 2:
+            raise ValueError("Card text fields cannot be blank")
+        return normalized
+
+    @field_validator("bank_name")
+    @classmethod
+    def normalize_optional_card_text(cls, value: str | None) -> str | None:
+        normalized = str(value or "").strip()
+        return normalized or None
+
+    @model_validator(mode="after")
+    def at_least_one_change(self):
+        if self.model_fields_set == {"actor_telegram_id"}:
+            raise ValueError("At least one card field must change")
+        return self
+
+
+class AdminPaymentCardResponse(BaseModel):
+    id: int
+    label: str
+    card_number: str
+    card_holder: str
+    bank_name: str | None
+    is_active: bool
+    sort_order: int
+    selection_count: int
+    last_selected_at: datetime | None
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class AdminUsdtDestinationCreate(BaseModel):
+    actor_telegram_id: int = Field(gt=0)
+    label: str = Field(min_length=2, max_length=100)
+    network_name: str = Field(min_length=2, max_length=100)
+    network_code: str = Field(min_length=2, max_length=32)
+    address: str = Field(min_length=10, max_length=255)
+    asset_symbol: str = Field(default="USDT", min_length=2, max_length=20)
+    contract_address: str | None = Field(default=None, max_length=255)
+    explorer_url: str | None = Field(default=None, max_length=500)
+    confirmations_required: int = Field(default=20, ge=1, le=1000)
+    sort_order: int = Field(default=0, ge=0, le=100000)
+    is_active: bool = True
+
+    @field_validator("network_code", "asset_symbol")
+    @classmethod
+    def normalize_code(cls, value: str) -> str:
+        normalized = value.strip().upper()
+        if len(normalized) < 2:
+            raise ValueError("Network and asset codes cannot be blank")
+        return normalized
+
+    @field_validator("label", "network_name")
+    @classmethod
+    def normalize_required_usdt_text(cls, value: str) -> str:
+        normalized = value.strip()
+        if len(normalized) < 2:
+            raise ValueError("USDT text fields cannot be blank")
+        return normalized
+
+    @field_validator("contract_address", "explorer_url")
+    @classmethod
+    def normalize_optional_usdt_text(cls, value: str | None) -> str | None:
+        normalized = str(value or "").strip()
+        return normalized or None
+
+    @field_validator("address")
+    @classmethod
+    def normalize_address(cls, value: str) -> str:
+        normalized = value.strip()
+        if len(normalized) < 10 or any(
+            character.isspace() for character in normalized
+        ):
+            raise ValueError(
+                "Wallet address must be at least 10 characters without whitespace"
+            )
+        return normalized
+
+
+class AdminUsdtDestinationUpdate(BaseModel):
+    actor_telegram_id: int = Field(gt=0)
+    label: str | None = Field(default=None, min_length=2, max_length=100)
+    network_name: str | None = Field(default=None, min_length=2, max_length=100)
+    network_code: str | None = Field(default=None, min_length=2, max_length=32)
+    address: str | None = Field(default=None, min_length=10, max_length=255)
+    asset_symbol: str | None = Field(default=None, min_length=2, max_length=20)
+    contract_address: str | None = Field(default=None, max_length=255)
+    explorer_url: str | None = Field(default=None, max_length=500)
+    confirmations_required: int | None = Field(default=None, ge=1, le=1000)
+    sort_order: int | None = Field(default=None, ge=0, le=100000)
+    is_active: bool | None = None
+
+    @field_validator("network_code", "asset_symbol")
+    @classmethod
+    def normalize_code(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip().upper()
+        if len(normalized) < 2:
+            raise ValueError("Network and asset codes cannot be blank")
+        return normalized
+
+    @field_validator("label", "network_name")
+    @classmethod
+    def normalize_required_usdt_text(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        if len(normalized) < 2:
+            raise ValueError("USDT text fields cannot be blank")
+        return normalized
+
+    @field_validator("contract_address", "explorer_url")
+    @classmethod
+    def normalize_optional_usdt_text(cls, value: str | None) -> str | None:
+        normalized = str(value or "").strip()
+        return normalized or None
+
+    @field_validator("address")
+    @classmethod
+    def normalize_address(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        if len(normalized) < 10 or any(
+            character.isspace() for character in normalized
+        ):
+            raise ValueError(
+                "Wallet address must be at least 10 characters without whitespace"
+            )
+        return normalized
+
+    @model_validator(mode="after")
+    def at_least_one_change(self):
+        if self.model_fields_set == {"actor_telegram_id"}:
+            raise ValueError("At least one USDT destination field must change")
+        return self
+
+
+class AdminUsdtDestinationResponse(BaseModel):
+    id: int
+    label: str
+    network_name: str
+    network_code: str
+    address: str
+    asset_symbol: str
+    contract_address: str | None
+    explorer_url: str | None
+    confirmations_required: int
+    is_active: bool
+    sort_order: int
+    selection_count: int
+    last_selected_at: datetime | None
+    created_at: datetime
+    updated_at: datetime
 
     model_config = ConfigDict(from_attributes=True)
 

@@ -94,10 +94,28 @@ def _payment_error_message(exc: BackendAPIError) -> str:
                 "لطفاً تصویر یا فایل رسید جدید را ارسال کنید."
             )
 
+        if code == "maintenance_mode":
+            return (
+                "🛠 ربات موقتاً در حالت تعمیرات است.\n\n"
+                "لطفاً کمی بعد دوباره تلاش کنید."
+            )
+
+        if code == "payments_disabled":
+            return (
+                "⏸ خرید اشتراک موقتاً غیرفعال است.\n\n"
+                "لطفاً کمی بعد دوباره تلاش کنید."
+            )
+
     if exc.status_code == 503:
         return (
             "⚙️ سیستم پرداخت هنوز به‌طور کامل تنظیم نشده است.\n\n"
             "لطفاً با پشتیبانی تماس بگیرید."
+        )
+
+    if exc.status_code in {404, 409}:
+        return (
+            "🔄 اطلاعات پلن یا کارت پرداخت تغییر کرده است.\n\n"
+            "لطفاً خرید را لغو کنید و دوباره پلن را انتخاب کنید."
         )
 
     return (
@@ -228,7 +246,9 @@ async def open_payment_offers(
         return
 
     try:
-        configuration = await get_payment_configuration()
+        configuration = await get_payment_configuration(
+            select_destination=False,
+        )
         await state.clear()
         await callback.message.edit_text(
             (
@@ -299,7 +319,9 @@ async def select_payment_offer(
     offer_code = callback.data.rsplit(":", 1)[-1]
 
     try:
-        configuration = await get_payment_configuration()
+        configuration = await get_payment_configuration(
+            select_destination=True,
+        )
         offer = _find_offer(configuration, offer_code)
 
         if offer is None:
@@ -309,7 +331,12 @@ async def select_payment_offer(
         destination = configuration["destination"]
         receipt_rules = configuration["receipt"]
         await state.set_state(PaymentStates.waiting_for_receipt)
-        await state.update_data(offer_code=offer_code)
+        await state.update_data(
+            offer=offer,
+            offer_code=offer_code,
+            payment_card_id=destination.get("id"),
+            receipt_rules=receipt_rules,
+        )
 
         bank_line = ""
         if destination.get("bank_name"):
@@ -370,19 +397,16 @@ async def receive_payment_receipt(
 
     state_data = await state.get_data()
     offer_code = state_data.get("offer_code")
+    offer = state_data.get("offer")
+    receipt_rules = state_data.get("receipt_rules")
+    payment_card_id = state_data.get("payment_card_id")
 
-    if not offer_code:
+    if not offer_code or not isinstance(offer, dict):
         await state.clear()
         await message.answer("درخواست خرید منقضی شده است؛ دوباره پلن را انتخاب کنید.")
         return
 
     try:
-        configuration = await get_payment_configuration()
-        offer = _find_offer(configuration, offer_code)
-
-        if offer is None:
-            raise RuntimeError("Selected payment offer is no longer available")
-
         if ADMIN_PAYMENT_CHAT_ID is None or ADMIN_PAYMENT_TOPIC_ID is None:
             raise RuntimeError("Admin payments topic is not configured")
 
@@ -407,14 +431,14 @@ async def receive_payment_receipt(
             mime_type = (document.mime_type or "").lower()
             file_name = document.file_name
 
-            allowed_types = set(configuration["receipt"]["allowed_types"])
+            allowed_types = set((receipt_rules or {}).get("allowed_types", []))
             if mime_type not in allowed_types:
                 await message.answer(
                     "❌ فرمت رسید مجاز نیست. فقط تصویر یا PDF ارسال کنید."
                 )
                 return
 
-        max_size_mb = int(configuration["receipt"]["max_size_mb"])
+        max_size_mb = int((receipt_rules or {}).get("max_size_mb", 10))
         if file_size is not None and file_size > max_size_mb * 1024 * 1024:
             await message.answer(
                 f"❌ حجم رسید بیشتر از {max_size_mb} مگابایت است."
@@ -432,6 +456,9 @@ async def receive_payment_receipt(
             receipt_mime_type=mime_type,
             receipt_file_name=file_name,
             user_receipt_message_id=message.message_id,
+            payment_card_id=(
+                int(payment_card_id) if payment_card_id is not None else None
+            ),
         )
         payment_id = int(result["payment"]["id"])
         caption = _build_admin_caption(result, offer)

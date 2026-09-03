@@ -13,6 +13,11 @@ from app.models.user import User, UserStatus
 from app.schemas.payment import PaymentCreate
 from app.services.admin_access import AdminAccessService, PermissionCode
 from app.services.payment_offers import get_payment_offer
+from app.services.managed_settings import (
+    ensure_public_operation,
+    get_receipt_max_size_mb,
+)
+from app.services.payment_management import PaymentManagementService
 
 
 ALLOWED_RECEIPT_DOCUMENT_MIME_TYPES = {
@@ -71,8 +76,16 @@ class PaymentService:
         )
 
     @staticmethod
-    def validate_receipt(data: PaymentCreate) -> None:
-        max_size_bytes = settings.payment_receipt_max_size_mb * 1024 * 1024
+    def validate_receipt(
+        data: PaymentCreate,
+        max_size_mb: int | None = None,
+    ) -> None:
+        configured_maximum = (
+            settings.payment_receipt_max_size_mb
+            if max_size_mb is None
+            else max_size_mb
+        )
+        max_size_bytes = configured_maximum * 1024 * 1024
 
         if (
             data.receipt_file_size is not None
@@ -94,8 +107,17 @@ class PaymentService:
         self,
         data: PaymentCreate,
     ) -> PaymentActionResult:
-        self.validate_receipt(data)
+        await ensure_public_operation(self.session, "payments")
+        self.validate_receipt(
+            data,
+            await get_receipt_max_size_mb(self.session),
+        )
         offer = await get_payment_offer(self.session, data.offer_code)
+        payment_card_id, destination_snapshot = (
+            await PaymentManagementService(
+                self.session
+            ).payment_card_for_submission(data.payment_card_id)
+        )
 
         result = await self.session.execute(
             select(User)
@@ -156,6 +178,9 @@ class PaymentService:
             receipt_mime_type=data.receipt_mime_type,
             receipt_file_name=data.receipt_file_name,
             user_receipt_message_id=data.user_receipt_message_id,
+            payment_method="card",
+            payment_card_id=payment_card_id,
+            payment_destination_snapshot=destination_snapshot,
         )
         self.session.add(payment)
 

@@ -55,7 +55,7 @@ def build_admin_home_keyboard(
             [
                 InlineKeyboardButton(
                     text="💳 مدیریت پرداخت‌ها",
-                    callback_data="payment:open",
+                    callback_data="admin:payments",
                 )
             ]
         )

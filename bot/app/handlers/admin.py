@@ -11,10 +11,10 @@ from app.admin_labels import (
     role_description_fa,
     role_label_fa,
 )
+from app.admin_runtime_settings import runtime_settings_text
 from app.keyboards.admin import (
     build_admin_account_detail_keyboard,
     build_admin_accounts_keyboard,
-    build_admin_back_keyboard,
     build_admin_home_keyboard,
     build_admin_plan_detail_keyboard,
     build_admin_plans_keyboard,
@@ -30,6 +30,7 @@ from app.keyboards.admin import (
     build_role_picker_keyboard,
 )
 from app.keyboards.payment import build_home_keyboard, format_toman
+from app.keyboards.admin_settings import build_runtime_settings_keyboard
 from app.services.backend import (
     BackendAPIError,
     create_admin_account,
@@ -52,6 +53,8 @@ from app.state.admin import AdminManagementStates
 
 
 router = Router(name="admin")
+router.message.filter(F.chat.type == "private")
+router.callback_query.filter(F.message.chat.type == "private")
 
 
 def _can(context: dict, permission: str) -> bool:
@@ -533,29 +536,13 @@ async def show_application_settings(
         await callback.answer("دریافت تنظیمات ممکن نشد.", show_alert=True)
         return
 
-    if not settings_rows:
-        body = (
-            "⚙️ <b>تنظیمات ربات</b>\n\n"
-            "هنوز هیچ تنظیم تجاری ثبت نشده است. "
-            "فرم‌های افزودن تنظیمات در مرحله بعد فعال می‌شوند."
-        )
-    else:
-        lines = ["⚙️ <b>تنظیمات ربات</b>", ""]
-
-        for row in settings_rows[:30]:
-            state = "✅" if row.get("is_configured") else "⚠️"
-            sensitive = " 🔒" if row.get("is_sensitive") else ""
-            lines.append(
-                f"{state} <code>{html.escape(str(row.get('key')))}</code>"
-                f"{sensitive} — v{int(row.get('version', 1))}"
-            )
-
-        body = "\n".join(lines)
-
     await callback.message.edit_text(
-        body,
+        runtime_settings_text(settings_rows),
         parse_mode="HTML",
-        reply_markup=build_admin_back_keyboard(),
+        reply_markup=build_runtime_settings_keyboard(
+            settings_rows,
+            can_manage=_can(context, "settings.manage"),
+        ),
     )
     await callback.answer()
 

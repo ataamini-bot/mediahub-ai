@@ -4,8 +4,17 @@ from decimal import Decimal
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.config import settings
 from app.models.plan import Plan
+from app.services.managed_settings import (
+    ensure_public_operation,
+    get_receipt_max_size_mb,
+)
+from app.services.payment_management import (
+    PaymentDestinationValidation,
+    PaymentManagementService,
+    legacy_payment_card_snapshot,
+    payment_card_snapshot,
+)
 
 
 class PaymentConfigurationError(RuntimeError):
@@ -100,25 +109,29 @@ async def get_payment_offer(
     return PaymentOffer.from_plan(plan)
 
 
-def validate_payment_destination() -> None:
-    missing_fields = []
-
-    if not settings.payment_card_number.strip():
-        missing_fields.append("PAYMENT_CARD_NUMBER")
-
-    if not settings.payment_card_holder.strip():
-        missing_fields.append("PAYMENT_CARD_HOLDER")
-
-    if missing_fields:
-        raise PaymentConfigurationError(
-            "Payment destination is not configured: "
-            + ", ".join(missing_fields)
-        )
-
-
-async def get_payment_configuration(session: AsyncSession) -> dict:
-    validate_payment_destination()
+async def get_payment_configuration(
+    session: AsyncSession,
+    *,
+    select_destination: bool = True,
+) -> dict:
+    await ensure_public_operation(session, "payments")
     offers = await get_payment_offers(session)
+
+    destination = None
+    if select_destination:
+        management = PaymentManagementService(session)
+        card = await management.select_card()
+        try:
+            if card is not None:
+                destination = payment_card_snapshot(card)
+            elif await management.has_database_cards():
+                raise PaymentDestinationValidation(
+                    "No active database payment card is configured"
+                )
+            else:
+                destination = legacy_payment_card_snapshot()
+        except PaymentDestinationValidation as exc:
+            raise PaymentConfigurationError(str(exc)) from exc
 
     return {
         "offers": [
@@ -137,13 +150,9 @@ async def get_payment_configuration(session: AsyncSession) -> dict:
             }
             for offer in offers
         ],
-        "destination": {
-            "card_number": settings.payment_card_number.strip(),
-            "card_holder": settings.payment_card_holder.strip(),
-            "bank_name": settings.payment_bank_name.strip() or None,
-        },
+        "destination": destination,
         "receipt": {
-            "max_size_mb": settings.payment_receipt_max_size_mb,
+            "max_size_mb": await get_receipt_max_size_mb(session),
             "allowed_types": [
                 "photo",
                 "image/jpeg",

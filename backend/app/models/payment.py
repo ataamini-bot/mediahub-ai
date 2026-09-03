@@ -186,3 +186,26 @@ class Payment(Base, TimestampMixin):
         index=True,
         nullable=True,
     )
+
+    payment_method: Mapped[str] = mapped_column(
+        String(20),
+        default="card",
+        server_default="card",
+        nullable=False,
+    )
+
+    payment_card_id: Mapped[int | None] = mapped_column(
+        ForeignKey(
+            "payment_cards.id",
+            ondelete="SET NULL",
+        ),
+        index=True,
+        nullable=True,
+    )
+
+    payment_destination_snapshot: Mapped[dict] = mapped_column(
+        JSON,
+        default=dict,
+        server_default=text("'{}'::json"),
+        nullable=False,
+    )
