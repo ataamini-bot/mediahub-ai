@@ -23,6 +23,25 @@ router = APIRouter(
 )
 
 
+def _serialize_user(user: User) -> TelegramUserResponse:
+    return TelegramUserResponse(
+        id=user.id,
+        telegram_id=user.telegram_id,
+        username=user.username,
+        first_name=user.first_name,
+        last_name=user.last_name,
+        language_code=user.language_code,
+        preferred_language=user.preferred_language,
+        effective_language=effective_language(
+            preferred_language=user.preferred_language,
+            telegram_language_code=user.language_code,
+        ),
+        status=user.status.value,
+        is_admin=user.is_admin,
+        last_activity_at=user.last_activity_at,
+    )
+
+
 @router.post(
     "/telegram",
     response_model=TelegramUserResponse,
@@ -75,22 +94,20 @@ async def get_or_create_telegram_user(
     await db.commit()
     await db.refresh(user)
 
-    return TelegramUserResponse(
-        id=user.id,
-        telegram_id=user.telegram_id,
-        username=user.username,
-        first_name=user.first_name,
-        last_name=user.last_name,
-        language_code=user.language_code,
-        preferred_language=user.preferred_language,
-        effective_language=effective_language(
-            preferred_language=user.preferred_language,
-            telegram_language_code=user.language_code,
-        ),
-        status=user.status.value,
-        is_admin=user.is_admin,
-        last_activity_at=user.last_activity_at,
-    )
+    return _serialize_user(user)
+
+
+@router.get("/{telegram_id}", response_model=TelegramUserResponse)
+async def get_telegram_user(
+    telegram_id: int,
+    db: AsyncSession = Depends(get_db),
+) -> TelegramUserResponse:
+    user = (
+        await db.execute(select(User).where(User.telegram_id == telegram_id))
+    ).scalar_one_or_none()
+    if user is None:
+        raise HTTPException(status_code=404, detail="Telegram user not found")
+    return _serialize_user(user)
 
 
 @router.patch(
@@ -139,16 +156,4 @@ async def update_user_language(
     await db.commit()
     await db.refresh(user)
 
-    return TelegramUserResponse(
-        id=user.id,
-        telegram_id=user.telegram_id,
-        username=user.username,
-        first_name=user.first_name,
-        last_name=user.last_name,
-        language_code=user.language_code,
-        preferred_language=user.preferred_language,
-        effective_language=language,
-        status=user.status.value,
-        is_admin=user.is_admin,
-        last_activity_at=user.last_activity_at,
-    )
+    return _serialize_user(user)

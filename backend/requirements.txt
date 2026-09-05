@@ -20,7 +20,7 @@ python-multipart
 httpx
 aiofiles
 
-yt-dlp
+yt-dlp[default,curl-cffi]
 
 structlog
 

@@ -10,7 +10,7 @@ from app.services.application_settings import (
 )
 
 
-SettingKind = Literal["boolean", "integer", "timezone"]
+SettingKind = Literal["boolean", "integer", "timezone", "string_map"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -23,6 +23,36 @@ class ManagedSetting:
     description_fa: str
     minimum: int | None = None
     maximum: int | None = None
+    allowed_keys: frozenset[str] | None = None
+    value_max_length: int | None = None
+
+
+CONTENT_KEYS = frozenset(
+    {
+        "welcome_title",
+        "welcome_instruction",
+        "tutorial",
+        "faq",
+        "support_intro",
+        "support_prompt",
+        "support_sent",
+        "forced_join",
+        "membership_verified",
+    }
+)
+BUTTON_KEYS = frozenset(
+    {
+        "buy",
+        "subscription",
+        "language",
+        "support",
+        "tutorial",
+        "faq",
+        "admin",
+        "check_membership",
+        "back_home",
+    }
+)
 
 
 MANAGED_SETTINGS: dict[str, ManagedSetting] = {
@@ -68,6 +98,46 @@ MANAGED_SETTINGS: dict[str, ManagedSetting] = {
         label_fa="منطقه زمانی سهمیه",
         description_fa="مرز نیمه‌شب برای بازنشانی سهمیه روزانه",
     ),
+    "bot.content.fa": ManagedSetting(
+        key="bot.content.fa",
+        category="bot_content",
+        kind="string_map",
+        default={},
+        label_fa="متن‌های فارسی کاربران",
+        description_fa="متن صفحه شروع، آموزش، سوالات متداول و پشتیبانی",
+        allowed_keys=CONTENT_KEYS,
+        value_max_length=3900,
+    ),
+    "bot.content.en": ManagedSetting(
+        key="bot.content.en",
+        category="bot_content",
+        kind="string_map",
+        default={},
+        label_fa="متن‌های انگلیسی کاربران",
+        description_fa="English start, help, FAQ and support text",
+        allowed_keys=CONTENT_KEYS,
+        value_max_length=3900,
+    ),
+    "bot.buttons.fa": ManagedSetting(
+        key="bot.buttons.fa",
+        category="bot_buttons",
+        kind="string_map",
+        default={},
+        label_fa="عنوان فارسی دکمه‌ها",
+        description_fa="عنوان همه دکمه‌های اصلی کاربران",
+        allowed_keys=BUTTON_KEYS,
+        value_max_length=64,
+    ),
+    "bot.buttons.en": ManagedSetting(
+        key="bot.buttons.en",
+        category="bot_buttons",
+        kind="string_map",
+        default={},
+        label_fa="عنوان انگلیسی دکمه‌ها",
+        description_fa="English labels for every main user button",
+        allowed_keys=BUTTON_KEYS,
+        value_max_length=64,
+    ),
 }
 
 
@@ -96,6 +166,25 @@ def validate_managed_setting(key: str, value: Any) -> Any:
             ZoneInfo(normalized)
         except ZoneInfoNotFoundError as exc:
             raise SettingValidationError("Unknown IANA timezone") from exc
+        return normalized
+
+    if definition.kind == "string_map":
+        if not isinstance(value, dict):
+            raise SettingValidationError("Setting value must be an object")
+        allowed_keys = definition.allowed_keys or frozenset()
+        if not set(value).issubset(allowed_keys):
+            raise SettingValidationError("Setting contains an unknown text key")
+        maximum = definition.value_max_length or 3900
+        normalized: dict[str, str] = {}
+        for raw_key, raw_value in value.items():
+            if not isinstance(raw_value, str):
+                raise SettingValidationError("Text setting values must be strings")
+            rendered = raw_value.strip()
+            if not rendered:
+                raise SettingValidationError("Text setting values cannot be blank")
+            if len(rendered) > maximum:
+                raise SettingValidationError("Text setting value is too long")
+            normalized[str(raw_key)] = rendered
         return normalized
 
     raise SettingValidationError("Unsupported managed setting type")

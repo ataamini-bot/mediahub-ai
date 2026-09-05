@@ -22,6 +22,7 @@ from app.db.session import (
 )
 from app.schemas.download import (
     DownloadCreate,
+    DownloadEntitlementResponse,
     DownloadResponse,
     MediaInfoResponse,
 )
@@ -159,6 +160,25 @@ async def get_media_info(
 # ============================================================
 # Get download
 # ============================================================
+
+@router.get(
+    "/entitlement/{telegram_id}",
+    response_model=DownloadEntitlementResponse,
+)
+async def get_download_entitlement(
+    telegram_id: int,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    try:
+        entitlement = await DownloadAccessService(db).get_entitlement(telegram_id)
+        return {
+            "plan_id": entitlement.plan_id,
+            "plan_name": entitlement.plan_name,
+            "forced_join_required": entitlement.forced_join_required,
+            "is_admin_bypass": entitlement.is_admin_bypass,
+        }
+    except DownloadAccessError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail()) from exc
 
 @router.get(
     "/{job_id}",

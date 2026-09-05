@@ -19,6 +19,15 @@ from app.models.download_job import (
     DownloadJob,
     DownloadJobStatus,
 )
+from app.services.social_media import (
+    BROWSER_USER_AGENT,
+    extract_social_image,
+    extract_threads_video,
+    is_allowed_social_media_url,
+    is_threads_url,
+    social_platform,
+    social_referer,
+)
 from app.workers.celery_app import celery_app
 
 
@@ -922,11 +931,33 @@ def _download_social_image(
 
         platform_name = "X"
 
+    elif social_platform(source_url) in {
+        "pinterest",
+        "tiktok",
+        "facebook",
+        "threads",
+    }:
+
+        item = extract_social_image(
+            source_url=source_url,
+            playlist_index=playlist_index,
+        )
+
+        platform = str(item["platform"])
+        url_validator = lambda url: is_allowed_social_media_url(
+            platform,
+            url,
+            "image",
+        )
+        referer = social_referer(platform)
+        platform_name = platform.title()
+
     else:
 
         raise ValueError(
             "Image downloads currently support "
-            "Instagram and X URLs"
+            "Instagram, X, Pinterest, TikTok, "
+            "Facebook and Threads URLs"
         )
 
     media_url = str(
@@ -4381,17 +4412,34 @@ def download_task(
 
         else:
 
-            format_selector = (
-                _get_format_selector(
-                    source_url=source_url,
-                    format_id=format_id,
-                    quality=quality,
-                    media_type=media_type,
-                    playlist_index=(
-                        playlist_index
-                    ),
-                )
+            direct_download_url = source_url
+            threads_direct_video = (
+                media_type == "video"
+                and is_threads_url(source_url)
             )
+
+            if threads_direct_video:
+
+                threads_video = extract_threads_video(
+                    source_url=source_url,
+                    playlist_index=playlist_index,
+                )
+                direct_download_url = str(threads_video["url"])
+                format_selector = "best"
+
+            else:
+
+                format_selector = (
+                    _get_format_selector(
+                        source_url=source_url,
+                        format_id=format_id,
+                        quality=quality,
+                        media_type=media_type,
+                        playlist_index=(
+                            playlist_index
+                        ),
+                    )
+                )
 
             common_options = {
                 "outtmpl":
@@ -4420,6 +4468,15 @@ def download_task(
                     False,
             }
 
+            if threads_direct_video:
+
+                common_options[
+                    "http_headers"
+                ] = {
+                    "User-Agent": BROWSER_USER_AGENT,
+                    "Referer": social_referer("threads"),
+                }
+
             # ================================================
             # Playlist item
             # ================================================
@@ -4427,6 +4484,7 @@ def download_task(
             if (
                 playlist_index
                 is not None
+                and not threads_direct_video
             ):
 
                 common_options[
@@ -4476,6 +4534,7 @@ def download_task(
                 f"format_id={format_id}, "
                 f"media_type={media_type}, "
                 f"playlist_index={playlist_index}, "
+                f"threads_direct={threads_direct_video}, "
                 f"youtube="
                 f"{_is_youtube_url(source_url)}, "
                 f"selector="
@@ -4488,7 +4547,7 @@ def download_task(
 
                 ydl.download(
                     [
-                        source_url,
+                        direct_download_url,
                     ]
                 )
 

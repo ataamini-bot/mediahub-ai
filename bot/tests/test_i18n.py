@@ -5,7 +5,7 @@ from app.keyboards.language import build_language_keyboard
 def test_language_normalization():
     assert normalize_language("fa-IR") == "fa"
     assert normalize_language("en_US") == "en"
-    assert normalize_language("de") == "en"
+    assert normalize_language("de") == "fa"
 
 
 def test_translation_and_language_keyboard():

@@ -17,12 +17,14 @@ from app.keyboards.payment import (
     format_toman,
 )
 from app.i18n import normalize_language
+from app.runtime_config import runtime_configuration
 from app.services.backend import (
     BackendAPIError,
     approve_manual_payment,
     create_manual_payment,
     get_admin_context,
     get_current_subscription,
+    get_telegram_user,
     get_payment_configuration,
     mark_payment_delivery_failed,
     register_telegram_user,
@@ -30,6 +32,7 @@ from app.services.backend import (
     set_payment_admin_message,
 )
 from app.state.payment import AdminPaymentStates, PaymentStates
+from app.utils.formatting import format_date_for_language
 
 
 router = Router(name="payments")
@@ -54,12 +57,29 @@ ADMIN_PAYMENT_TOPIC_ID = _parse_int_env(
 DISPLAY_TIMEZONE = ZoneInfo(os.getenv("DISPLAY_TIMEZONE", "Asia/Tehran"))
 
 
-def _user_home_reply_keyboard(user: dict):
+async def _user_home_reply_keyboard(user: dict):
+    language = normalize_language(
+        user.get("effective_language") or user.get("language_code")
+    )
+    configuration = await runtime_configuration(language)
     return build_home_reply_keyboard(
-        language=normalize_language(
-            user.get("effective_language") or user.get("language_code")
-        ),
+        language=language,
         include_admin=bool(user.get("is_admin")),
+        configuration=configuration,
+    )
+
+
+async def _user_home_inline_keyboard(telegram_id: int):
+    try:
+        user = await get_telegram_user(telegram_id)
+    except BackendAPIError:
+        user = {"effective_language": "fa", "is_admin": False}
+    language = normalize_language(user.get("effective_language"))
+    configuration = await runtime_configuration(language)
+    return build_home_keyboard(
+        language,
+        include_admin=bool(user.get("is_admin")),
+        configuration=configuration,
     )
 
 
@@ -74,13 +94,13 @@ def _find_offer(configuration: dict, code: str) -> dict | None:
     )
 
 
-def _format_datetime(value: str | None) -> str:
+def _format_datetime(value: str | None, language: str = "fa") -> str:
     if not value:
         return "نامشخص"
 
     try:
         parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
-        return parsed.astimezone(DISPLAY_TIMEZONE).strftime("%Y-%m-%d %H:%M")
+        return format_date_for_language(parsed.astimezone(DISPLAY_TIMEZONE), language)
     except (TypeError, ValueError):
         return str(value)
 
@@ -215,20 +235,32 @@ async def _notify_user_approved(message: Message, result: dict) -> None:
     user = result["user"]
     payment = result["payment"]
     subscription = result.get("subscription") or {}
-
-    await message.bot.send_message(
-        chat_id=user["telegram_id"],
-        text=(
+    language = normalize_language(user.get("effective_language"))
+    if language == "en":
+        text = (
+            "✅ <b>Your payment was approved</b>\n\n"
+            f"🆔 Payment ID: <code>{payment['id']}</code>\n"
+            f"💎 Plan: <b>{html.escape(str(payment['plan_name_snapshot']))}</b>\n"
+            f"💎 Added duration: <code>{payment['duration_days']} days</code>\n"
+            "📅 Valid until: "
+            f"<code>{_format_datetime(subscription.get('expires_at'), language)}</code>"
+        )
+    else:
+        text = (
             "✅ <b>پرداخت شما تأیید شد</b>\n\n"
             f"🆔 شناسه پرداخت: <code>{payment['id']}</code>\n"
             "💎 پلن: "
             f"<b>{html.escape(str(payment['plan_name_snapshot']))}</b>\n"
             f"💎 مدت افزوده‌شده: <code>{payment['duration_days']} روز</code>\n"
             "📅 اعتبار اشتراک تا: "
-            f"<code>{_format_datetime(subscription.get('expires_at'))}</code>"
-        ),
+            f"<code>{_format_datetime(subscription.get('expires_at'), language)}</code>"
+        )
+
+    await message.bot.send_message(
+        chat_id=user["telegram_id"],
+        text=text,
         parse_mode="HTML",
-        reply_markup=_user_home_reply_keyboard(user),
+        reply_markup=await _user_home_reply_keyboard(user),
     )
 
 
@@ -246,7 +278,7 @@ async def _notify_user_rejected(message: Message, result: dict) -> None:
             "می‌توانید پس از رفع مشکل، رسید جدیدی ثبت کنید."
         ),
         parse_mode="HTML",
-        reply_markup=_user_home_reply_keyboard(user),
+        reply_markup=await _user_home_reply_keyboard(user),
     )
 
 
@@ -277,20 +309,44 @@ async def send_payment_offers_menu(
         )
 
 
-def _subscription_status_text(result: dict) -> str:
+def _subscription_status_text(result: dict, language: str = "fa") -> str:
+    is_fa = language == "fa"
     if not result.get("is_active"):
-        return (
-            "👤 <b>وضعیت اشتراک</b>\n\n"
-            "در حال حاضر اشتراک فعالی ندارید."
+        return "👤 <b>وضعیت اشتراک</b>\n\n" + (
+            "در حال حاضر اشتراک فعالی ندارید." if is_fa else "You do not have an active subscription."
         )
 
     plan_name = html.escape(str(result.get("plan_name") or "—"))
+    duration_days = int(result.get("duration_days") or 0)
+    duration_labels = {
+        30: ("یک‌ماهه", "1 month"),
+        90: ("سه‌ماهه", "3 months"),
+        180: ("شش‌ماهه", "6 months"),
+        365: ("یک‌ساله", "1 year"),
+    }
+    duration = duration_labels.get(duration_days, (f"{duration_days} روز", f"{duration_days} days"))[0 if is_fa else 1]
+    try:
+        expiry = datetime.fromisoformat(str(result["expires_at"]).replace("Z", "+00:00"))
+        if expiry.tzinfo is None:
+            expiry = expiry.replace(tzinfo=DISPLAY_TIMEZONE)
+        remaining_days = max(0, int((expiry - datetime.now(expiry.tzinfo)).total_seconds() + 86399) // 86400)
+    except (KeyError, TypeError, ValueError):
+        remaining_days = 0
+    limit = result.get("daily_download_limit")
+    limit_text = "♾️ نامحدود" if is_fa and limit is None else ("♾️ Unlimited" if limit is None else str(limit))
+    remaining = "♾️ نامحدود" if is_fa and result.get("remaining_downloads") is None else ("♾️ Unlimited" if result.get("remaining_downloads") is None else str(result.get("remaining_downloads")))
+    labels = ("مدت اشتراک", "Subscription duration", "تاریخ عضویت", "Registered", "تعداد دانلودهای انجام‌شده", "Downloads completed", "محدودیت دانلود روزانه", "Daily download limit", "دانلود باقیمانده", "Downloads remaining", "روز باقی‌مانده", "Days remaining")
     return (
-        "👤 <b>وضعیت اشتراک</b>\n\n"
-        "✅ اشتراک شما فعال است.\n"
-        f"💎 پلن: <b>{plan_name}</b>\n"
-        "📅 اعتبار تا: "
-        f"<code>{_format_datetime(result.get('expires_at'))}</code>"
+        ("👤 <b>وضعیت اشتراک</b>\n\n" if is_fa else "👤 <b>My subscription</b>\n\n")
+        + ("✅ اشتراک شما فعال است.\n" if is_fa else "✅ Your subscription is active.\n")
+        + f"💎 Plan: <b>{plan_name}</b>\n"
+        + f"📦 {labels[0 if is_fa else 1]}: <code>{html.escape(duration)}</code>\n"
+        + f"📅 {'اعتبار تا' if is_fa else 'Valid until'}: <code>{_format_datetime(result.get('expires_at'), language)}</code>\n"
+        + f"⏳ {labels[10 if is_fa else 11]}: <code>{remaining_days}</code>\n"
+        + f"🗓️ {labels[2 if is_fa else 3]}: <code>{_format_datetime(result.get('registered_at'), language)}</code>\n"
+        + f"📥 {labels[4 if is_fa else 5]}: <code>{int(result.get('downloads_done') or 0)}</code>\n"
+        + f"📊 {labels[6 if is_fa else 7]}: <code>{limit_text}</code>\n"
+        + f"✅ {labels[8 if is_fa else 9]}: <code>{remaining}</code>"
     )
 
 
@@ -301,8 +357,10 @@ async def send_subscription_status(
     """Show subscription status from the persistent reply keyboard."""
     try:
         result = await get_current_subscription(telegram_id)
+        user = await get_telegram_user(telegram_id)
+        language = normalize_language(user.get("effective_language"))
         await message.answer(
-            _subscription_status_text(result),
+            _subscription_status_text(result, language),
             parse_mode="HTML",
         )
     except BackendAPIError:
@@ -351,11 +409,13 @@ async def payment_status(callback: CallbackQuery) -> None:
 
     try:
         result = await get_current_subscription(callback.from_user.id)
+        user = await get_telegram_user(callback.from_user.id)
+        language = normalize_language(user.get("effective_language"))
 
         await callback.message.edit_text(
-            _subscription_status_text(result),
+            _subscription_status_text(result, language),
             parse_mode="HTML",
-            reply_markup=build_home_keyboard(),
+            reply_markup=await _user_home_inline_keyboard(callback.from_user.id),
         )
         await callback.answer()
     except BackendAPIError:
@@ -438,7 +498,7 @@ async def cancel_payment_flow(
     if isinstance(callback.message, Message):
         await callback.message.edit_text(
             "خرید اشتراک لغو شد.",
-            reply_markup=build_home_keyboard(),
+            reply_markup=await _user_home_inline_keyboard(callback.from_user.id),
         )
 
     await callback.answer("لغو شد.")
@@ -566,7 +626,7 @@ async def receive_payment_receipt(
                 "پس از بررسی مدیر، نتیجه همین‌جا اطلاع داده می‌شود."
             ),
             parse_mode="HTML",
-            reply_markup=_user_home_reply_keyboard(result["user"]),
+            reply_markup=await _user_home_reply_keyboard(result["user"]),
         )
     except BackendAPIError as exc:
         if isinstance(exc.detail, dict) and exc.detail.get("code") == "pending_payment_exists":

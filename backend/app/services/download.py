@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 from typing import Any
 import ipaddress
 import os
+import re
 import socket
 from urllib.error import (
     HTTPError,
@@ -27,6 +28,9 @@ from app.repositories.download_job import (
 )
 from app.services.download_access import (
     DownloadAccessService,
+)
+from app.services.social_media import (
+    get_social_media_info,
 )
 from app.workers.tasks.download import (
     cleanup_paused_download,
@@ -617,9 +621,149 @@ def _probe_remote_filesize(
 # Format filesize
 # ============================================================
 
+def _is_manifest_format(
+    item: dict[str, Any],
+) -> bool:
+
+    protocol = str(
+        item.get("protocol")
+        or ""
+    ).strip().lower()
+
+    stream_url = str(
+        item.get("url")
+        or ""
+    ).strip().lower()
+
+    try:
+        path = urlparse(stream_url).path.lower()
+    except Exception:
+        path = ""
+
+    return (
+        any(
+            marker in protocol
+            for marker in (
+                "m3u8",
+                "dash",
+                "ism",
+            )
+        )
+        or path.endswith(".m3u8")
+        or path.endswith(".mpd")
+        or path.endswith(".ism")
+    )
+
+
+def _estimate_manifest_filesize(
+    item: dict[str, Any],
+    duration: Any,
+) -> int | None:
+
+    try:
+        duration_value = float(duration)
+    except (TypeError, ValueError):
+        return None
+
+    if duration_value <= 0:
+        return None
+
+    bitrate = item.get("tbr")
+
+    if bitrate is None:
+        try:
+            bitrate = float(item.get("vbr") or 0) + float(
+                item.get("abr") or 0
+            )
+        except (TypeError, ValueError):
+            bitrate = None
+
+    try:
+        bitrate_value = float(bitrate)
+    except (TypeError, ValueError):
+        return None
+
+    if bitrate_value <= 0:
+        return None
+
+    # yt-dlp bitrates are Kbit/s. Include a small allowance for segment and
+    # container overhead; the bot labels all pre-download sizes approximate.
+    return int(
+        bitrate_value
+        * 1000
+        / 8
+        * duration_value
+        * 1.03
+    )
+
+
+def _should_probe_direct_filesize(
+    stream_url: str,
+) -> bool:
+
+    try:
+        hostname = (
+            urlparse(stream_url).hostname
+            or ""
+        ).lower()
+    except Exception:
+        return False
+
+    exact_size_domains = (
+        "twimg.com",
+        "pinimg.com",
+        "dmcdn.net",
+        "vimeocdn.com",
+        "fbcdn.net",
+        "cdninstagram.com",
+    )
+
+    return any(
+        hostname == domain
+        or hostname.endswith("." + domain)
+        for domain in exact_size_domains
+    ) or bool(
+        re.fullmatch(
+            r"(?:[a-z0-9-]+\.)*[a-z0-9-]*tiktokcdn"
+            r"(?:-[a-z0-9-]+)?\.com",
+            hostname,
+        )
+    )
+
+
 def _get_format_filesize(
     item: dict[str, Any],
+    duration: Any = None,
 ) -> int | None:
+
+    # Never report the byte size of an HLS/DASH manifest as the size of the
+    # actual video. Prefer extractor estimates, then calculate from bitrate.
+    if _is_manifest_format(item):
+
+        filesize_approx = _positive_int(
+            item.get("filesize_approx")
+        )
+
+        if filesize_approx is not None:
+            return filesize_approx
+
+        bitrate_estimate = _estimate_manifest_filesize(
+            item,
+            duration,
+        )
+
+        if bitrate_estimate is not None:
+            return bitrate_estimate
+
+        extractor_size = _positive_int(
+            item.get("filesize")
+        )
+
+        # A tiny value here is the playlist document itself, not the media.
+        if extractor_size is not None and extractor_size > 4096:
+            return extractor_size
+
+        return None
 
     # Exact extractor value always wins.
     filesize = (
@@ -645,14 +789,9 @@ def _get_format_filesize(
         .lower()
     )
 
-    # X often provides filesize_approx even though its CDN
-    # exposes the real Content-Length / Content-Range.
-    if (
-        "video.twimg.com"
-        in stream_url
-        or "pbs.twimg.com"
-        in stream_url
-    ):
+    # Known media CDNs expose an exact Content-Length / Content-Range. Probe
+    # them before falling back to an extractor approximation.
+    if _should_probe_direct_filesize(stream_url):
 
         probed_size = (
             _probe_remote_filesize(
@@ -813,6 +952,7 @@ def _detect_stream_types(
 
 def _normalize_format(
     item: dict[str, Any],
+    duration: Any = None,
 ) -> dict[str, Any] | None:
 
     format_id = (
@@ -958,7 +1098,8 @@ def _normalize_format(
 
     filesize = (
         _get_format_filesize(
-            item
+            item,
+            duration,
         )
     )
 
@@ -997,6 +1138,7 @@ def _normalize_format(
 
 def _normalize_formats(
     raw_formats: list[Any] | None,
+    duration: Any = None,
 ) -> list[
     dict[str, Any]
 ]:
@@ -1019,7 +1161,8 @@ def _normalize_formats(
 
         normalized = (
             _normalize_format(
-                item
+                item,
+                duration,
             )
         )
 
@@ -2680,6 +2823,24 @@ class DownloadService:
             )
 
         # ====================================================
+        # Public image posts + Threads
+        #
+        # Pinterest, TikTok and Facebook image posts are not
+        # represented as downloadable video formats by yt-dlp.
+        # Threads currently has no yt-dlp extractor at all.
+        # Video-only posts on the other platforms return None
+        # here and continue through the normal yt-dlp path.
+        # ====================================================
+
+        social_media_info = get_social_media_info(
+            source_url,
+            playlist_index,
+        )
+
+        if social_media_info is not None:
+            return social_media_info
+
+        # ====================================================
         # Instagram mixed media
         # ====================================================
 
@@ -3226,11 +3387,22 @@ class DownloadService:
 
                     continue
 
+                entry_duration = (
+                    _normalize_duration(
+                        raw_entry.get(
+                            "duration"
+                        )
+                    )
+                )
+
                 entry_formats = (
                     _normalize_formats(
                         raw_entry.get(
                             "formats"
-                        )
+                        ),
+                        duration=(
+                            entry_duration
+                        ),
                     )
                 )
 
@@ -3275,11 +3447,7 @@ class DownloadService:
                             ),
 
                         "duration":
-                            _normalize_duration(
-                                raw_entry.get(
-                                    "duration"
-                                )
-                            ),
+                            entry_duration,
 
                         "thumbnail":
                             raw_entry.get(
@@ -3424,11 +3592,22 @@ class DownloadService:
         # Single media
         # ====================================================
 
+        normalized_duration = (
+            _normalize_duration(
+                info.get(
+                    "duration"
+                )
+            )
+        )
+
         formats = (
             _normalize_formats(
                 info.get(
                     "formats"
-                )
+                ),
+                duration=(
+                    normalized_duration
+                ),
             )
         )
 
@@ -3442,11 +3621,7 @@ class DownloadService:
                 ),
 
             "duration":
-                _normalize_duration(
-                    info.get(
-                        "duration"
-                    )
-                ),
+                normalized_duration,
 
             "thumbnail":
                 info.get(

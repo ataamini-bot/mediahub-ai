@@ -28,6 +28,7 @@ def test_superadmin_sees_all_foundation_menu_entries():
         "admin:settings",
         "admin:plans",
         "admin:payments",
+        "admin:support",
         "admin:close",
     ]
 
@@ -204,6 +205,10 @@ def test_plan_list_supports_unlimited_custom_plans():
 
     assert callbacks[:2] == ["admin:plan:1", "admin:plan:2"]
     assert "admin:plan:add" in callbacks
+    assert keyboard.inline_keyboard[0][0].text == "Free — همیشگی"
+    assert keyboard.inline_keyboard[1][0].text == "ویژه ۴۵ روزه — 45 روز"
+    assert "🟢" not in keyboard.inline_keyboard[0][0].text
+    assert "💎" not in keyboard.inline_keyboard[1][0].text
 
 
 def test_free_plan_only_exposes_limit_editing():

@@ -157,3 +157,8 @@ class CurrentSubscriptionResponse(BaseModel):
     plan_name: str | None = None
     started_at: datetime | None = None
     expires_at: datetime | None = None
+    duration_days: int | None = None
+    registered_at: datetime | None = None
+    downloads_done: int = 0
+    daily_download_limit: int | None = None
+    remaining_downloads: int | None = None

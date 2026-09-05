@@ -324,7 +324,7 @@ async def _show_plans(message: Message, actor_telegram_id: int) -> None:
     await message.edit_text(
         (
             "📦 <b>مدیریت پلن‌ها</b>\n\n"
-            "پلن Free همیشه وجود دارد و محدودیت‌هایش قابل ویرایش است.\n"
+            "پلن رایگان همیشه وجود دارد و محدودیت‌هایش قابل ویرایش است.\n"
             f"تعداد پلن‌های سفارشی: <code>{custom_count}</code>"
         ),
         parse_mode="HTML",
@@ -554,6 +554,7 @@ async def show_application_settings(
         reply_markup=build_runtime_settings_keyboard(
             settings_rows,
             can_manage=_can(context, "settings.manage"),
+            can_manage_channels=_can(context, "forced_join.manage"),
         ),
     )
     await callback.answer()

@@ -60,6 +60,16 @@ def build_admin_home_keyboard(
             ]
         )
 
+    if is_superadmin or "tickets.view" in permissions:
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text="🛟 پشتیبانی کاربران",
+                    callback_data="admin:support",
+                )
+            ]
+        )
+
     rows.append(
         [
             InlineKeyboardButton(
@@ -406,19 +416,18 @@ def build_admin_plans_keyboard(plans: list[dict]) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = []
 
     for plan in plans:
-        status = "🟢" if plan.get("is_active") else "⚫️"
-        kind = "🆓" if plan.get("is_system") else "💎"
         duration = (
             "همیشگی"
             if plan.get("is_system")
             else f"{int(plan.get('duration_days', 0))} روز"
         )
+        status = "" if plan.get("is_active") else " [غیرفعال]"
         rows.append(
             [
                 InlineKeyboardButton(
                     text=(
-                        f"{status} {kind} {str(plan.get('name') or 'بدون نام')[:28]}"
-                        f" — {duration}"
+                        f"{str(plan.get('name') or 'بدون نام')[:32]}"
+                        f"{status} — {duration}"
                     ),
                     callback_data=f"admin:plan:{int(plan['id'])}",
                 )

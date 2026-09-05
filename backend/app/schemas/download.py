@@ -114,6 +114,13 @@ class DownloadCreate(
         return value
 
 
+class DownloadEntitlementResponse(BaseModel):
+    plan_id: int | None
+    plan_name: str
+    forced_join_required: bool
+    is_admin_bypass: bool
+
+
 # ============================================================
 # Download response
 # ============================================================

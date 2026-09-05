@@ -26,7 +26,10 @@ def test_persistent_home_keyboard_is_localized_and_kept_open():
     assert _button_texts(persian) == [
         "💎 خرید اشتراک",
         "👤 وضعیت اشتراک من",
-        "🌐 تغییر زبان",
+        "🛟 پشتیبانی",
+        "🌐 تغییر زبان | Language",
+        "📘 آموزش استفاده",
+        "❓ سوالات متداول",
     ]
     assert _button_texts(english_admin)[-1] == "⚙️ Admin panel"
 
@@ -34,6 +37,7 @@ def test_persistent_home_keyboard_is_localized_and_kept_open():
 def test_persistent_home_labels_resolve_without_fuzzy_matching():
     assert home_action_for_text("💎 خرید اشتراک") == "buy"
     assert home_action_for_text("👤 My subscription") == "subscription"
+    assert home_action_for_text("🌐 Language | تغییر زبان") == "language"
     assert home_action_for_text("🌐 Change language") == "language"
     assert home_action_for_text("⚙️ پنل مدیریت") == "admin"
     assert home_action_for_text("https://example.com/video") is None
@@ -106,7 +110,13 @@ def test_subscription_reply_button_routes_before_download(monkeypatch):
     )
     state = SimpleNamespace(clear=AsyncMock())
 
-    asyncio.run(home_handler.persistent_home_button(message, state))
+    asyncio.run(
+        home_handler.persistent_home_button(
+            message,
+            state,
+            {"action": "subscription"},
+        )
+    )
 
     state.clear.assert_awaited_once()
     subscription_status.assert_awaited_once_with(message, 123456789)

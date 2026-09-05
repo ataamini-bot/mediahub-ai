@@ -5,6 +5,7 @@ from fastapi import FastAPI
 from app.api.admin import router as admin_router
 from app.api.admin_finance import router as admin_finance_router
 from app.api.downloads import router as downloads_router
+from app.api.experience import router as experience_router
 from app.api.payments import router as payments_router
 from app.api.users import router as users_router
 from app.services.system_monitor import (
@@ -39,6 +40,7 @@ app.include_router(payments_router)
 app.include_router(users_router)
 app.include_router(admin_router)
 app.include_router(admin_finance_router)
+app.include_router(experience_router)
 
 
 @app.get("/")

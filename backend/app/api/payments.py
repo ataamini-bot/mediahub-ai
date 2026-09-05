@@ -217,16 +217,9 @@ async def current_subscription(
     db: AsyncSession = Depends(get_db),
 ) -> CurrentSubscriptionResponse:
     service = PaymentService(db)
-    result = await service.get_current_subscription(telegram_id=telegram_id)
+    result = await service.get_subscription_details(telegram_id=telegram_id)
 
     if result is None:
         return CurrentSubscriptionResponse(is_active=False)
 
-    subscription, plan = result
-    return CurrentSubscriptionResponse(
-        is_active=True,
-        plan_slug=plan.slug,
-        plan_name=plan.name,
-        started_at=subscription.started_at,
-        expires_at=subscription.expires_at,
-    )
+    return CurrentSubscriptionResponse.model_validate(result)

@@ -6,6 +6,7 @@ from aiogram.types import CallbackQuery, Message
 from app.i18n import translate
 from app.keyboards.language import build_language_keyboard
 from app.keyboards.payment import build_home_reply_keyboard
+from app.runtime_config import runtime_configuration, runtime_content
 from app.services.backend import (
     BackendAPIError,
     register_telegram_user,
@@ -64,6 +65,7 @@ async def select_language(callback: CallbackQuery) -> None:
 
     try:
         user = await set_user_language(callback.from_user.id, language)
+        configuration = await runtime_configuration(language, refresh=True)
         await callback.message.edit_text(
             translate(language, "language.changed"),
             parse_mode="HTML",
@@ -76,6 +78,7 @@ async def select_language(callback: CallbackQuery) -> None:
                     bool(user.get("is_admin"))
                     and callback.message.chat.type == "private"
                 ),
+                configuration=configuration,
             ),
         )
         await callback.answer()

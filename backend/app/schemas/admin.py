@@ -300,6 +300,7 @@ class AdminPlanResponse(BaseModel):
     slug: str
     description: str | None
     price: Decimal
+    price_usdt: Decimal | None = None
     currency: str = "IRT"
     duration_days: int
     daily_download_limit: int | None
@@ -322,6 +323,7 @@ class AdminPlanCreate(BaseModel):
     name: str = Field(min_length=2, max_length=100)
     description: str | None = Field(default=None, max_length=2000)
     price: Decimal = Field(gt=0, max_digits=12)
+    price_usdt: Decimal | None = Field(default=None, gt=0, max_digits=12)
     duration_days: int = Field(ge=1, le=3650)
     daily_download_limit: int | None = Field(default=None, ge=0, le=1_000_000)
     max_file_size_mb: int = Field(ge=1, le=1900)
@@ -339,6 +341,7 @@ class AdminPlanUpdate(BaseModel):
     name: str | None = Field(default=None, min_length=2, max_length=100)
     description: str | None = Field(default=None, max_length=2000)
     price: Decimal | None = Field(default=None, gt=0, max_digits=12)
+    price_usdt: Decimal | None = Field(default=None, gt=0, max_digits=12)
     duration_days: int | None = Field(default=None, ge=1, le=3650)
     daily_download_limit: int | None = Field(default=None, ge=0, le=1_000_000)
     max_file_size_mb: int | None = Field(default=None, ge=1, le=1900)

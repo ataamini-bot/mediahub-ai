@@ -77,6 +77,10 @@ class Plan(Base, TimestampMixin):
         nullable=False,
     )
 
+    price_usdt: Mapped[Decimal | None] = mapped_column(
+        Numeric(12, 4), nullable=True
+    )
+
     duration_days: Mapped[int] = mapped_column(
         Integer,
         nullable=False,

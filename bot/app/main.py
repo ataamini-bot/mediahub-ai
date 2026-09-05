@@ -37,9 +37,14 @@ from app.keyboards.quality import (
 )
 from app.keyboards.payment import (
     build_home_reply_keyboard,
+    build_upgrade_keyboard,
 )
 from app.handlers.home import (
     router as home_router,
+)
+from app.handlers.experience import (
+    enforce_required_membership,
+    router as experience_router,
 )
 from app.handlers.admin import (
     router as admin_router,
@@ -57,6 +62,7 @@ from app.handlers.payments import (
     router as payments_router,
 )
 from app.i18n import home_action_for_text, normalize_language, translate
+from app.runtime_config import runtime_configuration, runtime_content
 
 from app.utils.formatting import (
     format_file_size,
@@ -77,6 +83,7 @@ from app.services.backend import (
     cancel_download_job,
     create_download_job,
     get_download_job,
+    get_download_entitlement,
     get_media_info,
     mark_download_delivered,
     pause_download_job,
@@ -126,6 +133,9 @@ dp = Dispatcher(
     storage=RedisStorage.from_url(
         REDIS_URL
     )
+)
+dp.include_router(
+    experience_router
 )
 dp.include_router(
     home_router
@@ -183,6 +193,8 @@ def download_error_text(exc: Exception) -> str:
 
     code = str(exc.detail.get("code") or "")
     plan_name = str(exc.detail.get("plan_name") or "پلن فعلی")
+    if plan_name.strip().lower() == "free":
+        plan_name = "رایگان"
 
     if code == "daily_download_limit_reached":
         return (
@@ -221,6 +233,19 @@ def download_error_text(exc: Exception) -> str:
         return "⏸ دریافت دانلود جدید موقتاً غیرفعال است."
 
     return str(exc.detail.get("message") or exc)[:1000]
+
+
+def download_error_markup(exc: Exception):
+    if not isinstance(exc, BackendAPIError) or not isinstance(exc.detail, dict):
+        return None
+
+    if str(exc.detail.get("code") or "") in {
+        "daily_download_limit_reached",
+        "download_quality_limit_exceeded",
+        "download_file_size_limit_exceeded",
+    }:
+        return build_upgrade_keyboard("fa")
+    return None
 
 
 def extract_url(
@@ -2556,13 +2581,14 @@ async def start_handler(
         telegram_id = (
             message.from_user.id
         )
+        configuration = await runtime_configuration(language)
 
         await state.clear()
 
         await message.answer(
             (
-                f"{translate(language, 'start.welcome')}\n\n"
-                f"{translate(language, 'start.instruction')}\n\n"
+                f"{html.escape(runtime_content(configuration, 'welcome_title'))}\n\n"
+                f"{html.escape(runtime_content(configuration, 'welcome_instruction'))}\n\n"
                 f"{translate(language, 'start.telegram_id', telegram_id=telegram_id)}"
             ),
             parse_mode="HTML",
@@ -2573,6 +2599,7 @@ async def start_handler(
                         bool(user.get("is_admin"))
                         and message.chat.type == "private"
                     ),
+                    configuration=configuration,
                 )
             ),
         )
@@ -3349,7 +3376,7 @@ async def media_entry_callback(
                     f"{html.escape(download_error_text(exc))}"
                     f"</code>"
                 ),
-                reply_markup=None,
+                reply_markup=download_error_markup(exc),
             )
 
         return
@@ -3459,7 +3486,7 @@ async def media_entry_callback(
                 f"{html.escape(str(exc)[:1000])}"
                 f"</code>"
             ),
-            reply_markup=None,
+            reply_markup=download_error_markup(exc),
         )
 
 
@@ -3817,7 +3844,7 @@ async def quality_callback(
 
                 "وضعیت Job را دوباره بررسی کنید."
             ),
-            reply_markup=None,
+            reply_markup=download_error_markup(exc),
         )
 
     except Exception as exc:
@@ -3948,7 +3975,7 @@ async def download_handler(
         return
 
     try:
-        await register_telegram_user(message)
+        user = await register_telegram_user(message)
     except Exception as exc:
         print(
             "Download user registration failed: "
@@ -3957,6 +3984,21 @@ async def download_handler(
         await message.answer(
             "❌ ثبت حساب کاربری انجام نشد؛ چند لحظه بعد دوباره تلاش کنید."
         )
+        return
+
+    try:
+        entitlement = await get_download_entitlement(message.from_user.id)
+        if entitlement.get("forced_join_required"):
+            language = normalize_language(user.get("effective_language"))
+            configuration = await runtime_configuration(language)
+            if not await enforce_required_membership(
+                message,
+                telegram_id=message.from_user.id,
+                configuration=configuration,
+            ):
+                return
+    except BackendAPIError as exc:
+        await message.answer(download_error_text(exc), reply_markup=download_error_markup(exc))
         return
 
     status_message = (
@@ -4332,6 +4374,7 @@ async def download_handler(
                 f"{safe_error}"
                 f"</code>"
             ),
+            reply_markup=download_error_markup(exc),
         )
 
 

@@ -1,7 +1,11 @@
 import asyncio
 from types import SimpleNamespace
 
-from app.main import DownloadMessageFilter, download_error_text
+from app.main import (
+    DownloadMessageFilter,
+    download_error_markup,
+    download_error_text,
+)
 from app.services.backend import BackendAPIError
 
 
@@ -52,4 +56,8 @@ def test_plan_limit_errors_are_rendered_in_persian():
 
     assert "720p" in download_error_text(quality_error)
     assert "سهمیه روزانه" in download_error_text(daily_error)
+    assert "رایگان" in download_error_text(daily_error)
+    assert "Free" not in download_error_text(daily_error)
     assert "3/3" in download_error_text(daily_error)
+    markup = download_error_markup(daily_error)
+    assert markup.inline_keyboard[0][0].callback_data == "payment:open"

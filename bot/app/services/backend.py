@@ -105,6 +105,10 @@ async def set_user_language(
     )
 
 
+async def get_telegram_user(telegram_id: int) -> dict:
+    return await _payment_request("GET", f"/users/{telegram_id}")
+
+
 async def get_admin_context(telegram_id: int) -> dict:
     return await _payment_request(
         "GET",
@@ -142,6 +146,162 @@ async def update_application_setting(
             "description": description,
             "expected_version": expected_version,
         },
+    )
+
+
+async def get_bot_configuration(language: str = "fa") -> dict:
+    normalized = language if language in {"fa", "en"} else "fa"
+    return await _payment_request(
+        "GET",
+        f"/bot/configuration?language={normalized}",
+    )
+
+
+async def list_home_buttons(actor_telegram_id: int) -> list[dict]:
+    result = await _payment_request(
+        "GET",
+        f"/admin/home-buttons?actor_telegram_id={actor_telegram_id}",
+    )
+    return list(result)
+
+
+async def create_home_button(*, actor_telegram_id: int, data: dict) -> dict:
+    return await _payment_request(
+        "POST",
+        "/admin/home-buttons",
+        payload={"actor_telegram_id": actor_telegram_id, **data},
+    )
+
+
+async def update_home_button(
+    *,
+    actor_telegram_id: int,
+    button_id: int,
+    changes: dict,
+) -> dict:
+    return await _payment_request(
+        "PATCH",
+        f"/admin/home-buttons/{button_id}",
+        payload={"actor_telegram_id": actor_telegram_id, **changes},
+    )
+
+
+async def delete_home_button(*, actor_telegram_id: int, button_id: int) -> None:
+    await _payment_request(
+        "DELETE",
+        f"/admin/home-buttons/{button_id}?actor_telegram_id={actor_telegram_id}",
+    )
+
+
+async def list_required_channels(actor_telegram_id: int) -> list[dict]:
+    result = await _payment_request(
+        "GET",
+        f"/admin/required-channels?actor_telegram_id={actor_telegram_id}",
+    )
+    return list(result)
+
+
+async def create_required_channel(*, actor_telegram_id: int, data: dict) -> dict:
+    return await _payment_request(
+        "POST",
+        "/admin/required-channels",
+        payload={"actor_telegram_id": actor_telegram_id, **data},
+    )
+
+
+async def update_required_channel(
+    *,
+    actor_telegram_id: int,
+    channel_id: int,
+    changes: dict,
+) -> dict:
+    return await _payment_request(
+        "PATCH",
+        f"/admin/required-channels/{channel_id}",
+        payload={"actor_telegram_id": actor_telegram_id, **changes},
+    )
+
+
+async def delete_required_channel(
+    *,
+    actor_telegram_id: int,
+    channel_id: int,
+) -> None:
+    await _payment_request(
+        "DELETE",
+        f"/admin/required-channels/{channel_id}"
+        f"?actor_telegram_id={actor_telegram_id}",
+    )
+
+
+async def create_support_ticket(
+    *,
+    telegram_id: int,
+    category: str,
+    body: str | None,
+    telegram_file_id: str | None,
+    file_type: str | None,
+) -> dict:
+    return await _payment_request(
+        "POST",
+        "/support/tickets",
+        payload={
+            "telegram_id": telegram_id,
+            "category": category,
+            "body": body,
+            "telegram_file_id": telegram_file_id,
+            "file_type": file_type,
+        },
+    )
+
+
+async def list_support_tickets(
+    actor_telegram_id: int,
+    *,
+    status: str | None = None,
+) -> list[dict]:
+    status_query = f"&status={status}" if status else ""
+    result = await _payment_request(
+        "GET",
+        f"/admin/support/tickets?actor_telegram_id={actor_telegram_id}"
+        f"{status_query}",
+    )
+    return list(result)
+
+
+async def get_support_ticket(*, actor_telegram_id: int, ticket_id: int) -> dict:
+    return await _payment_request(
+        "GET",
+        f"/admin/support/tickets/{ticket_id}"
+        f"?actor_telegram_id={actor_telegram_id}",
+    )
+
+
+async def reply_support_ticket(
+    *,
+    actor_telegram_id: int,
+    ticket_id: int,
+    body: str,
+) -> dict:
+    return await _payment_request(
+        "POST",
+        f"/admin/support/tickets/{ticket_id}/reply",
+        payload={"actor_telegram_id": actor_telegram_id, "body": body},
+    )
+
+
+async def close_support_ticket(*, actor_telegram_id: int, ticket_id: int) -> dict:
+    return await _payment_request(
+        "POST",
+        f"/admin/support/tickets/{ticket_id}/close"
+        f"?actor_telegram_id={actor_telegram_id}",
+    )
+
+
+async def get_download_entitlement(telegram_id: int) -> dict:
+    return await _payment_request(
+        "GET",
+        f"/downloads/entitlement/{telegram_id}",
     )
 
 

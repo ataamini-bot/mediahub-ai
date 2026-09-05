@@ -13,15 +13,18 @@ def test_format_toman():
 
 def test_home_keyboard_supports_language_and_admin_entry():
     keyboard = build_home_keyboard(language="en", include_admin=True)
-    buttons = [row[0] for row in keyboard.inline_keyboard]
+    buttons = [button for row in keyboard.inline_keyboard for button in row]
 
     assert [button.callback_data for button in buttons] == [
         "payment:open",
         "payment:status",
+        "support:open",
         "language:open",
+        "home:tutorial",
+        "home:faq",
         "admin:open",
     ]
-    assert buttons[2].text == "🌐 Change language"
+    assert buttons[3].text == "🌐 Language | تغییر زبان"
 
 
 def test_offer_keyboard_supports_arbitrary_custom_plan_durations():

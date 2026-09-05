@@ -1,12 +1,13 @@
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import select, update
+from sqlalchemy import func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.models.payment import Payment, PaymentStatus
+from app.models.download_job import DownloadJob, DownloadJobStatus
 from app.models.plan import Plan
 from app.models.subscription import Subscription, SubscriptionStatus
 from app.models.user import User, UserStatus
@@ -382,6 +383,46 @@ class PaymentService:
             .limit(1)
         )
         return result.first()
+
+    async def get_subscription_details(self, *, telegram_id: int) -> dict | None:
+        now = datetime.now(timezone.utc)
+        result = await self.session.execute(
+            select(Subscription, Plan, User)
+            .join(Plan, Plan.id == Subscription.plan_id)
+            .join(User, User.id == Subscription.user_id)
+            .where(
+                User.telegram_id == telegram_id,
+                Subscription.status == SubscriptionStatus.ACTIVE,
+                Subscription.started_at <= now,
+                Subscription.expires_at > now,
+            )
+            .order_by(Subscription.expires_at.desc(), Subscription.id.desc())
+            .limit(1)
+        )
+        row = result.first()
+        if row is None:
+            return None
+        subscription, plan, user = row
+        count_result = await self.session.execute(
+            select(func.count(DownloadJob.id)).where(
+                DownloadJob.user_id == user.id,
+                DownloadJob.status == DownloadJobStatus.COMPLETED,
+            )
+        )
+        downloads_done = int(count_result.scalar() or 0)
+        daily_limit = plan.daily_download_limit
+        return {
+            "is_active": True,
+            "plan_slug": plan.slug,
+            "plan_name": plan.name,
+            "started_at": subscription.started_at,
+            "expires_at": subscription.expires_at,
+            "duration_days": plan.duration_days,
+            "registered_at": user.created_at,
+            "downloads_done": downloads_done,
+            "daily_download_limit": daily_limit,
+            "remaining_downloads": None if daily_limit is None else max(daily_limit - downloads_done, 0),
+        }
 
     async def _get_payment_for_update(self, payment_id: int) -> Payment:
         result = await self.session.execute(

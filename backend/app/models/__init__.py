@@ -7,6 +7,12 @@ from app.models.admin import (
 )
 from app.models.app_setting import ApplicationSetting
 from app.models.audit_log import AuditLog
+from app.models.bot_experience import (
+    HomeButton,
+    RequiredChannel,
+    SupportMessage,
+    SupportTicket,
+)
 from app.models.download_job import DownloadJob, DownloadJobStatus
 from app.models.payment import Payment, PaymentStatus
 from app.models.payment_destination import PaymentCard, UsdtDestination
@@ -23,6 +29,10 @@ __all__ = [
     "AdminRolePermission",
     "ApplicationSetting",
     "AuditLog",
+    "HomeButton",
+    "RequiredChannel",
+    "SupportMessage",
+    "SupportTicket",
     "User",
     "Plan",
     "Payment",

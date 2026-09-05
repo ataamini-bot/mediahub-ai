@@ -1,5 +1,5 @@
 SUPPORTED_LANGUAGES = frozenset({"fa", "en"})
-DEFAULT_LANGUAGE = "en"
+DEFAULT_LANGUAGE = "fa"
 
 
 def normalize_language(value: str | None) -> str | None:
@@ -14,8 +14,8 @@ def normalize_language(value: str | None) -> str | None:
 
 
 def infer_language(telegram_language_code: str | None) -> str:
-    """Choose the first UI language without treating metadata as preference."""
-    return normalize_language(telegram_language_code) or DEFAULT_LANGUAGE
+    """Use Persian initially; Telegram metadata is not an explicit choice."""
+    return DEFAULT_LANGUAGE
 
 
 def effective_language(

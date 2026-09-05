@@ -208,6 +208,7 @@ class PlanManagementService:
         description: str | None,
         duration_days: int,
         price: Decimal,
+        price_usdt: Decimal | None = None,
         daily_download_limit: int | None,
         max_file_size_mb: int,
         max_quality: int,
@@ -227,6 +228,7 @@ class PlanManagementService:
             slug=f"plan_{uuid.uuid4().hex[:20]}",
             description=self.normalize_description(description),
             price=self.normalize_price(price),
+            price_usdt=(self.normalize_price(price_usdt) if price_usdt is not None else None),
             duration_days=self.normalize_duration_days(duration_days),
             daily_download_limit=normalized_daily_limit,
             max_file_size_mb=self.normalize_file_size_mb(max_file_size_mb),
@@ -270,6 +272,7 @@ class PlanManagementService:
         description_supplied: bool = False,
         duration_days: int | None = None,
         price: Decimal | None = None,
+        price_usdt: Decimal | None = None,
         daily_download_limit: int | None = None,
         daily_limit_supplied: bool = False,
         max_file_size_mb: int | None = None,
@@ -295,6 +298,7 @@ class PlanManagementService:
                 description_supplied,
                 duration_days is not None,
                 price is not None,
+                price_usdt is not None,
                 is_active is not None,
                 is_deleted is not None,
             )
@@ -320,6 +324,9 @@ class PlanManagementService:
 
         if price is not None:
             plan.price = self.normalize_price(price)
+
+        if price_usdt is not None:
+            plan.price_usdt = self.normalize_price(price_usdt)
 
         if daily_limit_supplied:
             normalized_limit = self.normalize_daily_limit(

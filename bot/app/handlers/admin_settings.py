@@ -57,6 +57,7 @@ async def _show_settings(message: Message, actor_telegram_id: int) -> None:
         reply_markup=build_runtime_settings_keyboard(
             rows,
             can_manage=_can(context, "settings.manage"),
+            can_manage_channels=_can(context, "forced_join.manage"),
         ),
     )
 

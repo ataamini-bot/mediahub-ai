@@ -11,9 +11,38 @@ def build_runtime_settings_keyboard(
     rows: list[dict],
     *,
     can_manage: bool,
+    can_manage_channels: bool = False,
 ) -> InlineKeyboardMarkup:
     rows_by_key = {str(row.get("key")): row for row in rows}
     keyboard_rows: list[list[InlineKeyboardButton]] = []
+
+    if can_manage:
+        keyboard_rows.extend(
+            [
+                [
+                    InlineKeyboardButton(
+                        text="📝 متن‌ها و عنوان دکمه‌ها",
+                        callback_data="admin:copy",
+                    )
+                ],
+                [
+                    InlineKeyboardButton(
+                        text="🧩 دکمه‌های سفارشی صفحه اصلی",
+                        callback_data="admin:homebuttons",
+                    )
+                ],
+            ]
+        )
+
+    if can_manage_channels:
+        keyboard_rows.append(
+            [
+                InlineKeyboardButton(
+                    text="📢 عضویت اجباری کانال‌ها",
+                    callback_data="admin:channels",
+                )
+            ]
+        )
 
     if can_manage:
         for definition in RUNTIME_SETTINGS:

@@ -2,7 +2,7 @@ from typing import Any
 
 
 SUPPORTED_LANGUAGES = frozenset({"fa", "en"})
-DEFAULT_LANGUAGE = "en"
+DEFAULT_LANGUAGE = "fa"
 
 
 MESSAGES: dict[str, dict[str, str]] = {
@@ -16,7 +16,7 @@ MESSAGES: dict[str, dict[str, str]] = {
         ),
         "home.buy": "💎 خرید اشتراک",
         "home.subscription": "👤 وضعیت اشتراک من",
-        "home.language": "🌐 تغییر زبان",
+        "home.language": "🌐 تغییر زبان | Language",
         "home.admin": "⚙️ پنل مدیریت",
         "home.placeholder": "لینک رسانه را بفرستید…",
         "home.ready": "از منوی پایین یکی از گزینه‌ها را انتخاب کنید.",
@@ -33,7 +33,7 @@ MESSAGES: dict[str, dict[str, str]] = {
         ),
         "home.buy": "💎 Buy subscription",
         "home.subscription": "👤 My subscription",
-        "home.language": "🌐 Change language",
+        "home.language": "🌐 Language | تغییر زبان",
         "home.admin": "⚙️ Admin panel",
         "home.placeholder": "Send a media link…",
         "home.ready": "Choose an option from the menu below.",
@@ -72,6 +72,15 @@ HOME_BUTTON_ACTIONS: dict[str, str] = {
     for language in SUPPORTED_LANGUAGES
     for message_key, action in HOME_ACTION_KEYS.items()
 }
+
+# Keep keyboards sent by the previous release functional until Telegram
+# replaces them with the new persistent menu on the user's next interaction.
+HOME_BUTTON_ACTIONS.update(
+    {
+        "🌐 تغییر زبان": "language",
+        "🌐 Change language": "language",
+    }
+)
 
 
 def home_action_for_text(value: str | None) -> str | None:

@@ -138,6 +138,19 @@ class DownloadAccessService:
         match = re.search(r"(\d{3,4})", normalized)
         return int(match.group(1)) if match else None
 
+    async def get_entitlement(self, telegram_id: int) -> DownloadEntitlement:
+        user_result = await self.session.execute(
+            select(User).where(User.telegram_id == telegram_id)
+        )
+        user = user_result.scalar_one_or_none()
+        if user is None:
+            raise DownloadUserNotFound(
+                "Telegram user must be registered before downloading"
+            )
+        if user.status != UserStatus.ACTIVE:
+            raise DownloadUserBlocked("User account is not active")
+        return await self._resolve_entitlement(user)
+
     async def authorize_job(
         self,
         *,
