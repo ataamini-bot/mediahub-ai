@@ -50,7 +50,7 @@ def test_normalize_language(raw_value, expected):
     assert normalize_language(raw_value) == expected
 
 
-def test_effective_language_preserves_explicit_choice():
+def test_effective_language_preserves_explicit_choice_and_defaults_to_persian():
     assert (
         effective_language(
             preferred_language="en",
@@ -59,7 +59,8 @@ def test_effective_language_preserves_explicit_choice():
         == "en"
     )
     assert infer_language("fa-IR") == "fa"
-    assert infer_language("de-DE") == "en"
+    assert infer_language("de-DE") == "fa"
+    assert infer_language(None) == "fa"
 
 
 def test_explicit_superadmin_wins_over_legacy_bootstrap(monkeypatch):
