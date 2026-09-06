@@ -15,6 +15,7 @@ from app.keyboards.payment import (
     build_payment_offers_keyboard,
     build_receipt_cancel_keyboard,
     format_toman,
+    format_usdt,
 )
 from app.i18n import normalize_language
 from app.runtime_config import runtime_configuration
@@ -165,6 +166,21 @@ def _build_admin_caption(result: dict, offer: dict) -> str:
     ) or "—"
     username = user.get("username")
     username_text = f"@{username}" if username else "—"
+    currency = str(offer.get("currency") or "IRT")
+    amount_text = (
+        format_usdt(payment["amount"])
+        if currency == "USDT"
+        else format_toman(payment["amount"])
+    )
+    destination = payment.get("payment_destination_snapshot") or {}
+    destination_text = ""
+    if currency == "USDT":
+        destination_text = (
+            "\n🌐 شبکه: "
+            f"<code>{html.escape(str(destination.get('network_code') or '—'))}</code>"
+            "\n📬 مقصد: "
+            f"<code>{html.escape(str(destination.get('address') or '—'))}</code>"
+        )
 
     return (
         "🧾 <b>رسید جدید خرید اشتراک</b>\n\n"
@@ -173,7 +189,7 @@ def _build_admin_caption(result: dict, offer: dict) -> str:
         f"🔗 نام کاربری: {html.escape(username_text)}\n"
         f"📱 Telegram ID: <code>{user['telegram_id']}</code>\n\n"
         f"💎 بسته: <b>{html.escape(offer['label'])}</b>\n"
-        f"💰 مبلغ: <b>{format_toman(payment['amount'])}</b>\n"
+        f"💰 مبلغ: <b>{amount_text}</b>{destination_text}\n"
         f"📅 مدت: <code>{payment['duration_days']} روز</code>\n"
         f"📎 نوع رسید: <code>{payment['receipt_file_type']}</code>\n\n"
         "⏳ وضعیت: <b>در انتظار بررسی</b>"
@@ -288,18 +304,27 @@ async def send_payment_offers_menu(
 ) -> None:
     """Open subscription offers from the persistent reply keyboard."""
     try:
+        user = (
+            await get_telegram_user(message.from_user.id)
+            if message.from_user is not None
+            else {}
+        )
+        language = normalize_language(user.get("effective_language"))
         configuration = await get_payment_configuration(
             select_destination=False,
+            language=language,
         )
         await state.clear()
         await message.answer(
             (
-                "💎 <b>خرید اشتراک</b>\n\n"
-                "پلن موردنظر را انتخاب کنید:"
+                "💎 <b>خرید اشتراک</b>\n\nپلن موردنظر را انتخاب کنید:"
+                if language == "fa"
+                else "💎 <b>Buy subscription</b>\n\nChoose a plan:"
             ),
             parse_mode="HTML",
             reply_markup=build_payment_offers_keyboard(
-                configuration["offers"]
+                configuration["offers"],
+                language,
             ),
         )
     except BackendAPIError as exc:
@@ -339,7 +364,7 @@ def _subscription_status_text(result: dict, language: str = "fa") -> str:
     return (
         ("👤 <b>وضعیت اشتراک</b>\n\n" if is_fa else "👤 <b>My subscription</b>\n\n")
         + ("✅ اشتراک شما فعال است.\n" if is_fa else "✅ Your subscription is active.\n")
-        + f"💎 Plan: <b>{plan_name}</b>\n"
+        + f"💎 {'پلن' if is_fa else 'Plan'}: <b>{plan_name}</b>\n"
         + f"📦 {labels[0 if is_fa else 1]}: <code>{html.escape(duration)}</code>\n"
         + f"📅 {'اعتبار تا' if is_fa else 'Valid until'}: <code>{_format_datetime(result.get('expires_at'), language)}</code>\n"
         + f"⏳ {labels[10 if is_fa else 11]}: <code>{remaining_days}</code>\n"
@@ -362,6 +387,7 @@ async def send_subscription_status(
         await message.answer(
             _subscription_status_text(result, language),
             parse_mode="HTML",
+            reply_markup=await _user_home_reply_keyboard(user),
         )
     except BackendAPIError:
         await message.answer("دریافت وضعیت اشتراک ممکن نشد.")
@@ -376,18 +402,23 @@ async def open_payment_offers(
         return
 
     try:
+        user = await get_telegram_user(callback.from_user.id)
+        language = normalize_language(user.get("effective_language"))
         configuration = await get_payment_configuration(
             select_destination=False,
+            language=language,
         )
         await state.clear()
         await callback.message.edit_text(
             (
-                "💎 <b>خرید اشتراک</b>\n\n"
-                "پلن موردنظر را انتخاب کنید:"
+                "💎 <b>خرید اشتراک</b>\n\nپلن موردنظر را انتخاب کنید:"
+                if language == "fa"
+                else "💎 <b>Buy subscription</b>\n\nChoose a plan:"
             ),
             parse_mode="HTML",
             reply_markup=build_payment_offers_keyboard(
-                configuration["offers"]
+                configuration["offers"],
+                language,
             ),
         )
         await callback.answer()
@@ -436,8 +467,11 @@ async def select_payment_offer(
     offer_code = callback.data.rsplit(":", 1)[-1]
 
     try:
+        user = await get_telegram_user(callback.from_user.id)
+        language = normalize_language(user.get("effective_language"))
         configuration = await get_payment_configuration(
             select_destination=True,
+            language=language,
         )
         offer = _find_offer(configuration, offer_code)
 
@@ -447,23 +481,46 @@ async def select_payment_offer(
 
         destination = configuration["destination"]
         receipt_rules = configuration["receipt"]
+        currency = str(offer.get("currency") or "IRT")
         await state.set_state(PaymentStates.waiting_for_receipt)
         await state.update_data(
             offer=offer,
             offer_code=offer_code,
-            payment_card_id=destination.get("id"),
+            payment_card_id=(
+                destination.get("id") if currency == "IRT" else None
+            ),
+            usdt_destination_id=(
+                destination.get("id") if currency == "USDT" else None
+            ),
+            currency=currency,
             receipt_rules=receipt_rules,
         )
 
-        bank_line = ""
-        if destination.get("bank_name"):
-            bank_line = (
-                "\n🏦 بانک: "
-                f"<b>{html.escape(destination['bank_name'])}</b>"
+        if currency == "USDT":
+            payment_text = (
+                f"💎 <b>{html.escape(offer['label'])}</b>\n"
+                f"📅 Duration: <code>{int(offer['duration_days'])} days</code>\n"
+                f"💰 Amount: <b>{format_usdt(offer['price'])}</b>\n\n"
+                "Send the exact amount of USDT to this address:\n\n"
+                "🌐 Network: "
+                f"<b>{html.escape(str(destination.get('network_name') or destination.get('network_code') or '—'))}</b>\n"
+                "💵 Asset: "
+                f"<code>{html.escape(str(destination.get('asset_symbol') or 'USDT'))}</code>\n"
+                "📬 Address: "
+                f"<code>{html.escape(str(destination.get('address') or '—'))}</code>\n\n"
+                "⚠️ Use only the displayed network; transfers on another network may be lost.\n\n"
+                "📎 Then send a screenshot or PDF receipt here.\n"
+                "Maximum receipt size: "
+                f"<code>{receipt_rules['max_size_mb']} MB</code>"
             )
-
-        await callback.message.edit_text(
-            (
+        else:
+            bank_line = ""
+            if destination.get("bank_name"):
+                bank_line = (
+                    "\n🏦 بانک: "
+                    f"<b>{html.escape(destination['bank_name'])}</b>"
+                )
+            payment_text = (
                 f"💎 <b>{html.escape(offer['label'])}</b>\n"
                 f"📅 مدت: <code>{int(offer['duration_days'])} روز</code>\n"
                 f"💰 مبلغ: <b>{format_toman(offer['price'])}</b>\n\n"
@@ -475,9 +532,12 @@ async def select_payment_offer(
                 "📎 سپس تصویر رسید یا فایل PDF را همین‌جا ارسال کنید.\n"
                 "حداکثر حجم رسید: "
                 f"<code>{receipt_rules['max_size_mb']} MB</code>"
-            ),
+            )
+
+        await callback.message.edit_text(
+            payment_text,
             parse_mode="HTML",
-            reply_markup=build_receipt_cancel_keyboard(),
+            reply_markup=build_receipt_cancel_keyboard(language),
         )
         await callback.answer()
     except BackendAPIError as exc:
@@ -517,6 +577,8 @@ async def receive_payment_receipt(
     offer = state_data.get("offer")
     receipt_rules = state_data.get("receipt_rules")
     payment_card_id = state_data.get("payment_card_id")
+    usdt_destination_id = state_data.get("usdt_destination_id")
+    currency = str(state_data.get("currency") or "IRT")
 
     if not offer_code or not isinstance(offer, dict):
         await state.clear()
@@ -575,6 +637,12 @@ async def receive_payment_receipt(
             user_receipt_message_id=message.message_id,
             payment_card_id=(
                 int(payment_card_id) if payment_card_id is not None else None
+            ),
+            currency=currency,
+            usdt_destination_id=(
+                int(usdt_destination_id)
+                if usdt_destination_id is not None
+                else None
             ),
         )
         payment_id = int(result["payment"]["id"])

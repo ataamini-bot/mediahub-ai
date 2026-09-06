@@ -383,13 +383,59 @@ class _ThreadsEmbedParser(HTMLParser):
 
 
 def _threads_embed_url(source_url: str) -> str:
-    parsed = urlparse(source_url)
+    parsed = urlparse(_resolve_threads_source(source_url))
     path = parsed.path.rstrip("/")
     if path.endswith("/embed"):
         embed_path = path
     else:
         embed_path = path + "/embed"
     return f"https://www.threads.com{embed_path}"
+
+
+def _resolve_threads_source(source_url: str) -> str:
+    """Resolve legacy ``/t/<code>`` share URLs to their canonical post path.
+
+    Threads still emits and accepts compact ``/t/`` links, but appending
+    ``/embed`` to that legacy path returns an embed shell without the post
+    media.  The canonical ``/@user/post/<code>/embed`` page contains the
+    actual public image/video elements, so resolve only the ambiguous legacy
+    form before constructing the embed URL.
+    """
+
+    parsed = urlparse(source_url)
+    if not re.fullmatch(r"/t/[A-Za-z0-9_-]+/?", parsed.path):
+        return source_url
+
+    response: requests.Response | None = None
+    try:
+        response = requests.get(
+            source_url,
+            headers={
+                "User-Agent": LINK_PREVIEW_USER_AGENT,
+                "Accept": "text/html,application/xhtml+xml",
+            },
+            stream=True,
+            timeout=THREADS_REQUEST_TIMEOUT,
+            allow_redirects=True,
+        )
+        response.raise_for_status()
+        final_url = response.url
+    except requests.RequestException:
+        return source_url
+    finally:
+        if response is not None:
+            response.close()
+
+    if not is_threads_url(final_url):
+        return source_url
+
+    final_path = urlparse(final_url).path.rstrip("/")
+    if not re.fullmatch(
+        r"/@[^/]+/post/[A-Za-z0-9_-]+",
+        final_path,
+    ):
+        return source_url
+    return f"https://www.threads.com{final_path}"
 
 
 def _read_limited_response(response: requests.Response, limit: int) -> str:

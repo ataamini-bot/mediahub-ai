@@ -52,6 +52,9 @@ from app.handlers.admin import (
 from app.handlers.admin_settings import (
     router as admin_settings_router,
 )
+from app.handlers.admin_experience import (
+    router as admin_experience_router,
+)
 from app.handlers.admin_finance import (
     router as admin_finance_router,
 )
@@ -63,6 +66,10 @@ from app.handlers.payments import (
 )
 from app.i18n import home_action_for_text, normalize_language, translate
 from app.runtime_config import runtime_configuration, runtime_content
+from app.runtime_config import (
+    action_for_runtime_text,
+    all_runtime_configurations,
+)
 
 from app.utils.formatting import (
     format_file_size,
@@ -147,6 +154,9 @@ dp.include_router(
     admin_settings_router
 )
 dp.include_router(
+    admin_experience_router
+)
+dp.include_router(
     admin_finance_router
 )
 dp.include_router(
@@ -180,11 +190,24 @@ class DownloadMessageFilter(
             or ""
         )
 
-        return bool(
-            text.strip()
-            and not text.lstrip().startswith("/")
-            and home_action_for_text(text) is None
-        )
+        stripped = text.strip()
+        if not stripped or stripped.startswith("/"):
+            return False
+        if home_action_for_text(stripped) is not None:
+            return False
+
+        # Reply-keyboard taps arrive as ordinary text messages.  Runtime
+        # labels and custom buttons must be rejected here because this root
+        # dispatcher handler is evaluated before child-router handlers.
+        if "https://" not in stripped and "http://" not in stripped:
+            action = action_for_runtime_text(
+                stripped,
+                await all_runtime_configurations(),
+            )
+            if action is not None:
+                return False
+
+        return True
 
 
 def download_error_text(exc: Exception) -> str:

@@ -2,7 +2,7 @@ from math import ceil
 
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
-from app.keyboards.payment import format_toman
+from app.keyboards.payment import format_toman, format_usdt
 
 
 PAYMENT_PAGE_SIZE = 8
@@ -23,6 +23,12 @@ def build_finance_home_keyboard(
             InlineKeyboardButton(
                 text="🧾 همه پرداخت‌ها",
                 callback_data="admin:pay:list:all:1",
+            )
+        ],
+        [
+            InlineKeyboardButton(
+                text="📊 آمار پرداخت‌ها",
+                callback_data="admin:pay:stats",
             )
         ],
     ]
@@ -80,7 +86,8 @@ def build_payment_list_keyboard(
                 InlineKeyboardButton(
                     text=(
                         f"{status_icons.get(status, '•')} #{payment['id']} "
-                        f"{identity[:18]} — {format_toman(payment['amount'])}"
+                        f"{identity[:18]} — "
+                        f"{format_usdt(payment['amount']) if payment.get('payment_method') == 'usdt' else format_toman(payment['amount'])}"
                     )[:60],
                     callback_data=(
                         f"admin:pay:view:{int(payment['id'])}:"

@@ -476,9 +476,15 @@ def build_admin_plan_detail_keyboard(plan: dict) -> InlineKeyboardMarkup:
                         callback_data=f"admin:plan:edit:duration:{plan_id}",
                     ),
                     InlineKeyboardButton(
-                        text="💰 مبلغ",
+                        text="💰 مبلغ تومان",
                         callback_data=f"admin:plan:edit:price:{plan_id}",
                     ),
+                ],
+                [
+                    InlineKeyboardButton(
+                        text="💵 مبلغ USDT",
+                        callback_data=f"admin:plan:edit:usdt:{plan_id}",
+                    )
                 ],
                 [
                     InlineKeyboardButton(

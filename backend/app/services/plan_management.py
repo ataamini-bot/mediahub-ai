@@ -273,6 +273,7 @@ class PlanManagementService:
         duration_days: int | None = None,
         price: Decimal | None = None,
         price_usdt: Decimal | None = None,
+        price_usdt_supplied: bool = False,
         daily_download_limit: int | None = None,
         daily_limit_supplied: bool = False,
         max_file_size_mb: int | None = None,
@@ -298,7 +299,7 @@ class PlanManagementService:
                 description_supplied,
                 duration_days is not None,
                 price is not None,
-                price_usdt is not None,
+                price_usdt_supplied,
                 is_active is not None,
                 is_deleted is not None,
             )
@@ -325,8 +326,12 @@ class PlanManagementService:
         if price is not None:
             plan.price = self.normalize_price(price)
 
-        if price_usdt is not None:
-            plan.price_usdt = self.normalize_price(price_usdt)
+        if price_usdt_supplied:
+            plan.price_usdt = (
+                self.normalize_price(price_usdt)
+                if price_usdt is not None
+                else None
+            )
 
         if daily_limit_supplied:
             normalized_limit = self.normalize_daily_limit(

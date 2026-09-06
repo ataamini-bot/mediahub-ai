@@ -5,16 +5,16 @@ cd /opt/mediahub-ai || exit 1
   set -u
   expected_branch="feature/admin-foundation"
   expected_commit="${1:-}"
-  expected_migration="8c3d4e5f6a71"
+  expected_migration="a3d8f2c6e910"
   stamp="$(date -u +%Y%m%dT%H%M%SZ)"
   started_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-  backup="backups/manual/before-bot-experience-${stamp}.dump"
-  verify_log="backups/manual/bot-experience-${stamp}.log"
+  backup="backups/manual/before-post-deploy-hotfix-${stamp}.dump"
+  verify_log="backups/manual/post-deploy-hotfix-${stamp}.log"
   migration_container="mediahub-migration-${stamp}"
-  rollback_backend="mediahub-ai-backend:rollback-bot-experience-${stamp}"
-  rollback_worker="mediahub-ai-worker:rollback-bot-experience-${stamp}"
-  rollback_monitor="mediahub-ai-monitor:rollback-bot-experience-${stamp}"
-  rollback_bot="mediahub-ai-bot:rollback-bot-experience-${stamp}"
+  rollback_backend="mediahub-ai-backend:rollback-post-deploy-hotfix-${stamp}"
+  rollback_worker="mediahub-ai-worker:rollback-post-deploy-hotfix-${stamp}"
+  rollback_monitor="mediahub-ai-monitor:rollback-post-deploy-hotfix-${stamp}"
+  rollback_bot="mediahub-ai-bot:rollback-post-deploy-hotfix-${stamp}"
 
   if ! [[ "$expected_commit" =~ ^[0-9a-f]{40}$ ]]; then
     printf 'Usage: %s <expected-40-character-commit-sha>\n' "$0"
@@ -69,7 +69,7 @@ cd /opt/mediahub-ai || exit 1
   database_before="$(docker compose exec -T backend alembic current 2>&1)"
   printf '%s\n' "$database_before"
   if ! printf '%s\n' "$database_before" | grep -Eq \
-    '5d1a9c7e2f40|7a2c9e1f4b60|8c3d4e5f6a71'
+    '5d1a9c7e2f40|7a2c9e1f4b60|8c3d4e5f6a71|9b4e2d6f1a30|a3d8f2c6e910'
   then
     printf 'DEPLOYMENT=ABORTED_UNEXPECTED_DATABASE_REVISION\n'
     exit 1
@@ -212,6 +212,7 @@ cd /opt/mediahub-ai || exit 1
 
   if ! docker compose run --rm --no-deps -T bot python -c '
 import asyncio
+from app.main import dp
 from app.services.backend import get_bot_configuration
 async def verify():
     for language in ("fa", "en"):
@@ -219,6 +220,9 @@ async def verify():
         assert result["language"] == language
         assert result["content"] and result["buttons"]
 asyncio.run(verify())
+routers = {router.name: router for router in dp.sub_routers}
+assert "admin-experience" in routers
+assert len(routers["admin-experience"].callback_query.handlers) >= 20
 print("BOT_CONFIGURATION_API=OK")
 '; then
     rollback_runtime || true
@@ -244,6 +248,20 @@ print("BOT_CONFIGURATION_API=OK")
   final_database="$(docker compose exec -T backend alembic current 2>&1)"
   printf '%s\n' "$final_database"
   printf '%s\n' "$final_database" | grep -q "$expected_migration" || deployment_ok=0
+  quota_null_count="$(
+    docker compose exec -T postgres sh -lc '
+      psql --username="$POSTGRES_USER" --dbname="$POSTGRES_DB" \
+        --no-psqlrc --tuples-only --no-align --command="
+          SELECT count(*)
+          FROM subscriptions AS subscription
+          JOIN plans AS plan ON plan.id = subscription.plan_id
+          WHERE plan.daily_download_limit IS NOT NULL
+            AND subscription.daily_download_limit IS NULL;
+        "
+    ' 2>/dev/null | tr -d '[:space:]'
+  )"
+  printf 'FINITE_SUBSCRIPTIONS_WITHOUT_QUOTA=%s\n' "${quota_null_count:-UNKNOWN}"
+  [ "$quota_null_count" = "0" ] || deployment_ok=0
   if final_health="$(curl -fsS http://127.0.0.1:8000/health)"; then
     printf 'HEALTH_RESPONSE=%s\n' "$final_health"
   else

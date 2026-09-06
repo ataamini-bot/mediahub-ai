@@ -1,4 +1,5 @@
 from app.admin_runtime_settings import runtime_settings_text
+from app.main import dp
 from app.keyboards.admin_settings import build_runtime_settings_keyboard
 
 
@@ -67,3 +68,11 @@ def test_settings_viewer_only_gets_back_button():
 
     assert len(keyboard.inline_keyboard) == 1
     assert keyboard.inline_keyboard[0][0].callback_data == "admin:open"
+
+
+def test_experience_admin_handlers_are_registered():
+    routers = {router.name: router for router in dp.sub_routers}
+
+    assert "admin-experience" in routers
+    assert len(routers["admin-experience"].callback_query.handlers) >= 20
+    assert len(routers["admin-experience"].message.handlers) >= 8

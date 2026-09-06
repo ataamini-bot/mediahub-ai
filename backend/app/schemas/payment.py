@@ -2,7 +2,7 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, computed_field, field_validator
+from pydantic import BaseModel, Field, computed_field, field_validator, model_validator
 
 from app.core.language import effective_language as resolve_effective_language
 from app.models.payment import PaymentStatus
@@ -13,7 +13,7 @@ class PaymentOfferResponse(BaseModel):
     label: str
     duration_days: int = Field(gt=0)
     price: Decimal
-    currency: Literal["IRT"] = "IRT"
+    currency: Literal["IRT", "USDT"] = "IRT"
     daily_download_limit: int | None
     max_file_size_mb: int | None
     max_quality: int | None
@@ -23,11 +23,19 @@ class PaymentOfferResponse(BaseModel):
 
 
 class PaymentDestinationResponse(BaseModel):
+    type: Literal["card", "usdt"] = "card"
     id: int | None = None
     label: str | None = None
-    card_number: str
-    card_holder: str
+    card_number: str | None = None
+    card_holder: str | None = None
     bank_name: str | None = None
+    network_name: str | None = None
+    network_code: str | None = None
+    address: str | None = None
+    asset_symbol: str | None = None
+    contract_address: str | None = None
+    explorer_url: str | None = None
+    confirmations_required: int | None = None
 
 
 class PaymentReceiptRulesResponse(BaseModel):
@@ -44,7 +52,9 @@ class PaymentConfigurationResponse(BaseModel):
 class PaymentCreate(BaseModel):
     telegram_id: int = Field(gt=0)
     offer_code: str = Field(min_length=3, max_length=100)
+    currency: Literal["IRT", "USDT"] = "IRT"
     payment_card_id: int | None = Field(default=None, gt=0)
+    usdt_destination_id: int | None = Field(default=None, gt=0)
     receipt_file_id: str = Field(min_length=1, max_length=512)
     receipt_file_unique_id: str | None = Field(
         default=None,
@@ -60,6 +70,16 @@ class PaymentCreate(BaseModel):
     @classmethod
     def normalize_offer_code(cls, value: str) -> str:
         return value.strip().lower()
+
+    @model_validator(mode="after")
+    def destination_matches_currency(self):
+        if self.currency == "USDT" and self.usdt_destination_id is None:
+            raise ValueError("USDT destination is required")
+        if self.currency == "USDT" and self.payment_card_id is not None:
+            raise ValueError("Payment card is not valid for USDT payment")
+        if self.currency == "IRT" and self.usdt_destination_id is not None:
+            raise ValueError("USDT destination is not valid for IRT payment")
+        return self
 
 
 class PaymentAdminMessageUpdate(BaseModel):

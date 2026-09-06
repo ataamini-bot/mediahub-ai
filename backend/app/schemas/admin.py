@@ -54,6 +54,7 @@ class AdminPaymentSummaryResponse(BaseModel):
     usdt_destinations: int
     active_usdt_destinations: int
     legacy_card_configured: bool
+    statistics: dict[str, dict[str, Any]] = Field(default_factory=dict)
 
 
 class AdminPaymentListItem(BaseModel):

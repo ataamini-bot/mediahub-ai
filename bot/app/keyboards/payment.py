@@ -182,15 +182,18 @@ def build_upgrade_keyboard(
 
 def build_payment_offers_keyboard(
     offers: list[dict],
+    language: str = "fa",
 ) -> InlineKeyboardMarkup:
     rows = []
+    is_fa = language != "en"
 
     for offer in offers:
         rows.append(
             [
                 InlineKeyboardButton(
                     text=(
-                        f"{offer['label']} — {int(offer['duration_days'])} روز — "
+                        f"{offer['label']} — {int(offer['duration_days'])} "
+                        f"{'روز' if is_fa else 'days'} — "
                         f"{format_usdt(offer.get('price')) if offer.get('currency') == 'USDT' else format_toman(offer['price'])}"
                     ),
                     callback_data=f"payment:offer:{offer['code']}",
@@ -201,7 +204,7 @@ def build_payment_offers_keyboard(
     rows.append(
         [
             InlineKeyboardButton(
-                text="❌ بستن",
+                text="❌ بستن" if is_fa else "❌ Close",
                 callback_data="payment:cancel",
             )
         ]
@@ -209,18 +212,23 @@ def build_payment_offers_keyboard(
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def build_receipt_cancel_keyboard() -> InlineKeyboardMarkup:
+def build_receipt_cancel_keyboard(language: str = "fa") -> InlineKeyboardMarkup:
+    is_fa = language != "en"
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
                 InlineKeyboardButton(
-                    text="🔙 انتخاب پلن دیگر",
+                    text=(
+                        "🔙 انتخاب پلن دیگر"
+                        if is_fa
+                        else "🔙 Choose another plan"
+                    ),
                     callback_data="payment:open",
                 )
             ],
             [
                 InlineKeyboardButton(
-                    text="❌ انصراف",
+                    text="❌ انصراف" if is_fa else "❌ Cancel",
                     callback_data="payment:cancel",
                 )
             ],

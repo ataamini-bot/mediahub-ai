@@ -14,6 +14,7 @@ from app.services.payment_management import (
     PaymentManagementService,
     legacy_payment_card_snapshot,
     payment_card_snapshot,
+    usdt_destination_snapshot,
 )
 
 
@@ -36,13 +37,18 @@ class PaymentOffer:
     forced_join_required: bool
 
     @classmethod
-    def from_plan(cls, plan: Plan) -> "PaymentOffer":
+    def from_plan(cls, plan: Plan, *, currency: str = "IRT") -> "PaymentOffer":
+        price = plan.price_usdt if currency == "USDT" else plan.price
+        if price is None:
+            raise PaymentConfigurationError(
+                f"Plan {plan.slug} has no {currency} price"
+            )
         return cls(
             code=plan.slug,
             label=plan.name,
             plan_id=plan.id,
             duration_days=plan.duration_days,
-            price=plan.price,
+            price=price,
             daily_download_limit=plan.daily_download_limit,
             max_file_size_mb=plan.max_file_size_mb,
             max_quality=plan.max_quality,
@@ -64,7 +70,11 @@ class PaymentOffer:
 
 async def get_payment_offers(
     session: AsyncSession,
+    *,
+    language: str = "fa",
 ) -> tuple[PaymentOffer, ...]:
+    currency = "USDT" if language == "en" else "IRT"
+    price_column = Plan.price_usdt if currency == "USDT" else Plan.price
     result = await session.execute(
         select(Plan)
         .where(
@@ -72,11 +82,15 @@ async def get_payment_offers(
             Plan.is_active.is_(True),
             Plan.deleted_at.is_(None),
             Plan.duration_days > 0,
-            Plan.price > 0,
+            price_column.is_not(None),
+            price_column > 0,
         )
         .order_by(Plan.sort_order, Plan.id)
     )
-    offers = tuple(PaymentOffer.from_plan(plan) for plan in result.scalars())
+    offers = tuple(
+        PaymentOffer.from_plan(plan, currency=currency)
+        for plan in result.scalars()
+    )
 
     if not offers:
         raise PaymentConfigurationError(
@@ -89,7 +103,13 @@ async def get_payment_offers(
 async def get_payment_offer(
     session: AsyncSession,
     code: str,
+    *,
+    currency: str = "IRT",
 ) -> PaymentOffer:
+    normalized_currency = "USDT" if currency == "USDT" else "IRT"
+    price_column = (
+        Plan.price_usdt if normalized_currency == "USDT" else Plan.price
+    )
     normalized_code = str(code or "").strip().lower()
     result = await session.execute(
         select(Plan).where(
@@ -98,7 +118,8 @@ async def get_payment_offer(
             Plan.is_active.is_(True),
             Plan.deleted_at.is_(None),
             Plan.duration_days > 0,
-            Plan.price > 0,
+            price_column.is_not(None),
+            price_column > 0,
         )
     )
     plan = result.scalar_one_or_none()
@@ -106,30 +127,41 @@ async def get_payment_offer(
     if plan is None:
         raise LookupError("Subscription plan not found")
 
-    return PaymentOffer.from_plan(plan)
+    return PaymentOffer.from_plan(plan, currency=normalized_currency)
 
 
 async def get_payment_configuration(
     session: AsyncSession,
     *,
     select_destination: bool = True,
+    language: str = "fa",
 ) -> dict:
+    normalized_language = "en" if language == "en" else "fa"
+    currency = "USDT" if normalized_language == "en" else "IRT"
     await ensure_public_operation(session, "payments")
-    offers = await get_payment_offers(session)
+    offers = await get_payment_offers(session, language=normalized_language)
 
     destination = None
     if select_destination:
         management = PaymentManagementService(session)
-        card = await management.select_card()
         try:
-            if card is not None:
-                destination = payment_card_snapshot(card)
-            elif await management.has_database_cards():
-                raise PaymentDestinationValidation(
-                    "No active database payment card is configured"
-                )
+            if currency == "USDT":
+                usdt_destination = await management.select_usdt_destination()
+                if usdt_destination is None:
+                    raise PaymentDestinationValidation(
+                        "No active USDT destination is configured"
+                    )
+                destination = usdt_destination_snapshot(usdt_destination)
             else:
-                destination = legacy_payment_card_snapshot()
+                card = await management.select_card()
+                if card is not None:
+                    destination = payment_card_snapshot(card)
+                elif await management.has_database_cards():
+                    raise PaymentDestinationValidation(
+                        "No active database payment card is configured"
+                    )
+                else:
+                    destination = legacy_payment_card_snapshot()
         except PaymentDestinationValidation as exc:
             raise PaymentConfigurationError(str(exc)) from exc
 
@@ -140,7 +172,7 @@ async def get_payment_configuration(
                 "label": offer.label,
                 "duration_days": offer.duration_days,
                 "price": offer.price,
-                "currency": "IRT",
+                "currency": currency,
                 "daily_download_limit": offer.daily_download_limit,
                 "max_file_size_mb": offer.max_file_size_mb,
                 "max_quality": offer.max_quality,

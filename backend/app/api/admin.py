@@ -401,6 +401,7 @@ async def update_plan(
             duration_days=data.duration_days,
             price=data.price,
             price_usdt=data.price_usdt,
+            price_usdt_supplied="price_usdt" in data.model_fields_set,
             daily_download_limit=data.daily_download_limit,
             daily_limit_supplied="daily_download_limit" in data.model_fields_set,
             max_file_size_mb=data.max_file_size_mb,

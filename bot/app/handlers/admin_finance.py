@@ -18,7 +18,7 @@ from app.keyboards.admin_finance import (
     build_usdt_detail_keyboard,
     build_usdt_keyboard,
 )
-from app.keyboards.payment import format_toman
+from app.keyboards.payment import format_toman, format_usdt
 from app.services.backend import (
     BackendAPIError,
     create_payment_card,
@@ -159,6 +159,57 @@ async def _show_finance_home(message: Message, actor_telegram_id: int) -> None:
     )
 
 
+def _payment_statistics_text(summary: dict) -> str:
+    labels = {
+        "daily": "امروز",
+        "weekly": "۷ روز اخیر",
+        "monthly": "ماه جاری",
+        "yearly": "سال جاری",
+        "all": "کل",
+    }
+    statistics = summary.get("statistics") or {}
+    lines = [
+        "📊 <b>آمار پرداخت‌ها</b>",
+        "",
+        "مبالغ تأییدشدهٔ تومان و USDT جداگانه محاسبه شده‌اند.",
+    ]
+    for key in ("daily", "weekly", "monthly", "yearly", "all"):
+        row = statistics.get(key) or {}
+        lines.extend(
+            [
+                "",
+                f"<b>{labels[key]}</b>",
+                f"✅ موفق: <code>{int(row.get('approved', 0))}</code> | "
+                f"⏳ در انتظار: <code>{int(row.get('pending', 0))}</code> | "
+                f"❌ رد: <code>{int(row.get('rejected', 0))}</code>",
+                f"💰 درآمد: <b>{format_toman(row.get('irt_total', 0))}</b>",
+                f"💵 درآمد بین‌المللی: <b>{format_usdt(row.get('usdt_total', 0))}</b>",
+            ]
+        )
+    return "\n".join(lines)
+
+
+@router.callback_query(F.data == "admin:pay:stats")
+async def show_payment_statistics(callback: CallbackQuery) -> None:
+    if not isinstance(callback.message, Message):
+        return
+    if await _context(callback.from_user.id, "payments.view") is None:
+        await callback.answer("دسترسی مشاهده آمار پرداخت‌ها ندارید.", show_alert=True)
+        return
+    try:
+        summary = await get_admin_payment_summary(callback.from_user.id)
+        await callback.message.edit_text(
+            _payment_statistics_text(summary),
+            parse_mode="HTML",
+            reply_markup=build_finance_home_keyboard(
+                can_manage_destinations=False,
+            ),
+        )
+        await callback.answer()
+    except BackendAPIError as exc:
+        await callback.answer(_finance_error_text(exc), show_alert=True)
+
+
 async def _show_cards(message: Message, actor_telegram_id: int) -> None:
     cards = await list_payment_cards(actor_telegram_id)
     active_count = sum(bool(card.get("is_active")) for card in cards)
@@ -247,6 +298,19 @@ def _payment_caption(payment: dict) -> str:
         if card_number
         else ""
     )
+    is_usdt = str(payment.get("payment_method") or "") == "usdt"
+    usdt_line = (
+        "\n💵 مقصد USDT: "
+        f"<code>{html.escape(str(destination.get('network_code') or '—'))}</code> — "
+        f"<code>{html.escape(str(destination.get('address') or '—'))}</code>"
+        if is_usdt
+        else ""
+    )
+    amount_text = (
+        format_usdt(payment.get("amount"))
+        if is_usdt
+        else format_toman(payment.get("amount"))
+    )
     rejection = ""
     if payment.get("rejection_reason"):
         rejection = (
@@ -261,8 +325,8 @@ def _payment_caption(payment: dict) -> str:
         f"Telegram ID: <code>{int(payment['user_telegram_id'])}</code>\n\n"
         f"پلن: <b>{html.escape(str(payment.get('plan_name_snapshot') or '—'))}</b>\n"
         f"مدت: <code>{int(payment.get('duration_days', 0))} روز</code>\n"
-        f"مبلغ: <b>{format_toman(payment.get('amount'))}</b>"
-        f"{card_line}\n"
+        f"مبلغ: <b>{amount_text}</b>"
+        f"{card_line}{usdt_line}\n"
         f"ثبت: <code>{_format_datetime(payment.get('created_at'))}</code>"
         f"{rejection}"
     )[:1024]

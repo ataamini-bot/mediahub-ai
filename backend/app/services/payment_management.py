@@ -1,9 +1,10 @@
 import re
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
+from zoneinfo import ZoneInfo
 
-from sqlalchemy import delete, func, select, text
+from sqlalchemy import case, delete, func, select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -12,9 +13,11 @@ from app.models.payment import Payment, PaymentStatus
 from app.models.payment_destination import PaymentCard, UsdtDestination
 from app.models.user import User
 from app.services.audit import AuditService
+from app.services.managed_settings import get_managed_setting
 
 
 PAYMENT_CARD_ROTATION_LOCK_ID = 6_148_327_401
+USDT_DESTINATION_ROTATION_LOCK_ID = 6_148_327_402
 
 
 class PaymentManagementError(RuntimeError):
@@ -85,11 +88,26 @@ def legacy_payment_card_snapshot() -> dict[str, Any]:
     }
 
 
+def usdt_destination_snapshot(destination: UsdtDestination) -> dict[str, Any]:
+    return {
+        "type": "usdt",
+        "id": destination.id,
+        "label": destination.label,
+        "network_name": destination.network_name,
+        "network_code": destination.network_code,
+        "address": destination.address,
+        "asset_symbol": destination.asset_symbol,
+        "contract_address": destination.contract_address,
+        "explorer_url": destination.explorer_url,
+        "confirmations_required": destination.confirmations_required,
+    }
+
+
 class PaymentManagementService:
     def __init__(self, session: AsyncSession):
         self.session = session
 
-    async def summary(self) -> dict[str, int | bool]:
+    async def summary(self) -> dict[str, Any]:
         result = await self.session.execute(
             select(Payment.status, func.count(Payment.id)).group_by(
                 Payment.status
@@ -128,6 +146,88 @@ class PaymentManagementService:
                 )
             ).scalar_one()
         )
+        timezone_name = str(
+            await get_managed_setting(self.session, "quota.timezone")
+            or "Asia/Tehran"
+        )
+        now = datetime.now(timezone.utc)
+        local_now = now.astimezone(ZoneInfo(timezone_name))
+        day_start = local_now.replace(
+            hour=0,
+            minute=0,
+            second=0,
+            microsecond=0,
+        ).astimezone(timezone.utc)
+        starts: dict[str, datetime | None] = {
+            "daily": day_start,
+            "weekly": now - timedelta(days=7),
+            "monthly": local_now.replace(
+                day=1,
+                hour=0,
+                minute=0,
+                second=0,
+                microsecond=0,
+            ).astimezone(timezone.utc),
+            "yearly": local_now.replace(
+                month=1,
+                day=1,
+                hour=0,
+                minute=0,
+                second=0,
+                microsecond=0,
+            ).astimezone(timezone.utc),
+            "all": None,
+        }
+        statistics: dict[str, dict[str, Any]] = {}
+        for period, start in starts.items():
+            statement = select(
+                func.count(Payment.id).filter(
+                    Payment.status == PaymentStatus.PENDING
+                ),
+                func.count(Payment.id).filter(
+                    Payment.status == PaymentStatus.APPROVED
+                ),
+                func.count(Payment.id).filter(
+                    Payment.status == PaymentStatus.REJECTED
+                ),
+                func.coalesce(
+                    func.sum(
+                        case(
+                            (
+                                (Payment.status == PaymentStatus.APPROVED)
+                                & (Payment.payment_method != "usdt"),
+                                Payment.amount,
+                            ),
+                            else_=0,
+                        )
+                    ),
+                    0,
+                ),
+                func.coalesce(
+                    func.sum(
+                        case(
+                            (
+                                (Payment.status == PaymentStatus.APPROVED)
+                                & (Payment.payment_method == "usdt"),
+                                Payment.amount,
+                            ),
+                            else_=0,
+                        )
+                    ),
+                    0,
+                ),
+            )
+            if start is not None:
+                statement = statement.where(Payment.created_at >= start)
+            row = (await self.session.execute(statement)).one()
+            statistics[period] = {
+                "pending": int(row[0] or 0),
+                "approved": int(row[1] or 0),
+                "rejected": int(row[2] or 0),
+                "irt_total": row[3] or 0,
+                "usdt_total": row[4] or 0,
+            }
+
         return {
             "pending": counts.get(PaymentStatus.PENDING, 0),
             "approved": counts.get(PaymentStatus.APPROVED, 0),
@@ -140,6 +240,7 @@ class PaymentManagementService:
                 settings.payment_card_number.strip()
                 and settings.payment_card_holder.strip()
             ),
+            "statistics": statistics,
         }
 
     async def list_payments(
@@ -364,6 +465,45 @@ class PaymentManagementService:
                 "Selected payment card is no longer active"
             )
         return card.id, payment_card_snapshot(card)
+
+    async def select_usdt_destination(self) -> UsdtDestination | None:
+        await self.session.execute(
+            text("SELECT pg_advisory_xact_lock(:lock_id)"),
+            {"lock_id": USDT_DESTINATION_ROTATION_LOCK_ID},
+        )
+        result = await self.session.execute(
+            select(UsdtDestination)
+            .where(UsdtDestination.is_active.is_(True))
+            .order_by(
+                UsdtDestination.selection_count,
+                UsdtDestination.last_selected_at.asc().nullsfirst(),
+                UsdtDestination.sort_order,
+                UsdtDestination.id,
+            )
+            .limit(1)
+            .with_for_update()
+        )
+        destination = result.scalar_one_or_none()
+        if destination is not None:
+            destination.selection_count += 1
+            destination.last_selected_at = datetime.now(timezone.utc)
+            await self.session.flush()
+        return destination
+
+    async def usdt_destination_for_submission(
+        self,
+        destination_id: int | None,
+    ) -> dict[str, Any]:
+        if destination_id is None:
+            raise PaymentDestinationValidation(
+                "A USDT destination must be selected"
+            )
+        destination = await self.get_usdt_destination(destination_id)
+        if not destination.is_active:
+            raise PaymentDestinationValidation(
+                "Selected USDT destination is no longer active"
+            )
+        return usdt_destination_snapshot(destination)
 
     async def list_usdt_destinations(self) -> list[UsdtDestination]:
         result = await self.session.execute(

@@ -18,6 +18,7 @@ class AdminManagementStates(StatesGroup):
     waiting_for_plan_name = State()
     waiting_for_plan_duration = State()
     waiting_for_plan_price = State()
+    waiting_for_plan_price_usdt = State()
     waiting_for_plan_daily_limit = State()
     waiting_for_plan_file_size = State()
     selecting_plan_quality = State()

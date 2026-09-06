@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import func, select, update
+from sqlalchemy import and_, func, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -16,9 +16,11 @@ from app.services.admin_access import AdminAccessService, PermissionCode
 from app.services.payment_offers import get_payment_offer
 from app.services.managed_settings import (
     ensure_public_operation,
+    get_managed_setting,
     get_receipt_max_size_mb,
 )
 from app.services.payment_management import PaymentManagementService
+from app.services.download_access import quota_day_start_utc
 
 
 ALLOWED_RECEIPT_DOCUMENT_MIME_TYPES = {
@@ -64,6 +66,34 @@ def add_duration_days(value: datetime, days: int) -> datetime:
         raise ValueError("Subscription duration must be positive")
 
     return value + timedelta(days=days)
+
+
+def combine_daily_download_limits(
+    current_limit: int | None,
+    purchased_limit: int | None,
+) -> int | None:
+    """Stack finite renewal quotas; ``None`` keeps unlimited entitlement."""
+    if current_limit is None or purchased_limit is None:
+        return None
+    return current_limit + purchased_limit
+
+
+def payment_daily_download_limit(payment: Payment, plan: Plan) -> int | None:
+    snapshot = (
+        payment.plan_limits_snapshot
+        if isinstance(payment.plan_limits_snapshot, dict)
+        else {}
+    )
+    if "daily_download_limit" not in snapshot:
+        return plan.daily_download_limit
+    value = snapshot.get("daily_download_limit")
+    if value is None:
+        return None
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return plan.daily_download_limit
+    return parsed if parsed > 0 else plan.daily_download_limit
 
 
 class PaymentService:
@@ -113,12 +143,23 @@ class PaymentService:
             data,
             await get_receipt_max_size_mb(self.session),
         )
-        offer = await get_payment_offer(self.session, data.offer_code)
-        payment_card_id, destination_snapshot = (
-            await PaymentManagementService(
-                self.session
-            ).payment_card_for_submission(data.payment_card_id)
+        offer = await get_payment_offer(
+            self.session,
+            data.offer_code,
+            currency=data.currency,
         )
+        management = PaymentManagementService(self.session)
+        if data.currency == "USDT":
+            payment_card_id = None
+            destination_snapshot = await management.usdt_destination_for_submission(
+                data.usdt_destination_id
+            )
+            payment_method = "usdt"
+        else:
+            payment_card_id, destination_snapshot = (
+                await management.payment_card_for_submission(data.payment_card_id)
+            )
+            payment_method = "card"
 
         result = await self.session.execute(
             select(User)
@@ -179,7 +220,7 @@ class PaymentService:
             receipt_mime_type=data.receipt_mime_type,
             receipt_file_name=data.receipt_file_name,
             user_receipt_message_id=data.user_receipt_message_id,
-            payment_method="card",
+            payment_method=payment_method,
             payment_card_id=payment_card_id,
             payment_destination_snapshot=destination_snapshot,
         )
@@ -250,6 +291,12 @@ class PaymentService:
         await self.ensure_admin(admin_telegram_id)
         payment = await self._get_payment_for_update(payment_id)
         user = await self._get_user_for_update(payment.user_id)
+        plan_result = await self.session.execute(
+            select(Plan).where(Plan.id == payment.plan_id)
+        )
+        plan = plan_result.scalar_one_or_none()
+        if plan is None:
+            raise RuntimeError("Payment plan not found")
 
         if payment.status == PaymentStatus.APPROVED:
             subscription = await self._get_linked_subscription(payment)
@@ -294,6 +341,7 @@ class PaymentService:
         subscription = result.scalar_one_or_none()
 
         if subscription is None:
+            purchased_daily_limit = payment_daily_download_limit(payment, plan)
             subscription = Subscription(
                 user_id=user.id,
                 plan_id=payment.plan_id,
@@ -303,6 +351,7 @@ class PaymentService:
                     now,
                     payment.duration_days,
                 ),
+                daily_download_limit=purchased_daily_limit,
                 auto_renew=False,
             )
             self.session.add(subscription)
@@ -311,6 +360,10 @@ class PaymentService:
             subscription.expires_at = add_duration_days(
                 subscription.expires_at,
                 payment.duration_days,
+            )
+            subscription.daily_download_limit = combine_daily_download_limits(
+                subscription.daily_download_limit,
+                payment_daily_download_limit(payment, plan),
             )
 
         payment.status = PaymentStatus.APPROVED
@@ -410,7 +463,32 @@ class PaymentService:
             )
         )
         downloads_done = int(count_result.scalar() or 0)
-        daily_limit = plan.daily_download_limit
+        daily_limit = subscription.daily_download_limit
+        timezone_name = await get_managed_setting(
+            self.session,
+            "quota.timezone",
+        )
+        day_start = quota_day_start_utc(timezone_name=timezone_name)
+        reserved_statuses = (
+            DownloadJobStatus.PENDING,
+            DownloadJobStatus.PROCESSING,
+            DownloadJobStatus.PAUSED,
+        )
+        daily_result = await self.session.execute(
+            select(func.count(DownloadJob.id)).where(
+                DownloadJob.user_id == user.id,
+                or_(
+                    DownloadJob.delivered_at >= day_start,
+                    DownloadJob.status.in_(reserved_statuses),
+                    and_(
+                        DownloadJob.status == DownloadJobStatus.COMPLETED,
+                        DownloadJob.delivered_at.is_(None),
+                        DownloadJob.created_at >= day_start,
+                    ),
+                ),
+            )
+        )
+        used_today = int(daily_result.scalar() or 0)
         return {
             "is_active": True,
             "plan_slug": plan.slug,
@@ -421,7 +499,7 @@ class PaymentService:
             "registered_at": user.created_at,
             "downloads_done": downloads_done,
             "daily_download_limit": daily_limit,
-            "remaining_downloads": None if daily_limit is None else max(daily_limit - downloads_done, 0),
+            "remaining_downloads": None if daily_limit is None else max(daily_limit - used_today, 0),
         }
 
     async def _get_payment_for_update(self, payment_id: int) -> Payment:

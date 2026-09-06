@@ -58,12 +58,14 @@ def serialize_action(result: PaymentActionResult) -> PaymentActionResponse:
 )
 async def payment_configuration(
     select_destination: bool = Query(default=True),
+    language: str = Query(default="fa", pattern="^(fa|en)$"),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     try:
         result = await get_payment_configuration(
             db,
             select_destination=select_destination,
+            language=language,
         )
         await db.commit()
         return result

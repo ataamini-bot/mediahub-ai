@@ -1,4 +1,5 @@
-from app.handlers.payments import _status_caption
+from app.handlers.admin_finance import _payment_statistics_text
+from app.handlers.payments import _status_caption, _subscription_status_text
 from app.keyboards.payment import (
     build_admin_payment_keyboard,
     build_home_keyboard,
@@ -56,6 +57,25 @@ def test_offer_keyboard_supports_arbitrary_custom_plan_durations():
     assert "45 روز" in keyboard.inline_keyboard[0][0].text
 
 
+def test_offer_keyboard_is_english_for_usdt_catalog():
+    keyboard = build_payment_offers_keyboard(
+        [
+            {
+                "code": "plan_global",
+                "label": "Global",
+                "duration_days": 30,
+                "price": "2.7500",
+                "currency": "USDT",
+            }
+        ],
+        language="en",
+    )
+
+    assert "30 days" in keyboard.inline_keyboard[0][0].text
+    assert "USDT" in keyboard.inline_keyboard[0][0].text
+    assert keyboard.inline_keyboard[-1][0].text == "❌ Close"
+
+
 def test_admin_callback_data_stays_within_telegram_limit():
     keyboard = build_admin_payment_keyboard(9223372036854775807)
 
@@ -72,3 +92,46 @@ def test_status_caption_replaces_pending_status():
     assert "در انتظار بررسی" not in result
     assert "تأیید شد" in result
     assert len(result) <= 1024
+
+
+def test_payment_statistics_separate_toman_and_usdt_totals():
+    text = _payment_statistics_text(
+        {
+            "statistics": {
+                period: {
+                    "approved": 2,
+                    "pending": 1,
+                    "rejected": 0,
+                    "irt_total": 158000,
+                    "usdt_total": "5.5000",
+                }
+                for period in ("daily", "weekly", "monthly", "yearly", "all")
+            }
+        }
+    )
+
+    assert "امروز" in text
+    assert "سال جاری" in text
+    assert "158,000 تومان" in text
+    assert "5.50 USDT" in text
+
+
+def test_persian_subscription_uses_plan_label_and_effective_quota():
+    text = _subscription_status_text(
+        {
+            "is_active": True,
+            "plan_name": "نقره‌ای",
+            "duration_days": 30,
+            "expires_at": "2099-01-01T00:00:00+00:00",
+            "registered_at": "2026-01-01T00:00:00+00:00",
+            "downloads_done": 12,
+            "daily_download_limit": 100,
+            "remaining_downloads": 88,
+        },
+        "fa",
+    )
+
+    assert "💎 پلن:" in text
+    assert "💎 Plan:" not in text
+    assert "محدودیت دانلود روزانه: <code>100</code>" in text
+    assert "دانلود باقیمانده: <code>88</code>" in text

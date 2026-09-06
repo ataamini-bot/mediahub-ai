@@ -109,6 +109,7 @@ async def add_custom_subscription(
             status=SubscriptionStatus.ACTIVE,
             started_at=now - timedelta(minutes=1),
             expires_at=now + timedelta(days=10),
+            daily_download_limit=daily_limit,
             auto_renew=False,
         )
     )

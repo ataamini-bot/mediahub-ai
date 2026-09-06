@@ -1,5 +1,6 @@
 import html
 import re
+from decimal import Decimal, InvalidOperation
 
 from aiogram import F, Router
 from aiogram.filters import Command, StateFilter
@@ -29,7 +30,7 @@ from app.keyboards.admin import (
     build_plan_quality_keyboard,
     build_role_picker_keyboard,
 )
-from app.keyboards.payment import build_home_keyboard, format_toman
+from app.keyboards.payment import build_home_keyboard, format_toman, format_usdt
 from app.keyboards.admin_settings import build_runtime_settings_keyboard
 from app.services.backend import (
     BackendAPIError,
@@ -213,6 +214,23 @@ def _parse_plan_integer(value: str) -> int | None:
     return int(normalized)
 
 
+def _parse_plan_decimal(value: str) -> Decimal | None:
+    normalized = (
+        str(value or "")
+        .strip()
+        .translate(_PLAN_DIGIT_TRANSLATION)
+        .replace("٫", ".")
+        .replace("٬", "")
+        .replace(",", ".")
+    )
+    if not re.fullmatch(r"\d+(?:\.\d{1,4})?", normalized):
+        return None
+    try:
+        return Decimal(normalized)
+    except InvalidOperation:
+        return None
+
+
 def _plan_daily_limit_text(value: object) -> str:
     if value is None:
         return "نامحدود"
@@ -226,6 +244,11 @@ def _admin_plan_text(plan: dict) -> str:
     plan_type = "رایگان و سیستمی 🆓" if is_free else "سفارشی 💎"
     duration = "همیشگی" if is_free else f"{int(plan['duration_days'])} روز"
     price = "رایگان" if is_free else format_toman(plan.get("price", 0))
+    price_usdt = (
+        "—"
+        if plan.get("price_usdt") is None
+        else format_usdt(plan.get("price_usdt"))
+    )
     file_size = (
         f"{int(plan['max_file_size_mb'])} MB"
         if plan.get("max_file_size_mb") is not None
@@ -245,7 +268,8 @@ def _admin_plan_text(plan: dict) -> str:
         f"نوع: {plan_type}\n"
         f"وضعیت: <b>{status}</b>\n"
         f"مدت: <code>{duration}</code>\n"
-        f"مبلغ: <b>{price}</b>\n\n"
+        f"مبلغ ریالی: <b>{price}</b>\n"
+        f"مبلغ بین‌المللی: <b>{price_usdt}</b>\n\n"
         f"📊 سقف روزانه: <code>{_plan_daily_limit_text(plan.get('daily_download_limit'))}</code>\n"
         f"📦 حداکثر حجم: <code>{file_size}</code>\n"
         f"🎞 حداکثر کیفیت: <code>{quality}</code>\n"
@@ -265,7 +289,9 @@ def _plan_create_summary(data: dict) -> str:
         "➕ <b>مرور پلن جدید</b>\n\n"
         f"نام: <b>{html.escape(str(data['name']))}</b>\n"
         f"مدت: <code>{int(data['duration_days'])} روز</code>\n"
-        f"مبلغ: <b>{format_toman(data['price'])}</b>\n"
+        f"مبلغ ریالی: <b>{format_toman(data['price'])}</b>\n"
+        "مبلغ بین‌المللی: "
+        f"<b>{format_usdt(data['price_usdt']) if data.get('price_usdt') is not None else 'غیرفعال'}</b>\n"
         f"سقف روزانه: <code>{_plan_daily_limit_text(daily_limit)}</code>\n"
         f"حداکثر حجم: <code>{int(data['max_file_size_mb'])} MB</code>\n"
         f"حداکثر کیفیت: <code>{int(data['max_quality'])}p</code>\n"
@@ -285,6 +311,7 @@ def _plan_update_summary(plan: dict, changes: dict) -> str:
         "description": "توضیح",
         "duration_days": "مدت به روز",
         "price": "مبلغ تومان",
+        "price_usdt": "مبلغ USDT",
         "daily_download_limit": "سقف روزانه",
         "max_file_size_mb": "حداکثر حجم MB",
         "max_quality": "حداکثر کیفیت",
@@ -308,6 +335,8 @@ def _plan_update_summary(plan: dict, changes: dict) -> str:
             rendered = "نامحدود / خالی"
         elif key == "price":
             rendered = format_toman(value)
+        elif key == "price_usdt":
+            rendered = "غیرفعال" if value is None else format_usdt(value)
         else:
             rendered = str(value)
 
@@ -1745,6 +1774,33 @@ async def receive_plan_price(message: Message, state: FSMContext) -> None:
         return
 
     await state.update_data(price=price)
+    await state.set_state(AdminManagementStates.waiting_for_plan_price_usdt)
+    await message.answer(
+        (
+            "💵 مبلغ بین‌المللی همین پلن را به USDT وارد کنید؛ مثلاً 2.5.\n"
+            "اگر فعلاً نمی‌خواهید این پلن برای کاربران انگلیسی نمایش داده شود، - بفرستید:"
+        ),
+        reply_markup=ForceReply(selective=True),
+    )
+
+
+@router.message(StateFilter(AdminManagementStates.waiting_for_plan_price_usdt))
+async def receive_plan_price_usdt(message: Message, state: FSMContext) -> None:
+    raw_value = str(message.text or "").strip()
+    price_usdt = None if raw_value in {"-", "۰", "0"} else _parse_plan_decimal(raw_value)
+
+    if raw_value not in {"-", "۰", "0"} and (
+        price_usdt is None or price_usdt <= 0 or price_usdt > Decimal("99999999")
+    ):
+        await message.answer(
+            "❌ مبلغ USDT باید عددی بزرگ‌تر از صفر با حداکثر ۴ رقم اعشار باشد؛ یا - بفرستید.",
+            reply_markup=ForceReply(selective=True),
+        )
+        return
+
+    await state.update_data(
+        price_usdt=(str(price_usdt) if price_usdt is not None else None),
+    )
     await state.set_state(AdminManagementStates.waiting_for_plan_daily_limit)
     await message.answer(
         (
@@ -1927,6 +1983,7 @@ async def confirm_create_plan(
         "description": data.get("description"),
         "duration_days": data["duration_days"],
         "price": data["price"],
+        "price_usdt": data.get("price_usdt"),
         "daily_download_limit": data.get("daily_download_limit"),
         "max_file_size_mb": data["max_file_size_mb"],
         "max_quality": data["max_quality"],
@@ -1956,7 +2013,7 @@ async def confirm_create_plan(
 
 @router.callback_query(
     F.data.regexp(
-        r"^admin:plan:edit:(name|description|duration|price|daily|size|quality|concurrency|order):\d+$"
+        r"^admin:plan:edit:(name|description|duration|price|usdt|daily|size|quality|concurrency|order):\d+$"
     )
 )
 async def start_edit_plan_field(
@@ -2000,6 +2057,7 @@ async def start_edit_plan_field(
                 "description": "توضیح جدید را بفرستید؛ برای حذف توضیح، - بفرستید:",
                 "duration": "مدت جدید را به روز وارد کنید:",
                 "price": "مبلغ جدید را به تومان وارد کنید:",
+                "usdt": "مبلغ جدید USDT را وارد کنید؛ برای غیرفعال‌کردن فروش بین‌المللی - بفرستید:",
                 "daily": "سقف روزانه جدید را بفرستید؛ 0 یعنی نامحدود:",
                 "size": "حداکثر حجم جدید را به MB وارد کنید (۱ تا ۱۹۰۰):",
                 "order": "ترتیب نمایش را وارد کنید؛ عدد کوچک‌تر بالاتر نمایش داده می‌شود:",
@@ -2038,6 +2096,15 @@ async def receive_plan_edit_value(message: Message, state: FSMContext) -> None:
             changes["description"] = None if raw_value == "-" else raw_value
         else:
             error = "توضیح حداکثر ۲۰۰۰ کاراکتر است."
+    elif field == "usdt":
+        if raw_value in {"-", "۰", "0"}:
+            changes["price_usdt"] = None
+        else:
+            amount = _parse_plan_decimal(raw_value)
+            if amount is None or amount <= 0 or amount > Decimal("99999999"):
+                error = "مبلغ USDT معتبر نیست؛ حداکثر ۴ رقم اعشار مجاز است."
+            else:
+                changes["price_usdt"] = str(amount)
     else:
         number = _parse_plan_integer(raw_value)
 

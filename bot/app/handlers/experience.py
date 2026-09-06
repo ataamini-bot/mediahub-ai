@@ -107,7 +107,16 @@ async def perform_custom_button(
         await send_content_page(message, telegram_id=telegram_id, key=action)
         return
     if action == "message":
-        await message.answer(str(button.get("action_value") or ""))
+        user, configuration = await _user_and_configuration(telegram_id)
+        language = normalize_language(configuration.get("language"))
+        await message.answer(
+            str(button.get("action_value") or ""),
+            reply_markup=build_home_reply_keyboard(
+                language,
+                include_admin=bool(user.get("is_admin")),
+                configuration=configuration,
+            ),
+        )
         return
     if action == "url" and button.get("action_value"):
         _user, configuration = await _user_and_configuration(telegram_id)
@@ -475,4 +484,3 @@ async def close_admin_support(callback: CallbackQuery) -> None:
         await callback.answer("تیکت بسته شد.")
     except (BackendAPIError, TypeError, ValueError):
         await callback.answer("بستن تیکت انجام نشد.", show_alert=True)
-

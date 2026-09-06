@@ -280,7 +280,7 @@ class DownloadAccessService:
 
         now = datetime.now(timezone.utc)
         plan_result = await self.session.execute(
-            select(Plan)
+            select(Plan, Subscription)
             .join(Subscription, Subscription.plan_id == Plan.id)
             .where(
                 Subscription.user_id == user.id,
@@ -294,7 +294,11 @@ class DownloadAccessService:
             )
             .limit(1)
         )
-        plan = plan_result.scalar_one_or_none()
+        plan_row = plan_result.first()
+        subscription: Subscription | None = None
+        plan: Plan | None = None
+        if plan_row is not None:
+            plan, subscription = plan_row
 
         if plan is None:
             free_result = await self.session.execute(
@@ -315,7 +319,11 @@ class DownloadAccessService:
             user_id=user.id,
             plan_id=plan.id,
             plan_name=plan.name,
-            daily_download_limit=plan.daily_download_limit,
+            daily_download_limit=(
+                subscription.daily_download_limit
+                if subscription is not None
+                else plan.daily_download_limit
+            ),
             max_file_size_mb=min(
                 plan.max_file_size_mb,
                 TECHNICAL_MAX_FILE_SIZE_MB,

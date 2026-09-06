@@ -166,6 +166,34 @@ def test_threads_parser_excludes_avatar_and_keeps_post_media():
     ]
 
 
+def test_threads_legacy_share_url_resolves_before_embed(monkeypatch):
+    class Response:
+        url = "https://www.threads.com/@example/post/ABC123"
+
+        def raise_for_status(self):
+            return None
+
+        def close(self):
+            return None
+
+    monkeypatch.setattr(social_media.requests, "get", lambda *_args, **_kwargs: Response())
+
+    assert social_media._threads_embed_url(
+        "https://www.threads.net/t/ABC123?xmt=example"
+    ) == "https://www.threads.com/@example/post/ABC123/embed"
+
+
+def test_threads_canonical_url_does_not_need_redirect_request(monkeypatch):
+    def unexpected_request(*_args, **_kwargs):
+        raise AssertionError("canonical Threads URL must not be fetched twice")
+
+    monkeypatch.setattr(social_media.requests, "get", unexpected_request)
+
+    assert social_media._threads_embed_url(
+        "https://www.threads.com/@example/post/ABC123?xmt=example"
+    ) == "https://www.threads.com/@example/post/ABC123/embed"
+
+
 def test_threads_video_exposes_one_real_quality(monkeypatch):
     monkeypatch.setattr(
         social_media,

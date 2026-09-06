@@ -1,5 +1,6 @@
 import asyncio
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 from app.main import (
     DownloadMessageFilter,
@@ -24,6 +25,9 @@ def test_download_filter_rejects_telegram_commands():
         "👤 My subscription",
         "🌐 تغییر زبان",
         "⚙️ Admin panel",
+        "🛟 پشتیبانی",
+        "📘 آموزش استفاده",
+        "❓ سوالات متداول",
     ):
         assert _matches_download_handler(text) is False
 
@@ -33,6 +37,30 @@ def test_download_filter_keeps_normal_download_inputs():
     assert _matches_download_handler("watch https://example.com/video") is True
     assert _matches_download_handler("") is False
     assert _matches_download_handler(None) is False
+
+
+def test_download_filter_rejects_runtime_custom_button(monkeypatch):
+    configurations = (
+        {
+            "language": "fa",
+            "buttons": {},
+            "custom_buttons": [
+                {
+                    "id": 12,
+                    "label_fa": "🌟 پیشنهاد امروز",
+                    "label_en": "🌟 Today offer",
+                    "action_type": "message",
+                }
+            ],
+        },
+        {"language": "en", "buttons": {}, "custom_buttons": []},
+    )
+    monkeypatch.setattr(
+        "app.main.all_runtime_configurations",
+        AsyncMock(return_value=configurations),
+    )
+
+    assert _matches_download_handler("🌟 پیشنهاد امروز") is False
 
 
 def test_plan_limit_errors_are_rendered_in_persian():

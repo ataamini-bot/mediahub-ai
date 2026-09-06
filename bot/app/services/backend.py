@@ -971,11 +971,14 @@ async def _payment_request(
 async def get_payment_configuration(
     *,
     select_destination: bool = True,
+    language: str = "fa",
 ) -> dict:
     flag = "true" if select_destination else "false"
+    normalized_language = "en" if language == "en" else "fa"
     return await _payment_request(
         "GET",
-        f"/payments/configuration?select_destination={flag}",
+        f"/payments/configuration?select_destination={flag}"
+        f"&language={normalized_language}",
     )
 
 
@@ -991,6 +994,8 @@ async def create_manual_payment(
     receipt_file_name: str | None,
     user_receipt_message_id: int,
     payment_card_id: int | None,
+    currency: str = "IRT",
+    usdt_destination_id: int | None = None,
 ) -> dict:
     return await _payment_request(
         "POST",
@@ -1006,6 +1011,8 @@ async def create_manual_payment(
             "receipt_file_name": receipt_file_name,
             "user_receipt_message_id": user_receipt_message_id,
             "payment_card_id": payment_card_id,
+            "currency": "USDT" if currency == "USDT" else "IRT",
+            "usdt_destination_id": usdt_destination_id,
         },
     )
 

@@ -50,6 +50,14 @@ class Subscription(Base, TimestampMixin):
         nullable=False,
     )
 
+    # The effective daily quota is snapshotted on the subscription.  Each
+    # approved renewal adds the newly purchased quota, so extending a finite
+    # plan also preserves the quota units the customer paid for.
+    daily_download_limit: Mapped[int | None] = mapped_column(
+        Integer,
+        nullable=True,
+    )
+
     auto_renew: Mapped[bool] = mapped_column(
         default=False,
         nullable=False,
