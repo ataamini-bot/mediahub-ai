@@ -24,7 +24,7 @@ os.environ.setdefault("TELEGRAM_BOT_TOKEN", "123456789:test-token")
 
 
 from app.core.config import settings  # noqa: E402
-from app.db.session import AsyncSessionLocal  # noqa: E402
+from app.db.session import AsyncSessionLocal, engine  # noqa: E402
 from app.core.internal_auth import require_internal_api_key  # noqa: E402
 from app.main import app  # noqa: E402
 from app.models.payment import Payment, PaymentStatus  # noqa: E402
@@ -317,6 +317,7 @@ async def test_approving_second_payment_stacks_duration_and_daily_quota():
             if user_id is not None:
                 await session.execute(delete(User).where(User.id == user_id))
             await session.commit()
+            await engine.dispose()
 
 
 @pytest.mark.asyncio
