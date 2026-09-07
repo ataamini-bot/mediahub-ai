@@ -264,7 +264,9 @@ def _admin_plan_text(plan: dict) -> str:
     description = html.escape(str(plan.get("description") or "—"))
     return (
         "📦 <b>مشخصات پلن</b>\n\n"
-        f"نام: <b>{html.escape(str(plan['name']))}</b>\n"
+        f"نام فارسی: <b>{html.escape(str(plan['name']))}</b>\n"
+        "نام انگلیسی: "
+        f"<b>{html.escape(str(plan.get('name_en') or plan['name']))}</b>\n"
         f"نوع: {plan_type}\n"
         f"وضعیت: <b>{status}</b>\n"
         f"مدت: <code>{duration}</code>\n"
@@ -287,7 +289,8 @@ def _plan_create_summary(data: dict) -> str:
     description = html.escape(str(data.get("description") or "—"))
     return (
         "➕ <b>مرور پلن جدید</b>\n\n"
-        f"نام: <b>{html.escape(str(data['name']))}</b>\n"
+        f"نام فارسی: <b>{html.escape(str(data['name']))}</b>\n"
+        f"نام انگلیسی: <b>{html.escape(str(data['name_en']))}</b>\n"
         f"مدت: <code>{int(data['duration_days'])} روز</code>\n"
         f"مبلغ ریالی: <b>{format_toman(data['price'])}</b>\n"
         "مبلغ بین‌المللی: "
@@ -307,7 +310,8 @@ def _plan_create_summary(data: dict) -> str:
 
 def _plan_update_summary(plan: dict, changes: dict) -> str:
     labels = {
-        "name": "نام",
+        "name": "نام فارسی",
+        "name_en": "نام انگلیسی",
         "description": "توضیح",
         "duration_days": "مدت به روز",
         "price": "مبلغ تومان",
@@ -1736,6 +1740,31 @@ async def receive_plan_name(message: Message, state: FSMContext) -> None:
         return
 
     await state.update_data(name=name)
+    await state.set_state(AdminManagementStates.waiting_for_plan_name_en)
+    await message.answer(
+        (
+            "🌐 نام انگلیسی همین پلن را وارد کنید؛ "
+            "مثلاً Silver 30 Days:"
+        ),
+        reply_markup=ForceReply(selective=True),
+    )
+
+
+@router.message(StateFilter(AdminManagementStates.waiting_for_plan_name_en))
+async def receive_plan_name_en(message: Message, state: FSMContext) -> None:
+    name_en = " ".join(str(message.text or "").split())
+
+    if not 2 <= len(name_en) <= 100 or not re.search(r"[A-Za-z]", name_en):
+        await message.answer(
+            (
+                "❌ نام انگلیسی باید بین ۲ تا ۱۰۰ کاراکتر و "
+                "دارای حداقل یک حرف انگلیسی باشد."
+            ),
+            reply_markup=ForceReply(selective=True),
+        )
+        return
+
+    await state.update_data(name_en=name_en)
     await state.set_state(AdminManagementStates.waiting_for_plan_duration)
     await message.answer(
         "📅 مدت اعتبار پلن را به روز وارد کنید؛ مثلاً 30:",
@@ -1980,6 +2009,7 @@ async def confirm_create_plan(
     data = await state.get_data()
     plan_payload = {
         "name": data["name"],
+        "name_en": data["name_en"],
         "description": data.get("description"),
         "duration_days": data["duration_days"],
         "price": data["price"],
@@ -2013,7 +2043,7 @@ async def confirm_create_plan(
 
 @router.callback_query(
     F.data.regexp(
-        r"^admin:plan:edit:(name|description|duration|price|usdt|daily|size|quality|concurrency|order):\d+$"
+        r"^admin:plan:edit:(name|name_en|description|duration|price|usdt|daily|size|quality|concurrency|order):\d+$"
     )
 )
 async def start_edit_plan_field(
@@ -2053,7 +2083,8 @@ async def start_edit_plan_field(
             )
         else:
             prompts = {
-                "name": "نام جدید پلن را بفرستید:",
+                "name": "نام فارسی جدید پلن را بفرستید:",
+                "name_en": "نام انگلیسی جدید پلن را بفرستید؛ مثلاً Silver 30 Days:",
                 "description": "توضیح جدید را بفرستید؛ برای حذف توضیح، - بفرستید:",
                 "duration": "مدت جدید را به روز وارد کنید:",
                 "price": "مبلغ جدید را به تومان وارد کنید:",
@@ -2090,7 +2121,19 @@ async def receive_plan_edit_value(message: Message, state: FSMContext) -> None:
         if 2 <= len(normalized_name) <= 100:
             changes["name"] = normalized_name
         else:
-            error = "نام باید بین ۲ تا ۱۰۰ کاراکتر باشد."
+            error = "نام فارسی باید بین ۲ تا ۱۰۰ کاراکتر باشد."
+    elif field == "name_en":
+        normalized_name = " ".join(raw_value.split())
+        if 2 <= len(normalized_name) <= 100 and re.search(
+            r"[A-Za-z]",
+            normalized_name,
+        ):
+            changes["name_en"] = normalized_name
+        else:
+            error = (
+                "نام انگلیسی باید بین ۲ تا ۱۰۰ کاراکتر و "
+                "دارای حداقل یک حرف انگلیسی باشد."
+            )
     elif field == "description":
         if len(raw_value) <= 2000:
             changes["description"] = None if raw_value == "-" else raw_value

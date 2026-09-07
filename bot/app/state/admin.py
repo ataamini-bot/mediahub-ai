@@ -16,6 +16,7 @@ class AdminManagementStates(StatesGroup):
     confirming_role_change = State()
 
     waiting_for_plan_name = State()
+    waiting_for_plan_name_en = State()
     waiting_for_plan_duration = State()
     waiting_for_plan_price = State()
     waiting_for_plan_price_usdt = State()

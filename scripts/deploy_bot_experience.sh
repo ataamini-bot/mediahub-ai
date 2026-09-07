@@ -5,16 +5,16 @@ cd /opt/mediahub-ai || exit 1
   set -u
   expected_branch="feature/admin-foundation"
   expected_commit="${1:-}"
-  expected_migration="a3d8f2c6e910"
+  expected_migration="c7e4d2a9f610"
   stamp="$(date -u +%Y%m%dT%H%M%SZ)"
   started_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-  backup="backups/manual/before-post-deploy-hotfix-${stamp}.dump"
-  verify_log="backups/manual/post-deploy-hotfix-${stamp}.log"
+  backup="backups/manual/before-threads-plan-i18n-${stamp}.dump"
+  verify_log="backups/manual/threads-plan-i18n-${stamp}.log"
   migration_container="mediahub-migration-${stamp}"
-  rollback_backend="mediahub-ai-backend:rollback-post-deploy-hotfix-${stamp}"
-  rollback_worker="mediahub-ai-worker:rollback-post-deploy-hotfix-${stamp}"
-  rollback_monitor="mediahub-ai-monitor:rollback-post-deploy-hotfix-${stamp}"
-  rollback_bot="mediahub-ai-bot:rollback-post-deploy-hotfix-${stamp}"
+  rollback_backend="mediahub-ai-backend:rollback-threads-plan-i18n-${stamp}"
+  rollback_worker="mediahub-ai-worker:rollback-threads-plan-i18n-${stamp}"
+  rollback_monitor="mediahub-ai-monitor:rollback-threads-plan-i18n-${stamp}"
+  rollback_bot="mediahub-ai-bot:rollback-threads-plan-i18n-${stamp}"
 
   if ! [[ "$expected_commit" =~ ^[0-9a-f]{40}$ ]]; then
     printf 'Usage: %s <expected-40-character-commit-sha>\n' "$0"
@@ -69,7 +69,7 @@ cd /opt/mediahub-ai || exit 1
   database_before="$(docker compose exec -T backend alembic current 2>&1)"
   printf '%s\n' "$database_before"
   if ! printf '%s\n' "$database_before" | grep -Eq \
-    '5d1a9c7e2f40|7a2c9e1f4b60|8c3d4e5f6a71|9b4e2d6f1a30|a3d8f2c6e910'
+    '5d1a9c7e2f40|7a2c9e1f4b60|8c3d4e5f6a71|9b4e2d6f1a30|a3d8f2c6e910|c7e4d2a9f610'
   then
     printf 'DEPLOYMENT=ABORTED_UNEXPECTED_DATABASE_REVISION\n'
     exit 1
@@ -262,6 +262,18 @@ print("BOT_CONFIGURATION_API=OK")
   )"
   printf 'FINITE_SUBSCRIPTIONS_WITHOUT_QUOTA=%s\n' "${quota_null_count:-UNKNOWN}"
   [ "$quota_null_count" = "0" ] || deployment_ok=0
+  missing_english_names="$(
+    docker compose exec -T postgres sh -lc '
+      psql --username="$POSTGRES_USER" --dbname="$POSTGRES_DB" \
+        --no-psqlrc --tuples-only --no-align --command="
+          SELECT count(*)
+          FROM plans
+          WHERE name_en IS NULL OR length(btrim(name_en)) = 0;
+        "
+    ' 2>/dev/null | tr -d '[:space:]'
+  )"
+  printf 'PLANS_WITHOUT_ENGLISH_NAME=%s\n' "${missing_english_names:-UNKNOWN}"
+  [ "$missing_english_names" = "0" ] || deployment_ok=0
   if final_health="$(curl -fsS http://127.0.0.1:8000/health)"; then
     printf 'HEALTH_RESPONSE=%s\n' "$final_health"
   else

@@ -45,7 +45,7 @@ class PaymentOffer:
             )
         return cls(
             code=plan.slug,
-            label=plan.name,
+            label=(plan.name_en or plan.name) if currency == "USDT" else plan.name,
             plan_id=plan.id,
             duration_days=plan.duration_days,
             price=price,

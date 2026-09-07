@@ -125,6 +125,7 @@ def serialize_plan(plan) -> AdminPlanResponse:
     return AdminPlanResponse(
         id=plan.id,
         name=plan.name,
+        name_en=plan.name_en,
         slug=plan.slug,
         description=plan.description,
         price=plan.price,
@@ -351,6 +352,7 @@ async def create_plan(
             actor_telegram_id=data.actor_telegram_id,
             reason=data.reason,
             name=data.name,
+            name_en=data.name_en,
             description=data.description,
             duration_days=data.duration_days,
             price=data.price,
@@ -396,6 +398,7 @@ async def update_plan(
             actor_telegram_id=data.actor_telegram_id,
             reason=data.reason,
             name=data.name,
+            name_en=data.name_en,
             description=data.description,
             description_supplied="description" in data.model_fields_set,
             duration_days=data.duration_days,

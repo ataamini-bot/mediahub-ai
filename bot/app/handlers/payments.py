@@ -341,7 +341,17 @@ def _subscription_status_text(result: dict, language: str = "fa") -> str:
             "در حال حاضر اشتراک فعالی ندارید." if is_fa else "You do not have an active subscription."
         )
 
-    plan_name = html.escape(str(result.get("plan_name") or "—"))
+    plan_name = html.escape(
+        str(
+            (
+                result.get("plan_name")
+                if is_fa
+                else result.get("plan_name_en")
+            )
+            or result.get("plan_name")
+            or "—"
+        )
+    )
     duration_days = int(result.get("duration_days") or 0)
     duration_labels = {
         30: ("یک‌ماهه", "1 month"),

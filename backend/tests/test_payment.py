@@ -106,7 +106,8 @@ def test_payment_offer_snapshots_custom_plan_limits():
 def test_payment_offer_uses_usdt_price_for_english_catalog():
     plan = Plan(
         id=92,
-        name="International",
+        name="نقره‌ای",
+        name_en="Silver",
         slug="plan_international",
         price=Decimal("125000"),
         price_usdt=Decimal("2.7500"),
@@ -127,6 +128,7 @@ def test_payment_offer_uses_usdt_price_for_english_catalog():
     offer = PaymentOffer.from_plan(plan, currency="USDT")
 
     assert offer.price == Decimal("2.7500")
+    assert offer.label == "Silver"
 
 
 def test_receipt_validation_rejects_large_file(monkeypatch):

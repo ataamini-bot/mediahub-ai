@@ -26,12 +26,22 @@ from app.models.user import User, UserStatus  # noqa: E402
 from app.services.payment_offers import get_payment_offer  # noqa: E402
 from app.services.plan_management import (  # noqa: E402
     PlanManagementService,
+    PlanValidationError,
     SystemPlanProtected,
 )
 
 
 def unique_telegram_id() -> int:
     return 8_100_000_000_000 + uuid.uuid4().int % 100_000_000
+
+
+def test_usdt_prices_preserve_four_decimal_precision():
+    assert PlanManagementService.normalize_usdt_price("8.73") == Decimal(
+        "8.7300"
+    )
+
+    with pytest.raises(PlanValidationError):
+        PlanManagementService.normalize_usdt_price("8.73001")
 
 
 async def add_superadmin(session, telegram_id: int) -> User:
@@ -139,10 +149,12 @@ async def test_custom_plan_becomes_dynamic_payment_offer_with_snapshot():
                 actor_user_id=actor.id,
                 actor_telegram_id=telegram_id,
                 reason="Create a custom 45-day plan",
-                name=f"Custom {uuid.uuid4().hex[:8]}",
+                name=f"سفارشی {uuid.uuid4().hex[:8]}",
+                name_en="International 45 Days",
                 description="Custom plan integration test",
                 duration_days=45,
                 price=Decimal("125000"),
+                price_usdt=Decimal("8.73"),
                 daily_download_limit=None,
                 max_file_size_mb=900,
                 max_quality=1080,
@@ -153,10 +165,18 @@ async def test_custom_plan_becomes_dynamic_payment_offer_with_snapshot():
                 is_active=True,
             )
             offer = await get_payment_offer(session, plan.slug)
+            international_offer = await get_payment_offer(
+                session,
+                plan.slug,
+                currency="USDT",
+            )
 
             assert plan.slug.startswith("plan_")
             assert offer.duration_days == 45
             assert offer.price == Decimal("125000")
+            assert offer.label == plan.name
+            assert international_offer.label == "International 45 Days"
+            assert international_offer.price == Decimal("8.7300")
             assert offer.daily_download_limit is None
             assert offer.limits_snapshot()["max_file_size_mb"] == 900
 

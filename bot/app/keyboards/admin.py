@@ -462,9 +462,15 @@ def build_admin_plan_detail_keyboard(plan: dict) -> InlineKeyboardMarkup:
             [
                 [
                     InlineKeyboardButton(
-                        text="✏️ نام",
+                        text="✏️ نام فارسی",
                         callback_data=f"admin:plan:edit:name:{plan_id}",
                     ),
+                    InlineKeyboardButton(
+                        text="🌐 نام انگلیسی",
+                        callback_data=f"admin:plan:edit:name_en:{plan_id}",
+                    ),
+                ],
+                [
                     InlineKeyboardButton(
                         text="📝 توضیح",
                         callback_data=f"admin:plan:edit:description:{plan_id}",

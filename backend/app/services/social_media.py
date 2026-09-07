@@ -393,17 +393,20 @@ def _threads_embed_url(source_url: str) -> str:
 
 
 def _resolve_threads_source(source_url: str) -> str:
-    """Resolve legacy ``/t/<code>`` share URLs to their canonical post path.
+    """Resolve compact Threads links to their canonical public post path.
 
-    Threads still emits and accepts compact ``/t/`` links, but appending
-    ``/embed`` to that legacy path returns an embed shell without the post
-    media.  The canonical ``/@user/post/<code>/embed`` page contains the
-    actual public image/video elements, so resolve only the ambiguous legacy
-    form before constructing the embed URL.
+    Threads emits both legacy ``/t/<code>`` and newer ``/share/<code>`` URLs.
+    Appending ``/embed`` to either compact form does not expose the post media
+    (and the newer form returns 404).  A link-preview request redirects both
+    forms to ``/@user/post/<code>``, whose embed page contains the public
+    image/video elements.
     """
 
     parsed = urlparse(source_url)
-    if not re.fullmatch(r"/t/[A-Za-z0-9_-]+/?", parsed.path):
+    if not re.fullmatch(
+        r"/(?:t|share)/[A-Za-z0-9_-]+/?",
+        parsed.path,
+    ):
         return source_url
 
     response: requests.Response | None = None

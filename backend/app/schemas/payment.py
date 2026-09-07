@@ -175,6 +175,7 @@ class CurrentSubscriptionResponse(BaseModel):
     is_active: bool
     plan_slug: str | None = None
     plan_name: str | None = None
+    plan_name_en: str | None = None
     started_at: datetime | None = None
     expires_at: datetime | None = None
     duration_days: int | None = None

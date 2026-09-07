@@ -59,6 +59,14 @@ class Plan(Base, TimestampMixin):
         nullable=False,
     )
 
+    # Optional for compatibility with legacy/internal rows. Admin-created
+    # plans always receive a value and public English catalogs fall back to
+    # the Persian name only when an older row has not been edited yet.
+    name_en: Mapped[str | None] = mapped_column(
+        String(100),
+        nullable=True,
+    )
+
     slug: Mapped[str] = mapped_column(
         String(100),
         unique=True,

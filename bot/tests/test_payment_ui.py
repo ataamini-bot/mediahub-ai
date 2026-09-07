@@ -135,3 +135,23 @@ def test_persian_subscription_uses_plan_label_and_effective_quota():
     assert "💎 Plan:" not in text
     assert "محدودیت دانلود روزانه: <code>100</code>" in text
     assert "دانلود باقیمانده: <code>88</code>" in text
+
+
+def test_english_subscription_uses_english_plan_name():
+    text = _subscription_status_text(
+        {
+            "is_active": True,
+            "plan_name": "نقره‌ای",
+            "plan_name_en": "Silver",
+            "duration_days": 30,
+            "expires_at": "2099-01-01T00:00:00+00:00",
+            "registered_at": "2026-01-01T00:00:00+00:00",
+            "downloads_done": 12,
+            "daily_download_limit": 100,
+            "remaining_downloads": 88,
+        },
+        "en",
+    )
+
+    assert "💎 Plan: <b>Silver</b>" in text
+    assert "نقره‌ای" not in text

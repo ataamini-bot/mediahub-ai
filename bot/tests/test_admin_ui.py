@@ -250,3 +250,4 @@ def test_custom_plan_exposes_display_order_editing():
 
     assert "admin:plan:edit:order:22" in callbacks
     assert "admin:plan:edit:usdt:22" in callbacks
+    assert "admin:plan:edit:name_en:22" in callbacks

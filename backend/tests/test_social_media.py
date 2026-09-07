@@ -166,7 +166,17 @@ def test_threads_parser_excludes_avatar_and_keeps_post_media():
     ]
 
 
-def test_threads_legacy_share_url_resolves_before_embed(monkeypatch):
+@pytest.mark.parametrize(
+    "source_url",
+    (
+        "https://www.threads.net/t/ABC123?xmt=example",
+        "https://www.threads.com/share/BASTGm8ThZ/",
+    ),
+)
+def test_threads_compact_share_url_resolves_before_embed(
+    monkeypatch,
+    source_url,
+):
     class Response:
         url = "https://www.threads.com/@example/post/ABC123"
 
@@ -179,7 +189,7 @@ def test_threads_legacy_share_url_resolves_before_embed(monkeypatch):
     monkeypatch.setattr(social_media.requests, "get", lambda *_args, **_kwargs: Response())
 
     assert social_media._threads_embed_url(
-        "https://www.threads.net/t/ABC123?xmt=example"
+        source_url
     ) == "https://www.threads.com/@example/post/ABC123/embed"
 
 

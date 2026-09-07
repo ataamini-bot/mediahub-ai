@@ -298,6 +298,7 @@ class AdminUsdtDestinationResponse(BaseModel):
 class AdminPlanResponse(BaseModel):
     id: int
     name: str
+    name_en: str | None = None
     slug: str
     description: str | None
     price: Decimal
@@ -322,6 +323,7 @@ class AdminPlanResponse(BaseModel):
 class AdminPlanCreate(BaseModel):
     actor_telegram_id: int = Field(gt=0)
     name: str = Field(min_length=2, max_length=100)
+    name_en: str | None = Field(default=None, min_length=2, max_length=100)
     description: str | None = Field(default=None, max_length=2000)
     price: Decimal = Field(gt=0, max_digits=12)
     price_usdt: Decimal | None = Field(default=None, gt=0, max_digits=12)
@@ -340,6 +342,7 @@ class AdminPlanCreate(BaseModel):
 class AdminPlanUpdate(BaseModel):
     actor_telegram_id: int = Field(gt=0)
     name: str | None = Field(default=None, min_length=2, max_length=100)
+    name_en: str | None = Field(default=None, min_length=2, max_length=100)
     description: str | None = Field(default=None, max_length=2000)
     price: Decimal | None = Field(default=None, gt=0, max_digits=12)
     price_usdt: Decimal | None = Field(default=None, gt=0, max_digits=12)

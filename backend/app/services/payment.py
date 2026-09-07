@@ -493,6 +493,7 @@ class PaymentService:
             "is_active": True,
             "plan_slug": plan.slug,
             "plan_name": plan.name,
+            "plan_name_en": plan.name_en or plan.name,
             "started_at": subscription.started_at,
             "expires_at": subscription.expires_at,
             "duration_days": plan.duration_days,

@@ -113,6 +113,29 @@ class PlanManagementService:
 
         return price.quantize(Decimal("0.01"))
 
+    @staticmethod
+    def normalize_usdt_price(value: Decimal | int | str) -> Decimal:
+        translated = str(value).strip().translate(PERSIAN_ARABIC_DIGITS)
+        translated = translated.replace(",", "").replace("٬", "")
+
+        try:
+            price = Decimal(translated)
+        except (InvalidOperation, TypeError, ValueError) as exc:
+            raise PlanValidationError("USDT price must be a number") from exc
+
+        if not price.is_finite() or price <= 0:
+            raise PlanValidationError("USDT price must be positive")
+
+        if price.as_tuple().exponent < -4:
+            raise PlanValidationError(
+                "USDT price cannot contain more than 4 decimal places"
+            )
+
+        if price > Decimal("99999999.9999"):
+            raise PlanValidationError("USDT price is too large")
+
+        return price.quantize(Decimal("0.0001"))
+
     @classmethod
     def normalize_daily_limit(cls, value: int | str | None) -> int | None:
         if value is None:
@@ -205,6 +228,7 @@ class PlanManagementService:
         actor_telegram_id: int,
         reason: str,
         name: str,
+        name_en: str | None = None,
         description: str | None,
         duration_days: int,
         price: Decimal,
@@ -219,16 +243,22 @@ class PlanManagementService:
         is_active: bool,
     ) -> Plan:
         normalized_name = self.normalize_name(name)
+        normalized_name_en = self.normalize_name(name_en or normalized_name)
         await self._ensure_name_available(normalized_name)
         normalized_daily_limit = self.normalize_daily_limit(
             daily_download_limit
         )
         plan = Plan(
             name=normalized_name,
+            name_en=normalized_name_en,
             slug=f"plan_{uuid.uuid4().hex[:20]}",
             description=self.normalize_description(description),
             price=self.normalize_price(price),
-            price_usdt=(self.normalize_price(price_usdt) if price_usdt is not None else None),
+            price_usdt=(
+                self.normalize_usdt_price(price_usdt)
+                if price_usdt is not None
+                else None
+            ),
             duration_days=self.normalize_duration_days(duration_days),
             daily_download_limit=normalized_daily_limit,
             max_file_size_mb=self.normalize_file_size_mb(max_file_size_mb),
@@ -268,6 +298,7 @@ class PlanManagementService:
         actor_telegram_id: int,
         reason: str,
         name: str | None = None,
+        name_en: str | None = None,
         description: str | None = None,
         description_supplied: bool = False,
         duration_days: int | None = None,
@@ -296,6 +327,7 @@ class PlanManagementService:
         if plan.is_system and any(
             (
                 name is not None,
+                name_en is not None,
                 description_supplied,
                 duration_days is not None,
                 price is not None,
@@ -317,6 +349,9 @@ class PlanManagementService:
             )
             plan.name = normalized_name
 
+        if name_en is not None:
+            plan.name_en = self.normalize_name(name_en)
+
         if description_supplied:
             plan.description = self.normalize_description(description)
 
@@ -328,7 +363,7 @@ class PlanManagementService:
 
         if price_usdt_supplied:
             plan.price_usdt = (
-                self.normalize_price(price_usdt)
+                self.normalize_usdt_price(price_usdt)
                 if price_usdt is not None
                 else None
             )
@@ -421,9 +456,15 @@ class PlanManagementService:
             details={
                 "reason": str(reason).strip(),
                 "name": plan.name,
+                "name_en": plan.name_en,
                 "slug": plan.slug,
                 "duration_days": plan.duration_days,
                 "price_irt": str(plan.price),
+                "price_usdt": (
+                    str(plan.price_usdt)
+                    if plan.price_usdt is not None
+                    else None
+                ),
                 "daily_download_limit": plan.daily_download_limit,
                 "max_file_size_mb": plan.max_file_size_mb,
                 "max_quality": plan.max_quality,
