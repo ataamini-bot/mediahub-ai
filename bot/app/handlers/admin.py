@@ -382,18 +382,40 @@ async def _show_plan_detail(
     )
 
 
-async def _show_accounts(message: Message, actor_telegram_id: int) -> None:
-    accounts = await list_admin_accounts(actor_telegram_id)
-    active_count = sum(bool(row.get("is_active")) for row in accounts)
-    await message.edit_text(
-        (
-            "👮 <b>مدیریت مدیران</b>\n\n"
+async def _show_accounts(
+    message: Message,
+    actor_telegram_id: int,
+    *,
+    context: dict | None = None,
+) -> None:
+    if context is None:
+        context = await _context_or_none(actor_telegram_id)
+    if context is None:
+        return
+    can_manage_accounts = _can(context, "admins.manage")
+    can_manage_roles = _can(context, "roles.manage")
+    if not (can_manage_accounts or can_manage_roles):
+        return
+    accounts = []
+    text = "👮 <b>مدیریت مدیران</b>\n\n"
+    if can_manage_accounts:
+        accounts = await list_admin_accounts(actor_telegram_id)
+        active_count = sum(bool(row.get("is_active")) for row in accounts)
+        text += (
             f"تعداد کل: <code>{len(accounts)}</code>\n"
             f"فعال: <code>{active_count}</code>\n\n"
             "برای مشاهده یا ویرایش، یک مدیر را انتخاب کنید."
-        ),
+        )
+    if can_manage_roles:
+        text += "\n\nبرای تنظیم نقش‌ها، «نقش‌ها و دسترسی‌ها» را انتخاب کنید."
+    await message.edit_text(
+        text,
         parse_mode="HTML",
-        reply_markup=build_admin_accounts_keyboard(accounts),
+        reply_markup=build_admin_accounts_keyboard(
+            accounts,
+            can_manage_accounts=can_manage_accounts,
+            can_manage_roles=can_manage_roles,
+        ),
     )
 
 
@@ -603,13 +625,17 @@ async def show_admin_accounts(
 
     context = await _context_or_none(callback.from_user.id)
 
-    if context is None or not _can(context, "admins.manage"):
+    if context is None or not (
+        _can(context, "admins.manage") or _can(context, "roles.manage")
+    ):
         await callback.answer("دسترسی مدیریت مدیران ندارید.", show_alert=True)
         return
 
     try:
         await state.clear()
-        await _show_accounts(callback.message, callback.from_user.id)
+        await _show_accounts(
+            callback.message, callback.from_user.id, context=context,
+        )
         await callback.answer()
     except BackendAPIError as exc:
         await callback.answer(_backend_error_text(exc), show_alert=True)

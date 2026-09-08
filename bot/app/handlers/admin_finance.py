@@ -8,6 +8,7 @@ from aiogram.types import CallbackQuery, ForceReply, Message
 
 from app.keyboards.admin_finance import (
     PAYMENT_PAGE_SIZE,
+    PAYMENT_STATISTICS_PERIODS,
     build_card_detail_keyboard,
     build_cards_keyboard,
     build_finance_cancel_keyboard,
@@ -15,6 +16,7 @@ from app.keyboards.admin_finance import (
     build_finance_home_keyboard,
     build_payment_detail_keyboard,
     build_payment_list_keyboard,
+    build_payment_statistics_keyboard,
     build_usdt_detail_keyboard,
     build_usdt_keyboard,
 )
@@ -159,50 +161,65 @@ async def _show_finance_home(message: Message, actor_telegram_id: int) -> None:
     )
 
 
-def _payment_statistics_text(summary: dict) -> str:
-    labels = {
-        "daily": "امروز",
-        "weekly": "۷ روز اخیر",
-        "monthly": "ماه جاری",
-        "yearly": "سال جاری",
-        "all": "کل",
-    }
+def _payment_statistics_text(summary: dict, period: str) -> str:
     statistics = summary.get("statistics") or {}
+    row = statistics.get(period) or {}
     lines = [
         "📊 <b>آمار پرداخت‌ها</b>",
         "",
-        "مبالغ تأییدشدهٔ تومان و USDT جداگانه محاسبه شده‌اند.",
+        f"📅 بازه: <b>{PAYMENT_STATISTICS_PERIODS[period]}</b>",
+        "",
+        f"✅ تأییدشده: <code>{int(row.get('approved', 0))}</code>",
+        f"⏳ در انتظار بررسی: <code>{int(row.get('pending', 0))}</code>",
+        f"❌ ردشده: <code>{int(row.get('rejected', 0))}</code>",
+        "",
+        f"💰 مجموع تأییدشده: <b>{format_toman(row.get('irt_total', 0))}</b>",
+        f"💵 مجموع تأییدشدهٔ USDT: <b>{format_usdt(row.get('usdt_total', 0))}</b>",
+        "",
+        "بازه بر اساس زمان ثبت پرداخت است؛ مبالغ فقط شامل پرداخت‌های تأییدشده‌اند.",
     ]
-    for key in ("daily", "weekly", "monthly", "yearly", "all"):
-        row = statistics.get(key) or {}
-        lines.extend(
-            [
-                "",
-                f"<b>{labels[key]}</b>",
-                f"✅ موفق: <code>{int(row.get('approved', 0))}</code> | "
-                f"⏳ در انتظار: <code>{int(row.get('pending', 0))}</code> | "
-                f"❌ رد: <code>{int(row.get('rejected', 0))}</code>",
-                f"💰 درآمد: <b>{format_toman(row.get('irt_total', 0))}</b>",
-                f"💵 درآمد بین‌المللی: <b>{format_usdt(row.get('usdt_total', 0))}</b>",
-            ]
-        )
     return "\n".join(lines)
 
 
 @router.callback_query(F.data == "admin:pay:stats")
-async def show_payment_statistics(callback: CallbackQuery) -> None:
+async def show_payment_statistics(
+    callback: CallbackQuery, state: FSMContext,
+) -> None:
     if not isinstance(callback.message, Message):
         return
     if await _context(callback.from_user.id, "payments.view") is None:
         await callback.answer("دسترسی مشاهده آمار پرداخت‌ها ندارید.", show_alert=True)
         return
+    await state.clear()
+    await callback.message.edit_text(
+        "📊 <b>آمار پرداخت‌ها</b>\n\nبازهٔ زمانی موردنظر را انتخاب کنید:",
+        parse_mode="HTML",
+        reply_markup=build_payment_statistics_keyboard(),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("admin:pay:stats:"))
+async def show_payment_statistics_period(
+    callback: CallbackQuery, state: FSMContext,
+) -> None:
+    if not isinstance(callback.message, Message) or not callback.data:
+        return
+    if await _context(callback.from_user.id, "payments.view") is None:
+        await callback.answer("دسترسی مشاهده آمار پرداخت‌ها ندارید.", show_alert=True)
+        return
+    period = callback.data.removeprefix("admin:pay:stats:")
+    if period not in PAYMENT_STATISTICS_PERIODS:
+        await callback.answer("بازهٔ زمانی معتبر نیست.", show_alert=True)
+        return
     try:
         summary = await get_admin_payment_summary(callback.from_user.id)
+        await state.clear()
         await callback.message.edit_text(
-            _payment_statistics_text(summary),
+            _payment_statistics_text(summary, period),
             parse_mode="HTML",
-            reply_markup=build_finance_home_keyboard(
-                can_manage_destinations=False,
+            reply_markup=build_payment_statistics_keyboard(
+                choose_period=False,
             ),
         )
         await callback.answer()

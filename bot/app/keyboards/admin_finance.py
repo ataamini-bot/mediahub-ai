@@ -6,6 +6,47 @@ from app.keyboards.payment import format_toman, format_usdt
 
 
 PAYMENT_PAGE_SIZE = 8
+PAYMENT_STATISTICS_PERIODS = {
+    "daily": "امروز",
+    "weekly": "۷ روز اخیر",
+    "monthly": "ماه جاری (میلادی)",
+    "yearly": "سال جاری (میلادی)",
+    "all": "کل دوره",
+}
+
+
+def build_payment_statistics_keyboard(
+    *,
+    choose_period: bool = True,
+) -> InlineKeyboardMarkup:
+    if choose_period:
+        rows = [
+            [
+                InlineKeyboardButton(
+                    text=label,
+                    callback_data=f"admin:pay:stats:{period}",
+                )
+            ]
+            for period, label in PAYMENT_STATISTICS_PERIODS.items()
+        ]
+    else:
+        rows = [
+            [
+                InlineKeyboardButton(
+                    text="📅 انتخاب بازهٔ دیگر",
+                    callback_data="admin:pay:stats",
+                )
+            ]
+        ]
+    rows.append(
+        [
+            InlineKeyboardButton(
+                text="🔙 مدیریت پرداخت‌ها",
+                callback_data="admin:payments",
+            )
+        ]
+    )
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def build_finance_home_keyboard(

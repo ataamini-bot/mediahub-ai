@@ -144,12 +144,8 @@ dp = Dispatcher(
 dp.include_router(
     experience_router
 )
-dp.include_router(
-    home_router
-)
-dp.include_router(
-    payments_router
-)
+# Admin forms must receive their input before home-menu label matching.
+# An edited title can itself be a valid home button, such as "خرید اشتراک".
 dp.include_router(
     admin_settings_router
 )
@@ -161,6 +157,12 @@ dp.include_router(
 )
 dp.include_router(
     admin_router
+)
+dp.include_router(
+    home_router
+)
+dp.include_router(
+    payments_router
 )
 dp.include_router(
     language_router

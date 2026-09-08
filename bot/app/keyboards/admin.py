@@ -10,22 +10,12 @@ def build_admin_home_keyboard(
 ) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = []
 
-    if is_superadmin or "admins.manage" in permissions:
+    if is_superadmin or permissions & {"admins.manage", "roles.manage"}:
         rows.append(
             [
                 InlineKeyboardButton(
                     text="👮 مدیریت مدیران",
                     callback_data="admin:accounts",
-                )
-            ]
-        )
-
-    if is_superadmin or "roles.manage" in permissions:
-        rows.append(
-            [
-                InlineKeyboardButton(
-                    text="🔐 نقش‌ها و دسترسی‌ها",
-                    callback_data="admin:roles",
                 )
             ]
         )
@@ -96,10 +86,23 @@ def build_admin_back_keyboard() -> InlineKeyboardMarkup:
 
 def build_admin_accounts_keyboard(
     accounts: list[dict],
+    *,
+    can_manage_accounts: bool = True,
+    can_manage_roles: bool = False,
 ) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = []
 
-    for account in accounts:
+    if can_manage_roles:
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text="🔐 نقش‌ها و دسترسی‌ها",
+                    callback_data="admin:roles",
+                )
+            ]
+        )
+
+    for account in accounts if can_manage_accounts else []:
         status = "🟢" if account.get("is_active") else "⚫️"
         authority = "👑" if account.get("is_superadmin") else "👮"
         username = account.get("username")
@@ -120,20 +123,21 @@ def build_admin_accounts_keyboard(
             ]
         )
 
-    rows.extend(
-        [
+    if can_manage_accounts:
+        rows.append(
             [
                 InlineKeyboardButton(
                     text="➕ افزودن مدیر",
                     callback_data="admin:account:add",
                 )
-            ],
-            [
-                InlineKeyboardButton(
-                    text="🔙 بازگشت به پنل",
-                    callback_data="admin:open",
-                )
-            ],
+            ]
+        )
+    rows.append(
+        [
+            InlineKeyboardButton(
+                text="🔙 بازگشت به پنل",
+                callback_data="admin:open",
+            )
         ]
     )
     return InlineKeyboardMarkup(inline_keyboard=rows)
@@ -319,8 +323,8 @@ def build_admin_roles_keyboard(
             ],
             [
                 InlineKeyboardButton(
-                    text="🔙 بازگشت به پنل",
-                    callback_data="admin:open",
+                    text="🔙 مدیریت مدیران",
+                    callback_data="admin:accounts",
                 )
             ],
         ]

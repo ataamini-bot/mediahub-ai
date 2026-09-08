@@ -63,7 +63,7 @@ def build_copy_items_keyboard(language: str, section: str) -> InlineKeyboardMark
     rows = [
         [
             InlineKeyboardButton(
-                text=label,
+                text=f"✏️ {label}",
                 callback_data=f"admin:copy:item:{language}:{section}:{key}",
             )
         ]
@@ -292,4 +292,3 @@ def build_channel_delete_keyboard(channel_id: int) -> InlineKeyboardMarkup:
             ],
         ]
     )
-

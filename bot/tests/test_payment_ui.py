@@ -107,11 +107,12 @@ def test_payment_statistics_separate_toman_and_usdt_totals():
                 }
                 for period in ("daily", "weekly", "monthly", "yearly", "all")
             }
-        }
+        },
+        "daily",
     )
 
     assert "امروز" in text
-    assert "سال جاری" in text
+    assert "سال جاری" not in text
     assert "158,000 تومان" in text
     assert "5.50 USDT" in text
 
