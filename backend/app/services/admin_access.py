@@ -26,6 +26,7 @@ class PermissionCode:
     PAYMENT_DESTINATIONS_MANAGE = "payment_destinations.manage"
     PLANS_MANAGE = "plans.manage"
     AUDIT_VIEW = "audit.view"
+    STATISTICS_VIEW = "statistics.view"
 
 
 class AdminAccessDenied(PermissionError):

@@ -35,6 +35,8 @@ class PaymentOffer:
     max_concurrent_downloads: int
     priority_processing: bool
     forced_join_required: bool
+    description: str | None
+    description_en: str | None
 
     @classmethod
     def from_plan(cls, plan: Plan, *, currency: str = "IRT") -> "PaymentOffer":
@@ -55,7 +57,31 @@ class PaymentOffer:
             max_concurrent_downloads=plan.max_concurrent_downloads,
             priority_processing=plan.priority_processing,
             forced_join_required=plan.forced_join_required,
+            description=plan.description,
+            description_en=plan.description_en,
         )
+
+    def localized_description(self, language: str) -> str:
+        if language == "en":
+            if self.description_en:
+                return self.description_en
+            # Legacy plans predate bilingual descriptions. Never leak the
+            # Persian description into an English payment flow.
+            limit = (
+                "unlimited"
+                if self.daily_download_limit is None
+                else f"{self.daily_download_limit} downloads/day"
+            )
+            quality = (
+                "the highest available quality"
+                if self.max_quality is None
+                else f"up to {self.max_quality}p quality"
+            )
+            return (
+                f"Valid for {self.duration_days} days, with {limit} and "
+                f"files up to {self.max_file_size_mb or 'unlimited'} MB at {quality}."
+            )
+        return self.description or "توضیحی برای این پلن ثبت نشده است."
 
     def limits_snapshot(self) -> dict:
         return {
@@ -179,6 +205,9 @@ async def get_payment_configuration(
                 "max_concurrent_downloads": offer.max_concurrent_downloads,
                 "priority_processing": offer.priority_processing,
                 "forced_join_required": offer.forced_join_required,
+                "description": offer.localized_description(normalized_language),
+                "description_fa": offer.description,
+                "description_en": offer.description_en,
             }
             for offer in offers
         ],

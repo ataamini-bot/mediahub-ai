@@ -50,6 +50,16 @@ def build_admin_home_keyboard(
             ]
         )
 
+    if is_superadmin or "statistics.view" in permissions:
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text="📊 آمار ربات",
+                    callback_data="admin:statistics",
+                )
+            ]
+        )
+
     if is_superadmin or "tickets.view" in permissions:
         rows.append(
             [
@@ -476,8 +486,12 @@ def build_admin_plan_detail_keyboard(plan: dict) -> InlineKeyboardMarkup:
                 ],
                 [
                     InlineKeyboardButton(
-                        text="📝 توضیح",
+                        text="📝 توضیح فارسی",
                         callback_data=f"admin:plan:edit:description:{plan_id}",
+                    ),
+                    InlineKeyboardButton(
+                        text="🌐 توضیح انگلیسی",
+                        callback_data=f"admin:plan:edit:description_en:{plan_id}",
                     ),
                 ],
                 [

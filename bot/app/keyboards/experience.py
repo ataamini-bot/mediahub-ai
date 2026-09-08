@@ -31,7 +31,10 @@ def build_support_categories_keyboard(language: str = "fa") -> InlineKeyboardMar
             ]
             for code, label in labels.items()
         ]
-        + [[InlineKeyboardButton(text="❌ انصراف", callback_data="support:cancel")]]
+        + [[InlineKeyboardButton(
+            text="❌ انصراف" if language != "en" else "❌ Cancel",
+            callback_data="support:cancel",
+        )]]
     )
 
 
@@ -137,4 +140,3 @@ def build_custom_url_keyboard(label: str, url: str, style: str) -> InlineKeyboar
     if style in {"primary", "success", "danger"}:
         kwargs["style"] = style
     return InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(**kwargs)]])
-

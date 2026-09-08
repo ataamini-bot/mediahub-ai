@@ -1,4 +1,5 @@
 import asyncio
+import re
 import time
 from typing import Any
 
@@ -8,6 +9,7 @@ from app.services.backend import get_bot_configuration
 
 CACHE_TTL_SECONDS = 30
 _cache: dict[str, tuple[float, dict[str, Any]]] = {}
+_PERSIAN_TEXT_RE = re.compile(r"[\u0600-\u06ff]")
 
 
 FALLBACK_CONTENT: dict[str, dict[str, str]] = {
@@ -119,7 +121,9 @@ def runtime_content(configuration: dict, key: str) -> str:
     content = configuration.get("content")
     if isinstance(content, dict):
         value = content.get(key)
-        if isinstance(value, str) and value.strip():
+        if isinstance(value, str) and value.strip() and not (
+            language == "en" and _PERSIAN_TEXT_RE.search(value)
+        ):
             return value.strip()
     return FALLBACK_CONTENT[language].get(key, key)
 
@@ -128,7 +132,10 @@ def runtime_button(configuration: dict, key: str) -> str:
     buttons = configuration.get("buttons")
     if isinstance(buttons, dict):
         value = buttons.get(key)
-        if isinstance(value, str) and value.strip():
+        language = normalize_language(configuration.get("language")) or "fa"
+        if isinstance(value, str) and value.strip() and not (
+            language == "en" and _PERSIAN_TEXT_RE.search(value)
+        ):
             return value.strip()
     return str(fallback_configuration(configuration.get("language", "fa"))["buttons"].get(key, key))
 
@@ -165,4 +172,3 @@ def action_for_runtime_text(
             if isinstance(button, dict) and normalized_text == str(button.get(label_key) or "").strip():
                 return {"action": "custom", "button": button}
     return None
-

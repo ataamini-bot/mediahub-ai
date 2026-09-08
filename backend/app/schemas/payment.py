@@ -20,6 +20,9 @@ class PaymentOfferResponse(BaseModel):
     max_concurrent_downloads: int
     priority_processing: bool
     forced_join_required: bool
+    description: str | None = None
+    description_fa: str | None = None
+    description_en: str | None = None
 
 
 class PaymentDestinationResponse(BaseModel):

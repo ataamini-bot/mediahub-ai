@@ -312,6 +312,21 @@ async def get_admin_payment_summary(actor_telegram_id: int) -> dict:
     )
 
 
+async def get_admin_statistics(
+    actor_telegram_id: int,
+    *,
+    section: str = "overview",
+    period: str = "30d",
+    chart_range: str = "30d",
+    metric: str = "users",
+) -> dict:
+    return await _payment_request(
+        "GET",
+        f"/admin/statistics?actor_telegram_id={actor_telegram_id}"
+        f"&section={section}&period={period}&chart_range={chart_range}&metric={metric}",
+    )
+
+
 async def list_admin_payments(
     actor_telegram_id: int,
     *,

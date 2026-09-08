@@ -58,6 +58,9 @@ from app.handlers.admin_experience import (
 from app.handlers.admin_finance import (
     router as admin_finance_router,
 )
+from app.handlers.admin_statistics import (
+    router as admin_statistics_router,
+)
 from app.handlers.language import (
     router as language_router,
 )
@@ -154,6 +157,9 @@ dp.include_router(
 )
 dp.include_router(
     admin_finance_router
+)
+dp.include_router(
+    admin_statistics_router
 )
 dp.include_router(
     admin_router

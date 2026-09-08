@@ -128,6 +128,7 @@ def serialize_plan(plan) -> AdminPlanResponse:
         name_en=plan.name_en,
         slug=plan.slug,
         description=plan.description,
+        description_en=plan.description_en,
         price=plan.price,
         price_usdt=plan.price_usdt,
         duration_days=plan.duration_days,
@@ -271,6 +272,7 @@ async def update_application_setting(
             actor_user_id=context.user_id,
             actor_telegram_id=data.actor_telegram_id,
             description=data.description,
+            description_en=data.description_en,
             expected_version=data.expected_version,
         )
         await db.commit()
@@ -401,6 +403,8 @@ async def update_plan(
             name_en=data.name_en,
             description=data.description,
             description_supplied="description" in data.model_fields_set,
+            description_en=data.description_en,
+            description_en_supplied="description_en" in data.model_fields_set,
             duration_days=data.duration_days,
             price=data.price,
             price_usdt=data.price_usdt,

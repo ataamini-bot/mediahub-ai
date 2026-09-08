@@ -79,6 +79,11 @@ class Plan(Base, TimestampMixin):
         nullable=True,
     )
 
+    description_en: Mapped[str | None] = mapped_column(
+        Text,
+        nullable=True,
+    )
+
     price: Mapped[Decimal] = mapped_column(
         Numeric(12, 2),
         default=Decimal("0"),

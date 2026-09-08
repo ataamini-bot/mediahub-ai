@@ -27,6 +27,7 @@ class AdminManagementStates(StatesGroup):
     selecting_plan_priority = State()
     selecting_plan_forced_join = State()
     waiting_for_plan_description = State()
+    waiting_for_plan_description_en = State()
     confirming_plan_create = State()
 
     waiting_for_plan_edit_value = State()

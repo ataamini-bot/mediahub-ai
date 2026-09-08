@@ -44,6 +44,7 @@ PERMISSION_LABELS_FA: dict[str, str] = {
     "backups.manage": "ایجاد و تنظیم بکاپ‌ها",
     "backups.restore": "بازیابی بکاپ رمزگذاری‌شده",
     "audit.view": "مشاهده گزارش فعالیت مدیران",
+    "statistics.view": "مشاهده آمار ربات و شاخص‌های رشد",
 }
 
 

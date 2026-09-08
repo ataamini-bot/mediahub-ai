@@ -301,6 +301,7 @@ class AdminPlanResponse(BaseModel):
     name_en: str | None = None
     slug: str
     description: str | None
+    description_en: str | None = None
     price: Decimal
     price_usdt: Decimal | None = None
     currency: str = "IRT"
@@ -325,6 +326,7 @@ class AdminPlanCreate(BaseModel):
     name: str = Field(min_length=2, max_length=100)
     name_en: str | None = Field(default=None, min_length=2, max_length=100)
     description: str | None = Field(default=None, max_length=2000)
+    description_en: str | None = Field(default=None, max_length=2000)
     price: Decimal = Field(gt=0, max_digits=12)
     price_usdt: Decimal | None = Field(default=None, gt=0, max_digits=12)
     duration_days: int = Field(ge=1, le=3650)
@@ -344,6 +346,7 @@ class AdminPlanUpdate(BaseModel):
     name: str | None = Field(default=None, min_length=2, max_length=100)
     name_en: str | None = Field(default=None, min_length=2, max_length=100)
     description: str | None = Field(default=None, max_length=2000)
+    description_en: str | None = Field(default=None, max_length=2000)
     price: Decimal | None = Field(default=None, gt=0, max_digits=12)
     price_usdt: Decimal | None = Field(default=None, gt=0, max_digits=12)
     duration_days: int | None = Field(default=None, ge=1, le=3650)

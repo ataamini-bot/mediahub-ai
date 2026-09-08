@@ -212,6 +212,27 @@ def build_payment_offers_keyboard(
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
+def build_payment_offer_detail_keyboard(language: str = "fa") -> InlineKeyboardMarkup:
+    is_fa = language != "en"
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="✅ ادامه پرداخت" if is_fa else "✅ Continue to payment",
+                    callback_data="payment:offer:continue",
+                    style="success",
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="🔙 بازگشت به پلن‌ها" if is_fa else "🔙 Back to plans",
+                    callback_data="payment:open",
+                )
+            ],
+        ]
+    )
+
+
 def build_receipt_cancel_keyboard(language: str = "fa") -> InlineKeyboardMarkup:
     is_fa = language != "en"
     return InlineKeyboardMarkup(

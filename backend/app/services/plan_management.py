@@ -72,6 +72,15 @@ class PlanManagementService:
 
         return normalized
 
+    @classmethod
+    def normalize_english_description(cls, value: str | None) -> str | None:
+        normalized = cls.normalize_description(value)
+        if normalized is not None and re.search(r"[\u0600-\u06ff]", normalized):
+            raise PlanValidationError(
+                "English plan description cannot contain Persian/Arabic text"
+            )
+        return normalized
+
     @staticmethod
     def normalize_integer(value: int | str, *, field: str) -> int:
         translated = str(value).strip().translate(PERSIAN_ARABIC_DIGITS)
@@ -230,6 +239,7 @@ class PlanManagementService:
         name: str,
         name_en: str | None = None,
         description: str | None,
+        description_en: str | None = None,
         duration_days: int,
         price: Decimal,
         price_usdt: Decimal | None = None,
@@ -253,6 +263,7 @@ class PlanManagementService:
             name_en=normalized_name_en,
             slug=f"plan_{uuid.uuid4().hex[:20]}",
             description=self.normalize_description(description),
+            description_en=self.normalize_english_description(description_en),
             price=self.normalize_price(price),
             price_usdt=(
                 self.normalize_usdt_price(price_usdt)
@@ -301,6 +312,8 @@ class PlanManagementService:
         name_en: str | None = None,
         description: str | None = None,
         description_supplied: bool = False,
+        description_en: str | None = None,
+        description_en_supplied: bool = False,
         duration_days: int | None = None,
         price: Decimal | None = None,
         price_usdt: Decimal | None = None,
@@ -329,6 +342,7 @@ class PlanManagementService:
                 name is not None,
                 name_en is not None,
                 description_supplied,
+                description_en_supplied,
                 duration_days is not None,
                 price is not None,
                 price_usdt_supplied,
@@ -354,6 +368,9 @@ class PlanManagementService:
 
         if description_supplied:
             plan.description = self.normalize_description(description)
+
+        if description_en_supplied:
+            plan.description_en = self.normalize_english_description(description_en)
 
         if duration_days is not None:
             plan.duration_days = self.normalize_duration_days(duration_days)
@@ -457,6 +474,8 @@ class PlanManagementService:
                 "reason": str(reason).strip(),
                 "name": plan.name,
                 "name_en": plan.name_en,
+                "description": plan.description,
+                "description_en": plan.description_en,
                 "slug": plan.slug,
                 "duration_days": plan.duration_days,
                 "price_irt": str(plan.price),

@@ -5,16 +5,16 @@ cd /opt/mediahub-ai || exit 1
   set -u
   expected_branch="feature/admin-foundation"
   expected_commit="${1:-}"
-  expected_migration="c7e4d2a9f610"
+  expected_migration="d4e5f6a7b8c9"
   stamp="$(date -u +%Y%m%dT%H%M%SZ)"
   started_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-  backup="backups/manual/before-threads-plan-i18n-${stamp}.dump"
-  verify_log="backups/manual/threads-plan-i18n-${stamp}.log"
+  backup="backups/manual/before-bilingual-stats-${stamp}.dump"
+  verify_log="backups/manual/bilingual-stats-${stamp}.log"
   migration_container="mediahub-migration-${stamp}"
-  rollback_backend="mediahub-ai-backend:rollback-threads-plan-i18n-${stamp}"
-  rollback_worker="mediahub-ai-worker:rollback-threads-plan-i18n-${stamp}"
-  rollback_monitor="mediahub-ai-monitor:rollback-threads-plan-i18n-${stamp}"
-  rollback_bot="mediahub-ai-bot:rollback-threads-plan-i18n-${stamp}"
+  rollback_backend="mediahub-ai-backend:rollback-bilingual-stats-${stamp}"
+  rollback_worker="mediahub-ai-worker:rollback-bilingual-stats-${stamp}"
+  rollback_monitor="mediahub-ai-monitor:rollback-bilingual-stats-${stamp}"
+  rollback_bot="mediahub-ai-bot:rollback-bilingual-stats-${stamp}"
 
   if ! [[ "$expected_commit" =~ ^[0-9a-f]{40}$ ]]; then
     printf 'Usage: %s <expected-40-character-commit-sha>\n' "$0"
@@ -222,6 +222,7 @@ async def verify():
 asyncio.run(verify())
 routers = {router.name: router for router in dp.sub_routers}
 assert "admin-experience" in routers
+assert "admin-statistics" in routers
 assert len(routers["admin-experience"].callback_query.handlers) >= 20
 print("BOT_CONFIGURATION_API=OK")
 '; then
@@ -274,6 +275,22 @@ print("BOT_CONFIGURATION_API=OK")
   )"
   printf 'PLANS_WITHOUT_ENGLISH_NAME=%s\n' "${missing_english_names:-UNKNOWN}"
   [ "$missing_english_names" = "0" ] || deployment_ok=0
+  statistics_schema_ok="$(
+    docker compose exec -T postgres sh -lc '
+      psql --username="$POSTGRES_USER" --dbname="$POSTGRES_DB" \
+        --no-psqlrc --tuples-only --no-align --command="
+          SELECT CASE WHEN
+            EXISTS (
+              SELECT 1 FROM information_schema.columns
+              WHERE table_name = '''plans''' AND column_name = '''description_en'''
+            ) AND EXISTS (
+              SELECT 1 FROM admin_permissions WHERE code = '''statistics.view'''
+            ) THEN 1 ELSE 0 END;
+        "
+    ' 2>/dev/null | tr -d '[:space:]'
+  )"
+  printf 'BILINGUAL_STATS_SCHEMA_OK=%s\n' "${statistics_schema_ok:-UNKNOWN}"
+  [ "$statistics_schema_ok" = "1" ] || deployment_ok=0
   if final_health="$(curl -fsS http://127.0.0.1:8000/health)"; then
     printf 'HEALTH_RESPONSE=%s\n' "$final_health"
   else

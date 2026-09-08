@@ -27,6 +27,7 @@ def test_superadmin_sees_all_foundation_menu_entries():
         "admin:settings",
         "admin:plans",
         "admin:payments",
+        "admin:statistics",
         "admin:support",
         "admin:close",
     ]

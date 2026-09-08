@@ -206,7 +206,7 @@ async def open_custom_button(callback: CallbackQuery, state: FSMContext) -> None
             None,
         )
         if button is None:
-            await callback.answer("این دکمه دیگر فعال نیست.", show_alert=True)
+            await callback.answer("This button is no longer active." if normalize_language(configuration.get("language")) == "en" else "این دکمه دیگر فعال نیست.", show_alert=True)
             return
         await perform_custom_button(
             callback.message,
@@ -225,7 +225,8 @@ async def choose_support_category(callback: CallbackQuery, state: FSMContext) ->
         return
     category = callback.data.rsplit(":", 1)[-1]
     if category not in SUPPORT_CATEGORY_LABELS["fa"]:
-        await callback.answer("موضوع معتبر نیست.", show_alert=True)
+        _user, configuration = await _user_and_configuration(callback.from_user.id)
+        await callback.answer("Invalid subject." if normalize_language(configuration.get("language")) == "en" else "موضوع معتبر نیست.", show_alert=True)
         return
     _user, configuration = await _user_and_configuration(callback.from_user.id)
     await state.set_state(SupportStates.waiting_for_user_message)
@@ -234,7 +235,9 @@ async def choose_support_category(callback: CallbackQuery, state: FSMContext) ->
         runtime_content(configuration, "support_prompt"),
     )
     await callback.message.answer(
-        "پیام پشتیبانی را ارسال کنید:",
+        "Send your support request:"
+        if normalize_language(configuration.get("language")) == "en"
+        else "پیام پشتیبانی را ارسال کنید:",
         reply_markup=ForceReply(selective=True),
     )
     await callback.answer()
@@ -243,9 +246,14 @@ async def choose_support_category(callback: CallbackQuery, state: FSMContext) ->
 @router.callback_query(F.data == "support:cancel")
 async def cancel_support(callback: CallbackQuery, state: FSMContext) -> None:
     await state.clear()
+    language = "fa"
     if isinstance(callback.message, Message):
-        await callback.message.edit_text("درخواست پشتیبانی لغو شد.")
-    await callback.answer()
+        _user, configuration = await _user_and_configuration(callback.from_user.id)
+        language = normalize_language(configuration.get("language"))
+        await callback.message.edit_text(
+            "Support request cancelled." if language == "en" else "درخواست پشتیبانی لغو شد."
+        )
+    await callback.answer("Cancelled." if language == "en" else "لغو شد.")
 
 
 def _support_attachment(message: Message) -> tuple[str | None, str | None]:
@@ -287,8 +295,13 @@ async def receive_support_message(message: Message, state: FSMContext) -> None:
     category = str(data.get("support_category") or "")
     body = (message.text or message.caption or "").strip() or None
     file_id, file_type = _support_attachment(message)
+    _user, configuration = await _user_and_configuration(message.from_user.id)
+    language = normalize_language(configuration.get("language"))
     if body is None and file_id is None:
-        await message.answer("لطفاً متن، تصویر، ویدئو، فایل یا پیام صوتی ارسال کنید.")
+        await message.answer(
+            "Please send text, an image, video, file, or voice message."
+            if language == "en" else "لطفاً متن، تصویر، ویدئو، فایل یا پیام صوتی ارسال کنید."
+        )
         return
     try:
         ticket = await create_support_ticket(
@@ -320,9 +333,15 @@ async def receive_support_message(message: Message, state: FSMContext) -> None:
 
         await state.clear()
         user, configuration = await _user_and_configuration(message.from_user.id)
-        suffix = "" if delivered else "\n\n⚠️ مدیر فعالی برای دریافت فوری پیدا نشد؛ تیکت در پنل ذخیره شده است."
+        language = normalize_language(configuration.get("language"))
+        suffix = "" if delivered else (
+            "\n\n⚠️ No active administrator was available; your ticket was saved in the panel."
+            if language == "en" else
+            "\n\n⚠️ مدیر فعالی برای دریافت فوری پیدا نشد؛ تیکت در پنل ذخیره شده است."
+        )
+        tracking = f"Tracking ID: #{ticket['id']}" if language == "en" else f"شناسه پیگیری: #{ticket['id']}"
         await message.answer(
-            f"{runtime_content(configuration, 'support_sent')}\nشناسه پیگیری: #{ticket['id']}{suffix}",
+            f"{runtime_content(configuration, 'support_sent')}\n{tracking}{suffix}",
             reply_markup=build_home_reply_keyboard(
                 normalize_language(configuration.get("language")),
                 include_admin=bool(user.get("is_admin")),
@@ -330,7 +349,10 @@ async def receive_support_message(message: Message, state: FSMContext) -> None:
             ),
         )
     except BackendAPIError:
-        await message.answer("❌ ثبت درخواست پشتیبانی انجام نشد؛ کمی بعد دوباره تلاش کنید.")
+        await message.answer(
+            "❌ We could not submit your support request. Please try again later."
+            if language == "en" else "❌ ثبت درخواست پشتیبانی انجام نشد؛ کمی بعد دوباره تلاش کنید."
+        )
 
 
 @router.callback_query(F.data == "membership:check")
@@ -344,10 +366,10 @@ async def check_membership(callback: CallbackQuery) -> None:
         configuration,
     )
     if missing:
-        await callback.answer("عضویت در همه کانال‌ها هنوز تأیید نشده است.", show_alert=True)
+        await callback.answer("Membership in all channels is not confirmed yet." if normalize_language(configuration.get("language")) == "en" else "عضویت در همه کانال‌ها هنوز تأیید نشده است.", show_alert=True)
         return
     await callback.message.edit_text(runtime_content(configuration, "membership_verified"))
-    await callback.answer("عضویت تأیید شد.")
+    await callback.answer("Membership confirmed." if normalize_language(configuration.get("language")) == "en" else "عضویت تأیید شد.")
 
 
 def _ticket_detail_text(ticket: dict) -> str:
@@ -450,12 +472,14 @@ async def receive_admin_support_reply(message: Message, state: FSMContext) -> No
         configuration = await runtime_configuration(
             normalize_language(user.get("effective_language"))
         )
+        language = normalize_language(configuration.get("language"))
         await message.bot.send_message(
             chat_id=int(user["telegram_id"]),
             text=(
-                f"🛟 <b>پاسخ پشتیبانی — تیکت #{ticket_id}</b>\n\n"
-                f"{html.escape(message.text)}"
-            ),
+                f"🛟 <b>Support reply — ticket #{ticket_id}</b>\n\n"
+                if language == "en"
+                else f"🛟 <b>پاسخ پشتیبانی — تیکت #{ticket_id}</b>\n\n"
+            ) + html.escape(message.text),
             parse_mode="HTML",
             reply_markup=build_home_reply_keyboard(
                 normalize_language(configuration.get("language")),

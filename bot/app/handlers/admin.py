@@ -262,6 +262,7 @@ def _admin_plan_text(plan: dict) -> str:
     priority = "بالا" if plan.get("priority_processing") else "عادی"
     forced_join = "بله" if plan.get("forced_join_required") else "خیر"
     description = html.escape(str(plan.get("description") or "—"))
+    description_en = html.escape(str(plan.get("description_en") or "—"))
     return (
         "📦 <b>مشخصات پلن</b>\n\n"
         f"نام فارسی: <b>{html.escape(str(plan['name']))}</b>\n"
@@ -280,13 +281,15 @@ def _admin_plan_text(plan: dict) -> str:
         f"🚀 اولویت پردازش: <code>{priority}</code>\n"
         f"📣 عضویت اجباری: <code>{forced_join}</code>\n"
         f"↕️ ترتیب نمایش: <code>{int(plan.get('sort_order', 0))}</code>\n\n"
-        f"📝 توضیح: {description}"
+        f"📝 توضیح فارسی: {description}\n"
+        f"🌐 توضیح انگلیسی: {description_en}"
     )
 
 
 def _plan_create_summary(data: dict) -> str:
     daily_limit = data.get("daily_download_limit")
     description = html.escape(str(data.get("description") or "—"))
+    description_en = html.escape(str(data.get("description_en") or "—"))
     return (
         "➕ <b>مرور پلن جدید</b>\n\n"
         f"نام فارسی: <b>{html.escape(str(data['name']))}</b>\n"
@@ -304,7 +307,8 @@ def _plan_create_summary(data: dict) -> str:
         f"<code>{'بالا' if data['priority_processing'] else 'عادی'}</code>\n"
         "عضویت اجباری: "
         f"<code>{'بله' if data['forced_join_required'] else 'خیر'}</code>\n"
-        f"توضیح: {description}"
+        f"توضیح فارسی: {description}\n"
+        f"توضیح انگلیسی: {description_en}"
     )
 
 
@@ -313,6 +317,7 @@ def _plan_update_summary(plan: dict, changes: dict) -> str:
         "name": "نام فارسی",
         "name_en": "نام انگلیسی",
         "description": "توضیح",
+        "description_en": "توضیح انگلیسی",
         "duration_days": "مدت به روز",
         "price": "مبلغ تومان",
         "price_usdt": "مبلغ USDT",
@@ -2012,6 +2017,29 @@ async def receive_plan_description(message: Message, state: FSMContext) -> None:
         return
 
     await state.update_data(description=None if description == "-" else description)
+    await state.set_state(AdminManagementStates.waiting_for_plan_description_en)
+    await message.answer(
+        "🌐 توضیح انگلیسی پلن را بفرستید؛ برای بدون توضیح، فقط - بفرستید.",
+        reply_markup=ForceReply(selective=True),
+    )
+
+
+@router.message(StateFilter(AdminManagementStates.waiting_for_plan_description_en))
+async def receive_plan_description_en(message: Message, state: FSMContext) -> None:
+    description_en = str(message.text or "").strip()
+    if len(description_en) > 2000:
+        await message.answer(
+            "❌ توضیح انگلیسی پلن حداکثر ۲۰۰۰ کاراکتر است.",
+            reply_markup=ForceReply(selective=True),
+        )
+        return
+    if description_en != "-" and re.search(r"[\u0600-\u06ff]", description_en):
+        await message.answer(
+            "❌ توضیح انگلیسی نباید شامل متن فارسی باشد.",
+            reply_markup=ForceReply(selective=True),
+        )
+        return
+    await state.update_data(description_en=None if description_en == "-" else description_en)
     data = await state.get_data()
     await state.set_state(AdminManagementStates.confirming_plan_create)
     await message.answer(
@@ -2037,6 +2065,7 @@ async def confirm_create_plan(
         "name": data["name"],
         "name_en": data["name_en"],
         "description": data.get("description"),
+        "description_en": data.get("description_en"),
         "duration_days": data["duration_days"],
         "price": data["price"],
         "price_usdt": data.get("price_usdt"),
@@ -2069,7 +2098,7 @@ async def confirm_create_plan(
 
 @router.callback_query(
     F.data.regexp(
-        r"^admin:plan:edit:(name|name_en|description|duration|price|usdt|daily|size|quality|concurrency|order):\d+$"
+        r"^admin:plan:edit:(name|name_en|description|description_en|duration|price|usdt|daily|size|quality|concurrency|order):\d+$"
     )
 )
 async def start_edit_plan_field(
@@ -2112,6 +2141,7 @@ async def start_edit_plan_field(
                 "name": "نام فارسی جدید پلن را بفرستید:",
                 "name_en": "نام انگلیسی جدید پلن را بفرستید؛ مثلاً Silver 30 Days:",
                 "description": "توضیح جدید را بفرستید؛ برای حذف توضیح، - بفرستید:",
+                "description_en": "توضیح انگلیسی جدید را بفرستید؛ برای حذف توضیح، - بفرستید:",
                 "duration": "مدت جدید را به روز وارد کنید:",
                 "price": "مبلغ جدید را به تومان وارد کنید:",
                 "usdt": "مبلغ جدید USDT را وارد کنید؛ برای غیرفعال‌کردن فروش بین‌المللی - بفرستید:",
@@ -2165,6 +2195,13 @@ async def receive_plan_edit_value(message: Message, state: FSMContext) -> None:
             changes["description"] = None if raw_value == "-" else raw_value
         else:
             error = "توضیح حداکثر ۲۰۰۰ کاراکتر است."
+    elif field == "description_en":
+        if re.search(r"[\u0600-\u06ff]", raw_value):
+            error = "توضیح انگلیسی نباید شامل متن فارسی باشد."
+        elif len(raw_value) <= 2000:
+            changes["description_en"] = None if raw_value == "-" else raw_value
+        else:
+            error = "توضیح انگلیسی حداکثر ۲۰۰۰ کاراکتر است."
     elif field == "usdt":
         if raw_value in {"-", "۰", "0"}:
             changes["price_usdt"] = None
