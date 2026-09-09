@@ -1,4 +1,5 @@
 import html
+import logging
 import os
 from datetime import datetime
 from zoneinfo import ZoneInfo
@@ -6,7 +7,7 @@ from zoneinfo import ZoneInfo
 from aiogram import F, Router
 from aiogram.exceptions import TelegramBadRequest
 from aiogram.fsm.context import FSMContext
-from aiogram.types import CallbackQuery, ForceReply, Message
+from aiogram.types import BufferedInputFile, CallbackQuery, ForceReply, Message
 
 from app.keyboards.payment import (
     build_admin_payment_keyboard,
@@ -35,9 +36,11 @@ from app.services.backend import (
 )
 from app.state.payment import AdminPaymentStates, PaymentStates
 from app.utils.formatting import format_date_for_language, format_quality_limit
+from app.utils.payment_qr import build_usdt_address_qr
 
 
 router = Router(name="payments")
+logger = logging.getLogger(__name__)
 
 
 def _parse_int_env(name: str) -> int | None:
@@ -280,6 +283,7 @@ def _payment_destination_text(offer: dict, destination: dict, receipt_rules: dic
             f"<code>{html.escape(str(destination.get('asset_symbol') or 'USDT'))}</code>\n"
             "📬 Address: "
             f"<code>{html.escape(str(destination.get('address') or '—'))}</code>\n\n"
+            "📷 Scan the QR code or copy the address exactly.\n\n"
             "⚠️ Use only the displayed network; transfers on another network may be lost.\n\n"
             "📎 Then send a screenshot or PDF receipt here.\n"
             "Maximum receipt size: "
@@ -626,11 +630,42 @@ async def continue_payment_offer(
             currency=currency,
             receipt_rules=configuration["receipt"],
         )
-        await callback.message.edit_text(
-            _payment_destination_text(selected, destination, configuration["receipt"], language),
-            parse_mode="HTML",
-            reply_markup=build_receipt_cancel_keyboard(language),
+        destination_text = _payment_destination_text(
+            selected,
+            destination,
+            configuration["receipt"],
+            language,
         )
+        destination_keyboard = build_receipt_cancel_keyboard(language)
+        if currency == "USDT":
+            try:
+                qr_png = build_usdt_address_qr(str(destination.get("address") or ""))
+                await callback.message.answer_photo(
+                    photo=BufferedInputFile(
+                        qr_png,
+                        filename="usdt-deposit-address.png",
+                    ),
+                    caption=destination_text,
+                    parse_mode="HTML",
+                    reply_markup=destination_keyboard,
+                )
+                try:
+                    await callback.message.delete()
+                except TelegramBadRequest:
+                    pass
+            except Exception:
+                logger.exception("Could not generate or send the USDT address QR")
+                await callback.message.edit_text(
+                    destination_text,
+                    parse_mode="HTML",
+                    reply_markup=destination_keyboard,
+                )
+        else:
+            await callback.message.edit_text(
+                destination_text,
+                parse_mode="HTML",
+                reply_markup=destination_keyboard,
+            )
         await callback.answer()
     except BackendAPIError as exc:
         await callback.answer(

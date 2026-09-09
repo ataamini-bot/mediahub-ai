@@ -2,3 +2,4 @@ aiogram
 httpx
 aiohttp
 redis
+qrcode[pil]
