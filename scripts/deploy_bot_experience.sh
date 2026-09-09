@@ -69,7 +69,7 @@ cd /opt/mediahub-ai || exit 1
   database_before="$(docker compose exec -T backend alembic current 2>&1)"
   printf '%s\n' "$database_before"
   if ! printf '%s\n' "$database_before" | grep -Eq \
-    '5d1a9c7e2f40|7a2c9e1f4b60|8c3d4e5f6a71|9b4e2d6f1a30|a3d8f2c6e910|c7e4d2a9f610'
+    '5d1a9c7e2f40|7a2c9e1f4b60|8c3d4e5f6a71|9b4e2d6f1a30|a3d8f2c6e910|c7e4d2a9f610|d4e5f6a7b8c9'
   then
     printf 'DEPLOYMENT=ABORTED_UNEXPECTED_DATABASE_REVISION\n'
     exit 1
@@ -282,9 +282,9 @@ print("BOT_CONFIGURATION_API=OK")
           SELECT CASE WHEN
             EXISTS (
               SELECT 1 FROM information_schema.columns
-              WHERE table_name = '''plans''' AND column_name = '''description_en'''
+              WHERE table_name = '\''plans'\'' AND column_name = '\''description_en'\''
             ) AND EXISTS (
-              SELECT 1 FROM admin_permissions WHERE code = '''statistics.view'''
+              SELECT 1 FROM admin_permissions WHERE code = '\''statistics.view'\''
             ) THEN 1 ELSE 0 END;
         "
     ' 2>/dev/null | tr -d '[:space:]'
