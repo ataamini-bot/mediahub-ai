@@ -13,6 +13,7 @@ from app.keyboards.admin import (
     build_admin_home_keyboard,
     build_admin_plan_detail_keyboard,
     build_admin_plans_keyboard,
+    build_plan_quality_keyboard,
     build_role_picker_keyboard,
 )
 from app.services.backend import BackendAPIError
@@ -251,3 +252,15 @@ def test_custom_plan_exposes_display_order_editing():
     assert "admin:plan:edit:order:22" in callbacks
     assert "admin:plan:edit:usdt:22" in callbacks
     assert "admin:plan:edit:name_en:22" in callbacks
+
+
+def test_plan_quality_picker_labels_2160p_as_4k():
+    keyboard = build_plan_quality_keyboard(mode="create")
+    buttons = [button for row in keyboard.inline_keyboard for button in row]
+    quality_button = next(
+        button
+        for button in buttons
+        if button.callback_data == "admin:plan:choice:create:quality:2160"
+    )
+
+    assert quality_button.text == "4K (2160p)"

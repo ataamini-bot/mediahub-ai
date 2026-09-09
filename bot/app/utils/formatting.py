@@ -19,6 +19,18 @@ def normalize_quality_label(
     )
 
 
+def format_quality_limit(
+    height: int,
+) -> str:
+    quality_label = normalize_quality_label(height)
+    pixel_label = f"{height}p"
+
+    if quality_label == pixel_label:
+        return pixel_label
+
+    return f"{quality_label} ({pixel_label})"
+
+
 def format_file_size(
     file_size: (
         int

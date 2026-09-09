@@ -51,6 +51,7 @@ from app.services.backend import (
     update_admin_role,
 )
 from app.state.admin import AdminManagementStates
+from app.utils.formatting import format_quality_limit
 
 
 router = Router(name="admin")
@@ -255,7 +256,7 @@ def _admin_plan_text(plan: dict) -> str:
         else "نامحدود"
     )
     quality = (
-        f"{int(plan['max_quality'])}p"
+        format_quality_limit(int(plan["max_quality"]))
         if plan.get("max_quality") is not None
         else "نامحدود"
     )
@@ -300,7 +301,8 @@ def _plan_create_summary(data: dict) -> str:
         f"<b>{format_usdt(data['price_usdt']) if data.get('price_usdt') is not None else 'غیرفعال'}</b>\n"
         f"سقف روزانه: <code>{_plan_daily_limit_text(daily_limit)}</code>\n"
         f"حداکثر حجم: <code>{int(data['max_file_size_mb'])} MB</code>\n"
-        f"حداکثر کیفیت: <code>{int(data['max_quality'])}p</code>\n"
+        "حداکثر کیفیت: "
+        f"<code>{format_quality_limit(int(data['max_quality']))}</code>\n"
         "دانلود هم‌زمان: "
         f"<code>{int(data['max_concurrent_downloads'])}</code>\n"
         "اولویت پردازش: "

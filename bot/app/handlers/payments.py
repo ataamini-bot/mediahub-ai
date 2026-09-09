@@ -34,7 +34,7 @@ from app.services.backend import (
     set_payment_admin_message,
 )
 from app.state.payment import AdminPaymentStates, PaymentStates
-from app.utils.formatting import format_date_for_language
+from app.utils.formatting import format_date_for_language, format_quality_limit
 
 
 router = Router(name="payments")
@@ -232,7 +232,8 @@ def _offer_details_text(offer: dict, language: str) -> str:
     )
     quality = (
         "نامحدود" if is_fa and offer.get("max_quality") is None else
-        "Unlimited" if offer.get("max_quality") is None else f"{offer['max_quality']}p"
+        "Unlimited" if offer.get("max_quality") is None else
+        format_quality_limit(int(offer["max_quality"]))
     )
     max_file = offer.get("max_file_size_mb")
     max_file_text = "نامحدود" if is_fa and max_file is None else "Unlimited" if max_file is None else f"{max_file} MB"

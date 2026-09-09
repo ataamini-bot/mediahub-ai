@@ -1,6 +1,7 @@
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
 from app.admin_labels import permission_label_fa, role_label_fa
+from app.utils.formatting import format_quality_limit
 
 
 def build_admin_home_keyboard(
@@ -592,7 +593,7 @@ def build_plan_quality_keyboard(*, mode: str) -> InlineKeyboardMarkup:
         inline_keyboard=[
             [
                 InlineKeyboardButton(
-                    text=f"{quality}p",
+                    text=format_quality_limit(quality),
                     callback_data=f"admin:plan:choice:{mode}:quality:{quality}",
                 )
                 for quality in qualities
