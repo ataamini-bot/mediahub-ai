@@ -514,6 +514,18 @@ class PaymentManagementService:
         )
         return list(result.scalars())
 
+    async def list_active_usdt_destinations(self) -> list[UsdtDestination]:
+        """List customer-visible USDT destinations without rotating them."""
+        result = await self.session.execute(
+            select(UsdtDestination)
+            .where(UsdtDestination.is_active.is_(True))
+            .order_by(
+                UsdtDestination.sort_order,
+                UsdtDestination.id,
+            )
+        )
+        return list(result.scalars())
+
     async def get_usdt_destination(
         self,
         destination_id: int,

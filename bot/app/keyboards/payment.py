@@ -36,6 +36,23 @@ def format_usdt(value: object) -> str:
         return f"{value} USDT"
 
 
+def format_usdt_network(destination: dict) -> str:
+    """Build an English-only public label for a USDT network."""
+    network_name = str(destination.get("network_name") or "").strip()
+    network_code = str(destination.get("network_code") or "").strip()
+    if not network_name.isascii():
+        network_name = ""
+    if not network_code.isascii():
+        network_code = ""
+    if (
+        network_name
+        and network_code
+        and network_name.casefold() != network_code.casefold()
+    ):
+        return f"{network_name} ({network_code})"
+    return network_name or network_code or "USDT network"
+
+
 def build_home_keyboard(
     language: str = "fa",
     *,
@@ -231,6 +248,43 @@ def build_payment_offer_detail_keyboard(language: str = "fa") -> InlineKeyboardM
             ],
         ]
     )
+
+
+def build_usdt_destination_keyboard(
+    destinations: list[dict],
+) -> InlineKeyboardMarkup:
+    rows = []
+    for destination in destinations:
+        network_label = format_usdt_network(destination)
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text=f"🌐 {network_label}"[:64],
+                    callback_data=(
+                        "payment:usdt-destination:"
+                        f"{int(destination['id'])}"
+                    ),
+                )
+            ]
+        )
+
+    rows.extend(
+        [
+            [
+                InlineKeyboardButton(
+                    text="🔙 Back to plans",
+                    callback_data="payment:open",
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="❌ Cancel",
+                    callback_data="payment:cancel",
+                )
+            ],
+        ]
+    )
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def build_receipt_cancel_keyboard(language: str = "fa") -> InlineKeyboardMarkup:

@@ -49,6 +49,7 @@ class PaymentReceiptRulesResponse(BaseModel):
 class PaymentConfigurationResponse(BaseModel):
     offers: list[PaymentOfferResponse]
     destination: PaymentDestinationResponse | None
+    destinations: list[PaymentDestinationResponse] = Field(default_factory=list)
     receipt: PaymentReceiptRulesResponse
 
 

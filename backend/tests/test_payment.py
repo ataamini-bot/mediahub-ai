@@ -40,6 +40,7 @@ from app.models.plan import Plan  # noqa: E402
 from app.models.subscription import Subscription  # noqa: E402
 from app.models.user import User, UserStatus  # noqa: E402
 from app.services.payment_offers import PaymentOffer  # noqa: E402
+from app.services import payment_offers as payment_offers_service  # noqa: E402
 
 
 def test_add_duration_days_uses_exact_custom_duration():
@@ -129,6 +130,88 @@ def test_payment_offer_uses_usdt_price_for_english_catalog():
 
     assert offer.price == Decimal("2.7500")
     assert offer.label == "Silver"
+
+
+@pytest.mark.asyncio
+async def test_english_configuration_lists_all_usdt_destinations_without_rotation(
+    monkeypatch,
+):
+    offer = PaymentOffer(
+        code="plan_global",
+        label="Global",
+        plan_id=92,
+        duration_days=30,
+        price=Decimal("2.75"),
+        daily_download_limit=50,
+        max_file_size_mb=900,
+        max_quality=1080,
+        max_concurrent_downloads=2,
+        priority_processing=True,
+        forced_join_required=False,
+        description="Persian description",
+        description_en="English description",
+    )
+    destinations = [
+        SimpleNamespace(
+            id=11,
+            label="TRON wallet",
+            network_name="TRON",
+            network_code="TRC20",
+            address="TTestAddress1111111111111111111111111",
+            asset_symbol="USDT",
+            contract_address=None,
+            explorer_url="https://tronscan.org",
+            confirmations_required=20,
+        ),
+        SimpleNamespace(
+            id=12,
+            label="Ethereum wallet",
+            network_name="Ethereum",
+            network_code="ERC20",
+            address="0x1111111111111111111111111111111111111111",
+            asset_symbol="USDT",
+            contract_address=None,
+            explorer_url="https://etherscan.io",
+            confirmations_required=20,
+        ),
+    ]
+    management = SimpleNamespace(
+        list_active_usdt_destinations=AsyncMock(return_value=destinations),
+        select_usdt_destination=AsyncMock(),
+        select_card=AsyncMock(),
+    )
+    monkeypatch.setattr(
+        payment_offers_service,
+        "ensure_public_operation",
+        AsyncMock(),
+    )
+    monkeypatch.setattr(
+        payment_offers_service,
+        "get_payment_offers",
+        AsyncMock(return_value=(offer,)),
+    )
+    monkeypatch.setattr(
+        payment_offers_service,
+        "get_receipt_max_size_mb",
+        AsyncMock(return_value=10),
+    )
+    monkeypatch.setattr(
+        payment_offers_service,
+        "PaymentManagementService",
+        lambda _session: management,
+    )
+
+    result = await payment_offers_service.get_payment_configuration(
+        AsyncMock(),
+        select_destination=True,
+        language="en",
+    )
+
+    assert result["destination"] is None
+    assert [item["id"] for item in result["destinations"]] == [11, 12]
+    management.list_active_usdt_destinations.assert_awaited_once_with()
+    management.select_usdt_destination.assert_not_awaited()
+    management.select_card.assert_not_awaited()
 
 
 def test_receipt_validation_rejects_large_file(monkeypatch):

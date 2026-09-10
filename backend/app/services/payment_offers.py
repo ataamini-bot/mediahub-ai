@@ -168,16 +168,22 @@ async def get_payment_configuration(
     offers = await get_payment_offers(session, language=normalized_language)
 
     destination = None
+    destinations: list[dict] = []
     if select_destination:
         management = PaymentManagementService(session)
         try:
             if currency == "USDT":
-                usdt_destination = await management.select_usdt_destination()
-                if usdt_destination is None:
+                active_destinations = (
+                    await management.list_active_usdt_destinations()
+                )
+                if not active_destinations:
                     raise PaymentDestinationValidation(
                         "No active USDT destination is configured"
                     )
-                destination = usdt_destination_snapshot(usdt_destination)
+                destinations = [
+                    usdt_destination_snapshot(item)
+                    for item in active_destinations
+                ]
             else:
                 card = await management.select_card()
                 if card is not None:
@@ -212,6 +218,7 @@ async def get_payment_configuration(
             for offer in offers
         ],
         "destination": destination,
+        "destinations": destinations,
         "receipt": {
             "max_size_mb": await get_receipt_max_size_mb(session),
             "allowed_types": [

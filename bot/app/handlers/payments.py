@@ -16,8 +16,10 @@ from app.keyboards.payment import (
     build_payment_offer_detail_keyboard,
     build_payment_offers_keyboard,
     build_receipt_cancel_keyboard,
+    build_usdt_destination_keyboard,
     format_toman,
     format_usdt,
+    format_usdt_network,
 )
 from app.i18n import normalize_language
 from app.runtime_config import runtime_configuration
@@ -272,13 +274,14 @@ def _offer_details_text(offer: dict, language: str) -> str:
 def _payment_destination_text(offer: dict, destination: dict, receipt_rules: dict, language: str) -> str:
     currency = str(offer.get("currency") or "IRT")
     if currency == "USDT":
+        network = format_usdt_network(destination)
         return (
             f"💎 <b>{html.escape(str(offer['label']))}</b>\n"
             f"📅 Duration: <code>{int(offer['duration_days'])} days</code>\n"
             f"💰 Amount: <b>{format_usdt(offer['price'])}</b>\n\n"
             "Send the exact amount of USDT to this address:\n\n"
             "🌐 Network: "
-            f"<b>{html.escape(str(destination.get('network_name') or destination.get('network_code') or '—'))}</b>\n"
+            f"<b>{html.escape(network)}</b>\n"
             "💵 Asset: "
             f"<code>{html.escape(str(destination.get('asset_symbol') or 'USDT'))}</code>\n"
             "📬 Address: "
@@ -619,14 +622,41 @@ async def continue_payment_offer(
         selected = _find_offer(configuration, str(data.get("offer_code") or offer.get("code")))
         if selected is None:
             raise BackendAPIError(status_code=404, detail={"code": "plan_not_found"})
-        destination = configuration["destination"]
         currency = str(selected.get("currency") or "IRT")
+
+        if currency == "USDT":
+            destinations = configuration.get("destinations") or []
+            if not destinations:
+                raise BackendAPIError(
+                    status_code=503,
+                    detail="No active USDT destination is configured",
+                )
+            await state.set_state(PaymentStates.selecting_usdt_destination)
+            await state.update_data(
+                offer=selected,
+                offer_code=selected["code"],
+                payment_card_id=None,
+                usdt_destination_id=None,
+                currency=currency,
+                receipt_rules=configuration["receipt"],
+            )
+            await callback.message.edit_text(
+                "🌐 <b>Choose the USDT transfer network</b>\n\n"
+                "The address and QR code shown next will belong to the "
+                "network you select.",
+                parse_mode="HTML",
+                reply_markup=build_usdt_destination_keyboard(destinations),
+            )
+            await callback.answer()
+            return
+
+        destination = configuration["destination"]
         await state.set_state(PaymentStates.waiting_for_receipt)
         await state.update_data(
             offer=selected,
             offer_code=selected["code"],
-            payment_card_id=destination.get("id") if currency == "IRT" else None,
-            usdt_destination_id=destination.get("id") if currency == "USDT" else None,
+            payment_card_id=destination.get("id"),
+            usdt_destination_id=None,
             currency=currency,
             receipt_rules=configuration["receipt"],
         )
@@ -637,30 +667,107 @@ async def continue_payment_offer(
             language,
         )
         destination_keyboard = build_receipt_cancel_keyboard(language)
-        if currency == "USDT":
+        await callback.message.edit_text(
+            destination_text,
+            parse_mode="HTML",
+            reply_markup=destination_keyboard,
+        )
+        await callback.answer()
+    except BackendAPIError as exc:
+        await callback.answer(
+            "Payment system is not ready." if language == "en" else "سیستم پرداخت آماده نیست.",
+            show_alert=True,
+        )
+        await callback.message.answer(_payment_error_message(exc, language), parse_mode="HTML")
+
+
+@router.callback_query(
+    PaymentStates.selecting_usdt_destination,
+    F.data.startswith("payment:usdt-destination:"),
+)
+async def select_usdt_destination(
+    callback: CallbackQuery,
+    state: FSMContext,
+) -> None:
+    if not callback.data or not isinstance(callback.message, Message):
+        return
+
+    try:
+        destination_id = int(callback.data.rsplit(":", 1)[-1])
+    except (TypeError, ValueError):
+        await callback.answer("Invalid network selection.", show_alert=True)
+        return
+
+    language = "en"
+    try:
+        user = await get_telegram_user(callback.from_user.id)
+        language = normalize_language(user.get("effective_language"))
+        if language != "en":
+            await callback.answer("این روش پرداخت فقط برای زبان انگلیسی است.", show_alert=True)
+            return
+
+        data = await state.get_data()
+        offer_code = str(data.get("offer_code") or "")
+        if not offer_code:
+            await callback.answer(
+                "Purchase expired; choose a plan again.",
+                show_alert=True,
+            )
+            return
+
+        configuration = await get_payment_configuration(
+            select_destination=True,
+            language="en",
+        )
+        selected = _find_offer(configuration, offer_code)
+        destination = next(
+            (
+                item
+                for item in (configuration.get("destinations") or [])
+                if int(item.get("id") or 0) == destination_id
+            ),
+            None,
+        )
+        if selected is None or destination is None:
+            raise BackendAPIError(
+                status_code=409,
+                detail="The selected USDT network is no longer available",
+            )
+
+        receipt_rules = configuration["receipt"]
+        await state.set_state(PaymentStates.waiting_for_receipt)
+        await state.update_data(
+            offer=selected,
+            offer_code=selected["code"],
+            payment_card_id=None,
+            usdt_destination_id=destination_id,
+            currency="USDT",
+            receipt_rules=receipt_rules,
+        )
+        destination_text = _payment_destination_text(
+            selected,
+            destination,
+            receipt_rules,
+            "en",
+        )
+        destination_keyboard = build_receipt_cancel_keyboard("en")
+        try:
+            qr_png = build_usdt_address_qr(str(destination.get("address") or ""))
+            await callback.message.answer_photo(
+                photo=BufferedInputFile(
+                    qr_png,
+                    filename="usdt-deposit-address.png",
+                ),
+                caption=destination_text,
+                parse_mode="HTML",
+                reply_markup=destination_keyboard,
+            )
             try:
-                qr_png = build_usdt_address_qr(str(destination.get("address") or ""))
-                await callback.message.answer_photo(
-                    photo=BufferedInputFile(
-                        qr_png,
-                        filename="usdt-deposit-address.png",
-                    ),
-                    caption=destination_text,
-                    parse_mode="HTML",
-                    reply_markup=destination_keyboard,
-                )
-                try:
-                    await callback.message.delete()
-                except TelegramBadRequest:
-                    pass
-            except Exception:
-                logger.exception("Could not generate or send the USDT address QR")
-                await callback.message.edit_text(
-                    destination_text,
-                    parse_mode="HTML",
-                    reply_markup=destination_keyboard,
-                )
-        else:
+                await callback.message.delete()
+            except TelegramBadRequest:
+                pass
+        except Exception:
+            logger.exception("Could not generate or send the USDT address QR")
             await callback.message.edit_text(
                 destination_text,
                 parse_mode="HTML",
@@ -669,7 +776,9 @@ async def continue_payment_offer(
         await callback.answer()
     except BackendAPIError as exc:
         await callback.answer(
-            "Payment system is not ready." if language == "en" else "سیستم پرداخت آماده نیست.",
+            "The selected network is not available. Choose again."
+            if language == "en"
+            else "شبکه انتخابی در دسترس نیست.",
             show_alert=True,
         )
         await callback.message.answer(_payment_error_message(exc, language), parse_mode="HTML")

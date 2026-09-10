@@ -1,12 +1,25 @@
+import asyncio
+from datetime import datetime, timezone
+from unittest.mock import AsyncMock
+
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.storage.base import StorageKey
+from aiogram.fsm.storage.memory import MemoryStorage
+from aiogram.types import CallbackQuery, Chat, Message, User
+
+from app.handlers import payments
 from app.handlers.payments import (
     _offer_details_text,
     _payment_destination_text,
     _payment_error_message,
+    continue_payment_offer,
+    select_usdt_destination,
 )
 from app.keyboards.experience import build_support_categories_keyboard
 from app.keyboards.payment import build_payment_offer_detail_keyboard
 from app.runtime_config import fallback_configuration, runtime_content
 from app.services.backend import BackendAPIError
+from app.state.payment import PaymentStates
 from app.utils.payment_qr import build_usdt_address_qr
 
 
@@ -61,3 +74,155 @@ def test_usdt_destination_instructs_user_to_scan_qr_in_english():
 
     assert "Scan the QR code" in text
     assert "شبکه" not in text
+
+
+def _payment_callback(data: str) -> tuple[CallbackQuery, FSMContext]:
+    user = User(
+        id=12345,
+        is_bot=False,
+        first_name="Test",
+        language_code="en",
+    )
+    message = Message(
+        message_id=10,
+        date=datetime.now(timezone.utc),
+        chat=Chat(id=user.id, type="private"),
+        from_user=user,
+        text="Payment",
+    )
+    callback = CallbackQuery(
+        id="test-callback",
+        from_user=user,
+        chat_instance="test",
+        message=message,
+        data=data,
+    )
+    state = FSMContext(
+        storage=MemoryStorage(),
+        key=StorageKey(bot_id=999, chat_id=user.id, user_id=user.id),
+    )
+    return callback, state
+
+
+def _usdt_configuration() -> dict:
+    return {
+        "offers": [
+            {
+                "code": "global",
+                "label": "Global",
+                "duration_days": 30,
+                "price": "3",
+                "currency": "USDT",
+            }
+        ],
+        "destination": None,
+        "destinations": [
+            {
+                "id": 11,
+                "network_name": "TRON",
+                "network_code": "TRC20",
+                "asset_symbol": "USDT",
+                "address": "TFirstPublicAddress1111111111111111111",
+            },
+            {
+                "id": 12,
+                "network_name": "Ethereum",
+                "network_code": "ERC20",
+                "asset_symbol": "USDT",
+                "address": "0x2222222222222222222222222222222222222222",
+            },
+        ],
+        "receipt": {"max_size_mb": 10, "allowed_types": ["photo"]},
+    }
+
+
+def test_continuing_english_offer_requires_explicit_network_selection(
+    monkeypatch,
+):
+    callback, state = _payment_callback("payment:offer:continue")
+    edit_text = AsyncMock()
+    callback_answer = AsyncMock()
+    monkeypatch.setattr(Message, "edit_text", edit_text)
+    monkeypatch.setattr(CallbackQuery, "answer", callback_answer)
+    monkeypatch.setattr(
+        payments,
+        "get_telegram_user",
+        AsyncMock(return_value={"effective_language": "en"}),
+    )
+    monkeypatch.setattr(
+        payments,
+        "get_payment_configuration",
+        AsyncMock(return_value=_usdt_configuration()),
+    )
+
+    async def exercise():
+        await state.set_state(PaymentStates.confirming_offer)
+        await state.update_data(
+            offer={"code": "global", "currency": "USDT"},
+            offer_code="global",
+        )
+        await continue_payment_offer(callback, state)
+
+        assert (
+            await state.get_state()
+            == PaymentStates.selecting_usdt_destination.state
+        )
+        assert (await state.get_data())["usdt_destination_id"] is None
+
+    asyncio.run(exercise())
+    assert "Choose the USDT transfer network" in edit_text.await_args.args[0]
+    callbacks = [
+        row[0].callback_data
+        for row in edit_text.await_args.kwargs["reply_markup"].inline_keyboard[:2]
+    ]
+    assert callbacks == [
+        "payment:usdt-destination:11",
+        "payment:usdt-destination:12",
+    ]
+
+
+def test_selected_usdt_network_is_revalidated_before_showing_its_qr(
+    monkeypatch,
+):
+    callback, state = _payment_callback("payment:usdt-destination:12")
+    answer_photo = AsyncMock()
+    delete = AsyncMock()
+    callback_answer = AsyncMock()
+    monkeypatch.setattr(Message, "answer_photo", answer_photo)
+    monkeypatch.setattr(Message, "delete", delete)
+    monkeypatch.setattr(CallbackQuery, "answer", callback_answer)
+    monkeypatch.setattr(
+        payments,
+        "get_telegram_user",
+        AsyncMock(return_value={"effective_language": "en"}),
+    )
+    get_configuration = AsyncMock(return_value=_usdt_configuration())
+    monkeypatch.setattr(
+        payments,
+        "get_payment_configuration",
+        get_configuration,
+    )
+    monkeypatch.setattr(
+        payments,
+        "build_usdt_address_qr",
+        lambda address: b"png:" + address.encode(),
+    )
+
+    async def exercise():
+        await state.set_state(PaymentStates.selecting_usdt_destination)
+        await state.update_data(offer_code="global")
+        await select_usdt_destination(callback, state)
+
+        assert await state.get_state() == PaymentStates.waiting_for_receipt.state
+        assert (await state.get_data())["usdt_destination_id"] == 12
+
+    asyncio.run(exercise())
+    get_configuration.assert_awaited_once_with(
+        select_destination=True,
+        language="en",
+    )
+    assert "Ethereum" in answer_photo.await_args.kwargs["caption"]
+    assert "0x2222222222222222222222222222222222222222" in (
+        answer_photo.await_args.kwargs["caption"]
+    )
+    assert "TRON" not in answer_photo.await_args.kwargs["caption"]

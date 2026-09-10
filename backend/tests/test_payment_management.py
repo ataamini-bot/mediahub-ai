@@ -134,6 +134,25 @@ async def test_usdt_destination_crud_stores_public_operational_data():
                     "is_active": True,
                 },
             )
+            inactive_destination = await service.create_usdt_destination(
+                actor_user_id=actor.id,
+                actor_telegram_id=actor.telegram_id,
+                data={
+                    "label": "Inactive ERC20",
+                    "network_name": "Ethereum",
+                    "network_code": "ERC20",
+                    "address": f"0x{uuid.uuid4().hex}{uuid.uuid4().hex[:8]}",
+                    "asset_symbol": "USDT",
+                    "contract_address": None,
+                    "explorer_url": "https://etherscan.io",
+                    "confirmations_required": 20,
+                    "sort_order": 1,
+                    "is_active": False,
+                },
+            )
+            active_destinations = await service.list_active_usdt_destinations()
+            assert [item.id for item in active_destinations] == [destination.id]
+            assert inactive_destination not in active_destinations
             await service.update_usdt_destination(
                 destination_id=destination.id,
                 actor_user_id=actor.id,
@@ -143,6 +162,11 @@ async def test_usdt_destination_crud_stores_public_operational_data():
             assert destination.confirmations_required == 25
             await service.delete_usdt_destination(
                 destination_id=destination.id,
+                actor_user_id=actor.id,
+                actor_telegram_id=actor.telegram_id,
+            )
+            await service.delete_usdt_destination(
+                destination_id=inactive_destination.id,
                 actor_user_id=actor.id,
                 actor_telegram_id=actor.telegram_id,
             )

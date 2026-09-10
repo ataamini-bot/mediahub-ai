@@ -4,6 +4,8 @@ from app.keyboards.payment import (
     build_admin_payment_keyboard,
     build_home_keyboard,
     build_payment_offers_keyboard,
+    build_usdt_destination_keyboard,
+    format_usdt_network,
     format_toman,
 )
 
@@ -74,6 +76,39 @@ def test_offer_keyboard_is_english_for_usdt_catalog():
     assert "30 days" in keyboard.inline_keyboard[0][0].text
     assert "USDT" in keyboard.inline_keyboard[0][0].text
     assert keyboard.inline_keyboard[-1][0].text == "❌ Close"
+
+
+def test_usdt_destination_keyboard_lists_every_network_in_order():
+    keyboard = build_usdt_destination_keyboard(
+        [
+            {"id": 11, "network_name": "TRON", "network_code": "TRC20"},
+            {
+                "id": 12,
+                "network_name": "Ethereum",
+                "network_code": "ERC20",
+            },
+        ]
+    )
+
+    assert [row[0].text for row in keyboard.inline_keyboard[:2]] == [
+        "🌐 TRON (TRC20)",
+        "🌐 Ethereum (ERC20)",
+    ]
+    assert [row[0].callback_data for row in keyboard.inline_keyboard[:2]] == [
+        "payment:usdt-destination:11",
+        "payment:usdt-destination:12",
+    ]
+    assert all(
+        "انصراف" not in button.text
+        for row in keyboard.inline_keyboard
+        for button in row
+    )
+
+
+def test_usdt_network_label_does_not_leak_persian_admin_text():
+    assert format_usdt_network(
+        {"network_name": "شبکه ترون", "network_code": "TRC20"}
+    ) == "TRC20"
 
 
 def test_admin_callback_data_stays_within_telegram_limit():
