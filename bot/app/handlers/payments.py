@@ -64,6 +64,36 @@ ADMIN_PAYMENT_TOPIC_ID = _parse_int_env(
 DISPLAY_TIMEZONE = ZoneInfo(os.getenv("DISPLAY_TIMEZONE", "Asia/Tehran"))
 
 
+async def _replace_payment_message(
+    message: Message,
+    text: str,
+    *,
+    parse_mode: str | None = None,
+    reply_markup=None,
+) -> None:
+    """Replace a payment screen whether its current message is text or media."""
+    if message.text is not None:
+        await message.edit_text(
+            text,
+            parse_mode=parse_mode,
+            reply_markup=reply_markup,
+        )
+        return
+
+    await message.answer(
+        text,
+        parse_mode=parse_mode,
+        reply_markup=reply_markup,
+    )
+    try:
+        await message.delete()
+    except TelegramBadRequest:
+        try:
+            await message.edit_reply_markup(reply_markup=None)
+        except TelegramBadRequest:
+            pass
+
+
 async def _user_home_reply_keyboard(user: dict):
     language = normalize_language(
         user.get("effective_language") or user.get("language_code")
@@ -548,7 +578,8 @@ async def open_payment_offers(
             language=language,
         )
         await state.clear()
-        await callback.message.edit_text(
+        await _replace_payment_message(
+            callback.message,
             (
                 "💎 <b>خرید اشتراک</b>\n\nپلن موردنظر را انتخاب کنید:"
                 if language == "fa"
@@ -846,7 +877,8 @@ async def cancel_payment_flow(
     except BackendAPIError:
         pass
     if isinstance(callback.message, Message):
-        await callback.message.edit_text(
+        await _replace_payment_message(
+            callback.message,
             "Subscription purchase cancelled." if language == "en" else "خرید اشتراک لغو شد.",
             reply_markup=await _user_home_inline_keyboard(callback.from_user.id),
         )

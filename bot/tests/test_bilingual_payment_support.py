@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.storage.base import StorageKey
 from aiogram.fsm.storage.memory import MemoryStorage
-from aiogram.types import CallbackQuery, Chat, Message, User
+from aiogram.types import CallbackQuery, Chat, Message, PhotoSize, User
 
 from app.handlers import payments
 from app.handlers.payments import (
@@ -13,6 +13,8 @@ from app.handlers.payments import (
     _payment_destination_text,
     _payment_error_message,
     continue_payment_offer,
+    cancel_payment_flow,
+    open_payment_offers,
     select_usdt_destination,
 )
 from app.keyboards.experience import build_support_categories_keyboard
@@ -76,20 +78,38 @@ def test_usdt_destination_instructs_user_to_scan_qr_in_english():
     assert "شبکه" not in text
 
 
-def _payment_callback(data: str) -> tuple[CallbackQuery, FSMContext]:
+def _payment_callback(
+    data: str,
+    *,
+    photo: bool = False,
+) -> tuple[CallbackQuery, FSMContext]:
     user = User(
         id=12345,
         is_bot=False,
         first_name="Test",
         language_code="en",
     )
-    message = Message(
+    message_data = dict(
         message_id=10,
         date=datetime.now(timezone.utc),
         chat=Chat(id=user.id, type="private"),
         from_user=user,
-        text="Payment",
     )
+    if photo:
+        message_data.update(
+            caption="USDT payment address",
+            photo=[
+                PhotoSize(
+                    file_id="photo-id",
+                    file_unique_id="photo-unique-id",
+                    width=512,
+                    height=512,
+                )
+            ],
+        )
+    else:
+        message_data["text"] = "Payment"
+    message = Message(**message_data)
     callback = CallbackQuery(
         id="test-callback",
         from_user=user,
@@ -226,3 +246,73 @@ def test_selected_usdt_network_is_revalidated_before_showing_its_qr(
         answer_photo.await_args.kwargs["caption"]
     )
     assert "TRON" not in answer_photo.await_args.kwargs["caption"]
+
+
+def test_choose_another_plan_replaces_usdt_qr_photo(monkeypatch):
+    callback, state = _payment_callback("payment:open", photo=True)
+    answer = AsyncMock()
+    delete = AsyncMock()
+    edit_text = AsyncMock()
+    callback_answer = AsyncMock()
+    monkeypatch.setattr(Message, "answer", answer)
+    monkeypatch.setattr(Message, "delete", delete)
+    monkeypatch.setattr(Message, "edit_text", edit_text)
+    monkeypatch.setattr(CallbackQuery, "answer", callback_answer)
+    monkeypatch.setattr(
+        payments,
+        "get_telegram_user",
+        AsyncMock(return_value={"effective_language": "en"}),
+    )
+    monkeypatch.setattr(
+        payments,
+        "get_payment_configuration",
+        AsyncMock(return_value=_usdt_configuration()),
+    )
+
+    async def exercise():
+        await state.set_state(PaymentStates.waiting_for_receipt)
+        await state.update_data(usdt_destination_id=12)
+        await open_payment_offers(callback, state)
+        assert await state.get_state() is None
+
+    asyncio.run(exercise())
+    answer.assert_awaited_once()
+    assert "Choose a plan" in answer.await_args.args[0]
+    delete.assert_awaited_once_with()
+    edit_text.assert_not_awaited()
+    callback_answer.assert_awaited_once_with()
+
+
+def test_cancel_replaces_usdt_qr_photo_and_clears_state(monkeypatch):
+    callback, state = _payment_callback("payment:cancel", photo=True)
+    answer = AsyncMock()
+    delete = AsyncMock()
+    edit_text = AsyncMock()
+    callback_answer = AsyncMock()
+    monkeypatch.setattr(Message, "answer", answer)
+    monkeypatch.setattr(Message, "delete", delete)
+    monkeypatch.setattr(Message, "edit_text", edit_text)
+    monkeypatch.setattr(CallbackQuery, "answer", callback_answer)
+    monkeypatch.setattr(
+        payments,
+        "get_telegram_user",
+        AsyncMock(return_value={"effective_language": "en"}),
+    )
+    monkeypatch.setattr(
+        payments,
+        "_user_home_inline_keyboard",
+        AsyncMock(return_value=None),
+    )
+
+    async def exercise():
+        await state.set_state(PaymentStates.waiting_for_receipt)
+        await state.update_data(usdt_destination_id=12)
+        await cancel_payment_flow(callback, state)
+        assert await state.get_state() is None
+
+    asyncio.run(exercise())
+    answer.assert_awaited_once()
+    assert answer.await_args.args[0] == "Subscription purchase cancelled."
+    delete.assert_awaited_once_with()
+    edit_text.assert_not_awaited()
+    callback_answer.assert_awaited_once_with("Cancelled.")
