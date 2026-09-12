@@ -1,3 +1,4 @@
+from app.localization import tr as _tr, localized_collection as _localized_collection
 import html
 from dataclasses import dataclass
 from typing import Literal
@@ -15,6 +16,10 @@ class RuntimeSettingDefinition:
     kind: SettingKind
     minimum: int | None = None
     maximum: int | None = None
+
+    def __getattribute__(self, name):
+        value = object.__getattribute__(self, name)
+        return _tr(value) if name in {"label", "description"} else value
 
 
 RUNTIME_SETTINGS: tuple[RuntimeSettingDefinition, ...] = (
@@ -65,28 +70,28 @@ RUNTIME_SETTINGS_BY_KEY = {
 
 def setting_value_text(definition: RuntimeSettingDefinition, value: object) -> str:
     if definition.kind == "boolean":
-        return "فعال ✅" if bool(value) else "غیرفعال ⛔️"
+        return _tr("فعال ✅") if bool(value) else _tr("غیرفعال ⛔️")
     if definition.kind == "integer":
         try:
-            return f"{int(value)} مگابایت"
+            return f"{int(value)}{_tr(' مگابایت')}"
         except (TypeError, ValueError):
-            return "نامعتبر ⚠️"
+            return _tr("نامعتبر ⚠️")
     return str(value or "—")
 
 
 def runtime_settings_text(rows: list[dict]) -> str:
     rows_by_key = {str(row.get("key")): row for row in rows}
     lines = [
-        "⚙️ <b>تنظیمات ربات</b>",
+        _tr("⚙️ <b>تنظیمات ربات</b>"),
         "",
-        "تغییرها بلافاصله و بدون ویرایش فایل سرور اعمال می‌شوند.",
+        _tr("تغییرها بلافاصله و بدون ویرایش فایل سرور اعمال می‌شوند."),
         "",
     ]
 
     for definition in RUNTIME_SETTINGS:
         row = rows_by_key.get(definition.key)
         if row is None:
-            rendered = "ثبت نشده ⚠️"
+            rendered = _tr("ثبت نشده ⚠️")
         else:
             rendered = setting_value_text(definition, row.get("value"))
         lines.append(
@@ -95,3 +100,7 @@ def runtime_settings_text(rows: list[dict]) -> str:
         )
 
     return "\n".join(lines)
+
+
+# Resolve static labels using the language of the current update.
+RUNTIME_SETTINGS = _localized_collection(RUNTIME_SETTINGS)

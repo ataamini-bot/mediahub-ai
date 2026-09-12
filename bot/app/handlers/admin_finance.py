@@ -1,3 +1,4 @@
+from app.localization import tr as _tr, localized_collection as _localized_collection
 import html
 from datetime import datetime
 from zoneinfo import ZoneInfo
@@ -109,14 +110,14 @@ def _format_datetime(value: object) -> str:
 
 def _finance_error_text(exc: BackendAPIError) -> str:
     if exc.status_code == 403:
-        return "دسترسی لازم برای این عملیات را ندارید."
+        return _tr("دسترسی لازم برای این عملیات را ندارید.")
     if exc.status_code == 404:
-        return "رکورد موردنظر پیدا نشد؛ فهرست را دوباره باز کنید."
+        return _tr("رکورد موردنظر پیدا نشد؛ فهرست را دوباره باز کنید.")
     if exc.status_code == 409:
-        return "این اطلاعات تکراری است یا با وضعیت فعلی تداخل دارد."
+        return _tr("این اطلاعات تکراری است یا با وضعیت فعلی تداخل دارد.")
     if exc.status_code == 422:
-        return "اطلاعات واردشده معتبر نیست."
-    return "ارتباط با بخش مالی انجام نشد؛ کمی بعد دوباره تلاش کنید."
+        return _tr("اطلاعات واردشده معتبر نیست.")
+    return _tr("ارتباط با بخش مالی انجام نشد؛ کمی بعد دوباره تلاش کنید.")
 
 
 async def _show_finance_home(message: Message, actor_telegram_id: int) -> None:
@@ -128,28 +129,19 @@ async def _show_finance_home(message: Message, actor_telegram_id: int) -> None:
     if int(summary.get("active_cards", 0)) == 0:
         if int(summary.get("cards", 0)) > 0:
             card_note = (
-                "\n\n⚠️ همه کارت‌های دیتابیسی غیرفعال‌اند؛ خرید جدید تا فعال‌کردن "
-                "یک کارت انجام نمی‌شود."
+                _tr("\n\n⚠️ همه کارت‌های دیتابیسی غیرفعال‌اند؛ خرید جدید تا فعال‌کردن "
+                "یک کارت انجام نمی‌شود.")
             )
         elif summary.get("legacy_card_configured"):
             card_note = (
-                "\n\nℹ️ تا زمان افزودن کارت دیتابیسی، کارت قدیمی سرور "
-                "برای خریدها استفاده می‌شود."
+                _tr("\n\nℹ️ تا زمان افزودن کارت دیتابیسی، کارت قدیمی سرور "
+                "برای خریدها استفاده می‌شود.")
             )
         else:
-            card_note = "\n\n⚠️ هیچ کارت فعالی برای دریافت وجه وجود ندارد."
+            card_note = _tr("\n\n⚠️ هیچ کارت فعالی برای دریافت وجه وجود ندارد.")
     await message.edit_text(
         (
-            "💳 <b>مدیریت پرداخت‌ها</b>\n\n"
-            f"⏳ در انتظار بررسی: <code>{int(summary['pending'])}</code>\n"
-            f"✅ تأییدشده: <code>{int(summary['approved'])}</code>\n"
-            f"❌ ردشده: <code>{int(summary['rejected'])}</code>\n\n"
-            f"💳 کارت‌های فعال: <code>{int(summary['active_cards'])}"
-            f" از {int(summary['cards'])}</code>\n"
-            "💵 مقصدهای فعال USDT: "
-            f"<code>{int(summary['active_usdt_destinations'])}"
-            f" از {int(summary['usdt_destinations'])}</code>"
-            f"{card_note}"
+            f"{_tr('💳 <b>مدیریت پرداخت\u200cها</b>\n\n⏳ در انتظار بررسی: <code>')}{int(summary['pending'])}{_tr('</code>\n✅ تأییدشده: <code>')}{int(summary['approved'])}{_tr('</code>\n❌ ردشده: <code>')}{int(summary['rejected'])}{_tr('</code>\n\n💳 کارت\u200cهای فعال: <code>')}{int(summary['active_cards'])}{_tr(' از ')}{int(summary['cards'])}{_tr('</code>\n💵 مقصدهای فعال USDT: <code>')}{int(summary['active_usdt_destinations'])}{_tr(' از ')}{int(summary['usdt_destinations'])}</code>{card_note}"
         ),
         parse_mode="HTML",
         reply_markup=build_finance_home_keyboard(
@@ -165,18 +157,18 @@ def _payment_statistics_text(summary: dict, period: str) -> str:
     statistics = summary.get("statistics") or {}
     row = statistics.get(period) or {}
     lines = [
-        "📊 <b>آمار پرداخت‌ها</b>",
+        _tr("📊 <b>آمار پرداخت‌ها</b>"),
         "",
-        f"📅 بازه: <b>{PAYMENT_STATISTICS_PERIODS[period]}</b>",
+        f"{_tr('📅 بازه: <b>')}{PAYMENT_STATISTICS_PERIODS[period]}</b>",
         "",
-        f"✅ تأییدشده: <code>{int(row.get('approved', 0))}</code>",
-        f"⏳ در انتظار بررسی: <code>{int(row.get('pending', 0))}</code>",
-        f"❌ ردشده: <code>{int(row.get('rejected', 0))}</code>",
+        f"{_tr('✅ تأییدشده: <code>')}{int(row.get('approved', 0))}</code>",
+        f"{_tr('⏳ در انتظار بررسی: <code>')}{int(row.get('pending', 0))}</code>",
+        f"{_tr('❌ ردشده: <code>')}{int(row.get('rejected', 0))}</code>",
         "",
-        f"💰 مجموع تأییدشده: <b>{format_toman(row.get('irt_total', 0))}</b>",
-        f"💵 مجموع تأییدشدهٔ USDT: <b>{format_usdt(row.get('usdt_total', 0))}</b>",
+        f"{_tr('💰 مجموع تأییدشده: <b>')}{format_toman(row.get('irt_total', 0))}</b>",
+        f"{_tr('💵 مجموع تأییدشدهٔ USDT: <b>')}{format_usdt(row.get('usdt_total', 0))}</b>",
         "",
-        "بازه بر اساس زمان ثبت پرداخت است؛ مبالغ فقط شامل پرداخت‌های تأییدشده‌اند.",
+        _tr("بازه بر اساس زمان ثبت پرداخت است؛ مبالغ فقط شامل پرداخت‌های تأییدشده‌اند."),
     ]
     return "\n".join(lines)
 
@@ -188,11 +180,11 @@ async def show_payment_statistics(
     if not isinstance(callback.message, Message):
         return
     if await _context(callback.from_user.id, "payments.view") is None:
-        await callback.answer("دسترسی مشاهده آمار پرداخت‌ها ندارید.", show_alert=True)
+        await callback.answer(_tr("دسترسی مشاهده آمار پرداخت‌ها ندارید."), show_alert=True)
         return
     await state.clear()
     await callback.message.edit_text(
-        "📊 <b>آمار پرداخت‌ها</b>\n\nبازهٔ زمانی موردنظر را انتخاب کنید:",
+        _tr("📊 <b>آمار پرداخت‌ها</b>\n\nبازهٔ زمانی موردنظر را انتخاب کنید:"),
         parse_mode="HTML",
         reply_markup=build_payment_statistics_keyboard(),
     )
@@ -206,11 +198,11 @@ async def show_payment_statistics_period(
     if not isinstance(callback.message, Message) or not callback.data:
         return
     if await _context(callback.from_user.id, "payments.view") is None:
-        await callback.answer("دسترسی مشاهده آمار پرداخت‌ها ندارید.", show_alert=True)
+        await callback.answer(_tr("دسترسی مشاهده آمار پرداخت‌ها ندارید."), show_alert=True)
         return
     period = callback.data.removeprefix("admin:pay:stats:")
     if period not in PAYMENT_STATISTICS_PERIODS:
-        await callback.answer("بازهٔ زمانی معتبر نیست.", show_alert=True)
+        await callback.answer(_tr("بازهٔ زمانی معتبر نیست."), show_alert=True)
         return
     try:
         summary = await get_admin_payment_summary(callback.from_user.id)
@@ -232,11 +224,7 @@ async def _show_cards(message: Message, actor_telegram_id: int) -> None:
     active_count = sum(bool(card.get("is_active")) for card in cards)
     await message.edit_text(
         (
-            "💳 <b>شماره کارت‌ها</b>\n\n"
-            "کارت‌های فعال به‌صورت نوبتی و اتمیک بین خریدهای جدید "
-            "انتخاب می‌شوند.\n\n"
-            f"تعداد کل: <code>{len(cards)}</code>\n"
-            f"فعال: <code>{active_count}</code>"
+            f"{_tr('💳 <b>شماره کارت\u200cها</b>\n\nکارت\u200cهای فعال به\u200cصورت نوبتی و اتمیک بین خریدهای جدید انتخاب می\u200cشوند.\n\nتعداد کل: <code>')}{len(cards)}{_tr('</code>\nفعال: <code>')}{active_count}</code>"
         ),
         parse_mode="HTML",
         reply_markup=build_cards_keyboard(cards),
@@ -250,11 +238,7 @@ async def _show_usdt(message: Message, actor_telegram_id: int) -> None:
     )
     await message.edit_text(
         (
-            "💵 <b>کیف‌پول‌های USDT</b>\n\n"
-            "در این بخش فقط آدرس عمومی دریافت ثبت می‌شود؛ هرگز کلید خصوصی "
-            "یا عبارت بازیابی وارد نکنید.\n\n"
-            f"تعداد کل: <code>{len(destinations)}</code>\n"
-            f"فعال: <code>{active_count}</code>"
+            f"{_tr('💵 <b>کیف\u200cپول\u200cهای USDT</b>\n\nدر این بخش فقط آدرس عمومی دریافت ثبت می\u200cشود؛ هرگز کلید خصوصی یا عبارت بازیابی وارد نکنید.\n\nتعداد کل: <code>')}{len(destinations)}{_tr('</code>\nفعال: <code>')}{active_count}</code>"
         ),
         parse_mode="HTML",
         reply_markup=build_usdt_keyboard(destinations),
@@ -262,44 +246,24 @@ async def _show_usdt(message: Message, actor_telegram_id: int) -> None:
 
 
 def _card_text(card: dict) -> str:
-    status = "فعال ✅" if card.get("is_active") else "غیرفعال ⛔️"
+    status = _tr("فعال ✅") if card.get("is_active") else _tr("غیرفعال ⛔️")
     return (
-        "💳 <b>مشخصات کارت</b>\n\n"
-        f"عنوان: <b>{html.escape(str(card.get('label') or '—'))}</b>\n"
-        f"شماره: <code>{_format_card_number(card.get('card_number'))}</code>\n"
-        f"صاحب کارت: <b>{html.escape(str(card.get('card_holder') or '—'))}</b>\n"
-        f"بانک: <b>{html.escape(str(card.get('bank_name') or '—'))}</b>\n"
-        f"وضعیت: <b>{status}</b>\n"
-        f"ترتیب: <code>{int(card.get('sort_order', 0))}</code>\n"
-        f"دفعات انتخاب: <code>{int(card.get('selection_count', 0))}</code>\n"
-        f"آخرین انتخاب: <code>{_format_datetime(card.get('last_selected_at'))}</code>"
+        f"{_tr('💳 <b>مشخصات کارت</b>\n\nعنوان: <b>')}{html.escape(str(card.get('label') or '—'))}{_tr('</b>\nشماره: <code>')}{_format_card_number(card.get('card_number'))}{_tr('</code>\nصاحب کارت: <b>')}{html.escape(str(card.get('card_holder') or '—'))}{_tr('</b>\nبانک: <b>')}{html.escape(str(card.get('bank_name') or '—'))}{_tr('</b>\nوضعیت: <b>')}{status}{_tr('</b>\nترتیب: <code>')}{int(card.get('sort_order', 0))}{_tr('</code>\nدفعات انتخاب: <code>')}{int(card.get('selection_count', 0))}{_tr('</code>\nآخرین انتخاب: <code>')}{_format_datetime(card.get('last_selected_at'))}</code>"
     )
 
 
 def _usdt_text(destination: dict) -> str:
-    status = "فعال ✅" if destination.get("is_active") else "غیرفعال ⛔️"
+    status = _tr("فعال ✅") if destination.get("is_active") else _tr("غیرفعال ⛔️")
     return (
-        "💵 <b>مشخصات مقصد USDT</b>\n\n"
-        f"عنوان: <b>{html.escape(str(destination.get('label') or '—'))}</b>\n"
-        "شبکه: "
-        f"<b>{html.escape(str(destination.get('network_name') or '—'))}</b> "
-        f"(<code>{html.escape(str(destination.get('network_code') or '—'))}</code>)\n"
-        f"دارایی: <code>{html.escape(str(destination.get('asset_symbol') or 'USDT'))}</code>\n"
-        f"آدرس: <code>{html.escape(str(destination.get('address') or '—'))}</code>\n"
-        "تأیید لازم: "
-        f"<code>{int(destination.get('confirmations_required', 20))}</code>\n"
-        f"قرارداد: <code>{html.escape(str(destination.get('contract_address') or '—'))}</code>\n"
-        f"مرورگر: <code>{html.escape(str(destination.get('explorer_url') or '—'))}</code>\n"
-        f"وضعیت: <b>{status}</b>\n"
-        f"ترتیب: <code>{int(destination.get('sort_order', 0))}</code>"
+        f"{_tr('💵 <b>مشخصات مقصد USDT</b>\n\nعنوان: <b>')}{html.escape(str(destination.get('label') or '—'))}{_tr('</b>\nشبکه: <b>')}{html.escape(str(destination.get('network_name') or '—'))}</b> (<code>{html.escape(str(destination.get('network_code') or '—'))}{_tr('</code>)\nدارایی: <code>')}{html.escape(str(destination.get('asset_symbol') or 'USDT'))}{_tr('</code>\nآدرس: <code>')}{html.escape(str(destination.get('address') or '—'))}{_tr('</code>\nتأیید لازم: <code>')}{int(destination.get('confirmations_required', 20))}{_tr('</code>\nقرارداد: <code>')}{html.escape(str(destination.get('contract_address') or '—'))}{_tr('</code>\nمرورگر: <code>')}{html.escape(str(destination.get('explorer_url') or '—'))}{_tr('</code>\nوضعیت: <b>')}{status}{_tr('</b>\nترتیب: <code>')}{int(destination.get('sort_order', 0))}</code>"
     )
 
 
 def _payment_caption(payment: dict) -> str:
     statuses = {
-        "pending": "در انتظار بررسی ⏳",
-        "approved": "تأییدشده ✅",
-        "rejected": "ردشده ❌",
+        "pending": _tr("در انتظار بررسی ⏳"),
+        "approved": _tr("تأییدشده ✅"),
+        "rejected": _tr("ردشده ❌"),
     }
     full_name = " ".join(
         str(value)
@@ -311,15 +275,13 @@ def _payment_caption(payment: dict) -> str:
     destination = payment.get("payment_destination_snapshot") or {}
     card_number = str(destination.get("card_number") or "")
     card_line = (
-        f"\n💳 کارت مقصد: <code>**** {card_number[-4:]}</code>"
+        f"{_tr('\n💳 کارت مقصد: <code>**** ')}{card_number[-4:]}</code>"
         if card_number
         else ""
     )
     is_usdt = str(payment.get("payment_method") or "") == "usdt"
     usdt_line = (
-        "\n💵 مقصد USDT: "
-        f"<code>{html.escape(str(destination.get('network_code') or '—'))}</code> — "
-        f"<code>{html.escape(str(destination.get('address') or '—'))}</code>"
+        f"{_tr('\n💵 مقصد USDT: <code>')}{html.escape(str(destination.get('network_code') or '—'))}</code> — <code>{html.escape(str(destination.get('address') or '—'))}</code>"
         if is_usdt
         else ""
     )
@@ -331,22 +293,11 @@ def _payment_caption(payment: dict) -> str:
     rejection = ""
     if payment.get("rejection_reason"):
         rejection = (
-            "\n📝 دلیل رد: "
-            f"{html.escape(str(payment['rejection_reason'])[:300])}"
+            f"{_tr('\n📝 دلیل رد: ')}{html.escape(str(payment['rejection_reason'])[:300])}"
         )
     return (
-        "🧾 <b>جزئیات پرداخت</b>\n\n"
-        f"شناسه: <code>{int(payment['id'])}</code>\n"
-        f"وضعیت: <b>{statuses.get(str(payment.get('status')), 'نامشخص')}</b>\n"
-        f"کاربر: {html.escape(full_name)} — {html.escape(identity)}\n"
-        f"Telegram ID: <code>{int(payment['user_telegram_id'])}</code>\n\n"
-        f"پلن: <b>{html.escape(str(payment.get('plan_name_snapshot') or '—'))}</b>\n"
-        f"مدت: <code>{int(payment.get('duration_days', 0))} روز</code>\n"
-        f"مبلغ: <b>{amount_text}</b>"
-        f"{card_line}{usdt_line}\n"
-        f"ثبت: <code>{_format_datetime(payment.get('created_at'))}</code>"
-        f"{rejection}"
-    )[:1024]
+        f"{_tr('🧾 <b>جزئیات پرداخت</b>\n\nشناسه: <code>')}{int(payment['id'])}{_tr('</code>\nوضعیت: <b>')}{statuses.get(str(payment.get('status')), _tr('نامشخص'))}{_tr('</b>\nکاربر: ')}{html.escape(full_name)} — {html.escape(identity)}\nTelegram ID: <code>{int(payment['user_telegram_id'])}{_tr('</code>\n\nپلن: <b>')}{html.escape(str(payment.get('plan_name_snapshot') or '—'))}{_tr('</b>\nمدت: <code>')}{int(payment.get('duration_days', 0))}{_tr(' روز</code>\nمبلغ: <b>')}{amount_text}</b>{card_line}{usdt_line}{_tr('\nثبت: <code>')}{_format_datetime(payment.get('created_at'))}</code>{rejection}"
+    )
 
 
 @router.callback_query(F.data == "admin:payments")
@@ -358,7 +309,7 @@ async def show_finance_home(
         return
     context = await _context(callback.from_user.id, "payments.view")
     if context is None:
-        await callback.answer("دسترسی مشاهده پرداخت‌ها ندارید.", show_alert=True)
+        await callback.answer(_tr("دسترسی مشاهده پرداخت‌ها ندارید."), show_alert=True)
         return
     try:
         await state.clear()
@@ -376,7 +327,7 @@ async def show_payment_list(
     if not callback.data or not isinstance(callback.message, Message):
         return
     if await _context(callback.from_user.id, "payments.view") is None:
-        await callback.answer("دسترسی مشاهده پرداخت‌ها ندارید.", show_alert=True)
+        await callback.answer(_tr("دسترسی مشاهده پرداخت‌ها ندارید."), show_alert=True)
         return
     parts = callback.data.split(":")
     if len(parts) != 5:
@@ -393,11 +344,10 @@ async def show_payment_list(
             page_size=PAYMENT_PAGE_SIZE,
         )
         total = int(result.get("total", 0))
-        label = "همه پرداخت‌ها" if status is None else "رسیدهای در انتظار"
+        label = _tr("همه پرداخت‌ها") if status is None else _tr("رسیدهای در انتظار")
         await callback.message.edit_text(
             (
-                f"🧾 <b>{label}</b>\n\n"
-                f"تعداد: <code>{total}</code> — صفحه <code>{page}</code>"
+                f"🧾 <b>{label}{_tr('</b>\n\nتعداد: <code>')}{total}{_tr('</code> — صفحه <code>')}{page}</code>"
             ),
             parse_mode="HTML",
             reply_markup=build_payment_list_keyboard(
@@ -418,7 +368,7 @@ async def show_payment_receipt(callback: CallbackQuery) -> None:
         return
     context = await _context(callback.from_user.id, "payments.view")
     if context is None:
-        await callback.answer("دسترسی مشاهده پرداخت‌ها ندارید.", show_alert=True)
+        await callback.answer(_tr("دسترسی مشاهده پرداخت‌ها ندارید."), show_alert=True)
         return
     parts = callback.data.split(":")
     if len(parts) != 6:
@@ -433,33 +383,28 @@ async def show_payment_receipt(callback: CallbackQuery) -> None:
             actor_telegram_id=callback.from_user.id,
             payment_id=payment_id,
         )
-        kwargs = {
-            "chat_id": callback.message.chat.id,
-            "caption": _payment_caption(payment),
-            "parse_mode": "HTML",
-            "reply_markup": build_payment_detail_keyboard(
-                payment,
-                can_review=_can(context, "payments.review"),
-                status_filter=status_filter,
-                page=page,
-            ),
-        }
-        if payment.get("receipt_file_type") == "photo":
-            await callback.message.bot.send_photo(
-                photo=payment["receipt_file_id"],
-                **kwargs,
-            )
-        else:
-            await callback.message.bot.send_document(
-                document=payment["receipt_file_id"],
-                **kwargs,
-            )
-        await callback.answer("رسید نمایش داده شد.")
+        from app.handlers.payments import _transaction_explorer_url
+        from aiogram.types import InlineKeyboardButton
+        markup = build_payment_detail_keyboard(payment, can_review=_can(context, "payments.review"), status_filter=status_filter, page=page)
+        explorer = _transaction_explorer_url(payment)
+        if explorer:
+            markup.inline_keyboard.insert(0, [InlineKeyboardButton(text="🔎 View transaction", url=explorer)])
+        details = _payment_caption(payment)
+        if payment.get("txid"):
+            details += "\nTxID: <code>" + html.escape(payment["txid"]) + "</code>"
+            details += "\nRequired confirmations: " + str((payment.get("payment_destination_snapshot") or {}).get("confirmations_required", "—"))
+        await callback.message.answer(details, parse_mode="HTML", reply_markup=markup)
+        if payment.get("receipt_file_id"):
+            kind = payment.get("receipt_file_type")
+            if kind in {"photo", "document"}:
+                await getattr(callback.bot, f"send_{kind}")(
+                    chat_id=callback.message.chat.id, **{kind: payment["receipt_file_id"]})
+        await callback.answer(_tr("رسید نمایش داده شد."))
     except BackendAPIError as exc:
         await callback.answer(_finance_error_text(exc), show_alert=True)
     except Exception:
         await callback.answer(
-            "تلگرام نتوانست فایل رسید را نمایش دهد.",
+            _tr("تلگرام نتوانست فایل رسید را نمایش دهد."),
             show_alert=True,
         )
 
@@ -472,7 +417,7 @@ async def show_cards(callback: CallbackQuery, state: FSMContext) -> None:
         callback.from_user.id,
         "payment_destinations.manage",
     ) is None:
-        await callback.answer("دسترسی مدیریت کارت‌ها ندارید.", show_alert=True)
+        await callback.answer(_tr("دسترسی مدیریت کارت‌ها ندارید."), show_alert=True)
         return
     try:
         await state.clear()
@@ -490,7 +435,7 @@ async def show_card_detail(callback: CallbackQuery) -> None:
         callback.from_user.id,
         "payment_destinations.manage",
     ) is None:
-        await callback.answer("دسترسی مدیریت کارت‌ها ندارید.", show_alert=True)
+        await callback.answer(_tr("دسترسی مدیریت کارت‌ها ندارید."), show_alert=True)
         return
     try:
         card = await get_payment_card(
@@ -526,7 +471,7 @@ async def start_card_create(
         callback.from_user.id,
         "payment_destinations.manage",
     ) is None:
-        await callback.answer("دسترسی مدیریت کارت‌ها ندارید.", show_alert=True)
+        await callback.answer(_tr("دسترسی مدیریت کارت‌ها ندارید."), show_alert=True)
         return
     await state.clear()
     await state.update_data(
@@ -537,13 +482,13 @@ async def start_card_create(
     await state.set_state(AdminFinanceStates.waiting_for_card_label)
     await callback.message.edit_text(
         (
-            "➕ <b>افزودن کارت</b>\n\n"
-            "یک عنوان قابل تشخیص وارد کنید؛ مثلاً «کارت اصلی»."
+            _tr("➕ <b>افزودن کارت</b>\n\n"
+            "یک عنوان قابل تشخیص وارد کنید؛ مثلاً «کارت اصلی».")
         ),
         parse_mode="HTML",
         reply_markup=build_finance_cancel_keyboard(),
     )
-    await _ask_reply(callback.message, "عنوان کارت را بفرستید:")
+    await _ask_reply(callback.message, _tr("عنوان کارت را بفرستید:"))
     await callback.answer()
 
 
@@ -551,35 +496,35 @@ async def start_card_create(
 async def receive_card_label(message: Message, state: FSMContext) -> None:
     value = str(message.text or "").strip()
     if not 2 <= len(value) <= 100:
-        await message.answer("عنوان باید بین ۲ تا ۱۰۰ نویسه باشد.")
+        await message.answer(_tr("عنوان باید بین ۲ تا ۱۰۰ نویسه باشد."))
         return
     data = await state.get_data()
     card_data = dict(data.get("card_data") or {})
     card_data["label"] = value
     await state.update_data(card_data=card_data)
     await state.set_state(AdminFinanceStates.waiting_for_card_number)
-    await _ask_reply(message, "شماره کارت ۱۶ رقمی را بفرستید:")
+    await _ask_reply(message, _tr("شماره کارت ۱۶ رقمی را بفرستید:"))
 
 
 @router.message(AdminFinanceStates.waiting_for_card_number)
 async def receive_card_number(message: Message, state: FSMContext) -> None:
     value = _normalize_card_number(str(message.text or ""))
     if value is None:
-        await message.answer("شماره کارت باید دقیقاً ۱۶ رقم باشد.")
+        await message.answer(_tr("شماره کارت باید دقیقاً ۱۶ رقم باشد."))
         return
     data = await state.get_data()
     card_data = dict(data.get("card_data") or {})
     card_data["card_number"] = value
     await state.update_data(card_data=card_data)
     await state.set_state(AdminFinanceStates.waiting_for_card_holder)
-    await _ask_reply(message, "نام صاحب کارت را بفرستید:")
+    await _ask_reply(message, _tr("نام صاحب کارت را بفرستید:"))
 
 
 @router.message(AdminFinanceStates.waiting_for_card_holder)
 async def receive_card_holder(message: Message, state: FSMContext) -> None:
     value = str(message.text or "").strip()
     if not 2 <= len(value) <= 120:
-        await message.answer("نام صاحب کارت باید بین ۲ تا ۱۲۰ نویسه باشد.")
+        await message.answer(_tr("نام صاحب کارت باید بین ۲ تا ۱۲۰ نویسه باشد."))
         return
     data = await state.get_data()
     card_data = dict(data.get("card_data") or {})
@@ -588,7 +533,7 @@ async def receive_card_holder(message: Message, state: FSMContext) -> None:
     await state.set_state(AdminFinanceStates.waiting_for_card_bank)
     await _ask_reply(
         message,
-        "نام بانک را بفرستید؛ اگر نمی‌خواهید نمایش داده شود، <code>-</code> بفرستید:",
+        _tr("نام بانک را بفرستید؛ اگر نمی‌خواهید نمایش داده شود، <code>-</code> بفرستید:"),
     )
 
 
@@ -596,7 +541,7 @@ async def receive_card_holder(message: Message, state: FSMContext) -> None:
 async def receive_card_bank(message: Message, state: FSMContext) -> None:
     value = str(message.text or "").strip()
     if len(value) > 100:
-        await message.answer("نام بانک حداکثر ۱۰۰ نویسه است.")
+        await message.answer(_tr("نام بانک حداکثر ۱۰۰ نویسه است."))
         return
     data = await state.get_data()
     card_data = dict(data.get("card_data") or {})
@@ -605,19 +550,13 @@ async def receive_card_bank(message: Message, state: FSMContext) -> None:
     await state.set_state(AdminFinanceStates.waiting_for_card_order)
     await _ask_reply(
         message,
-        "ترتیب نمایش را به‌صورت عدد صفر یا بزرگ‌تر بفرستید:",
+        _tr("ترتیب نمایش را به‌صورت عدد صفر یا بزرگ‌تر بفرستید:"),
     )
 
 
 def _card_review_text(card_data: dict, *, action: str) -> str:
     return (
-        f"💳 <b>{html.escape(action)}</b>\n\n"
-        f"عنوان: <b>{html.escape(str(card_data.get('label') or '—'))}</b>\n"
-        f"شماره: <code>{_format_card_number(card_data.get('card_number'))}</code>\n"
-        f"صاحب کارت: <b>{html.escape(str(card_data.get('card_holder') or '—'))}</b>\n"
-        f"بانک: <b>{html.escape(str(card_data.get('bank_name') or '—'))}</b>\n"
-        f"ترتیب: <code>{int(card_data.get('sort_order', 0))}</code>\n\n"
-        "اطلاعات را بررسی و ثبت را تأیید کنید."
+        f"💳 <b>{html.escape(action)}{_tr('</b>\n\nعنوان: <b>')}{html.escape(str(card_data.get('label') or '—'))}{_tr('</b>\nشماره: <code>')}{_format_card_number(card_data.get('card_number'))}{_tr('</code>\nصاحب کارت: <b>')}{html.escape(str(card_data.get('card_holder') or '—'))}{_tr('</b>\nبانک: <b>')}{html.escape(str(card_data.get('bank_name') or '—'))}{_tr('</b>\nترتیب: <code>')}{int(card_data.get('sort_order', 0))}{_tr('</code>\n\nاطلاعات را بررسی و ثبت را تأیید کنید.')}"
     )
 
 
@@ -625,7 +564,7 @@ def _card_review_text(card_data: dict, *, action: str) -> str:
 async def receive_card_order(message: Message, state: FSMContext) -> None:
     value = _parse_integer(str(message.text or ""))
     if value is None or value > 100000:
-        await message.answer("ترتیب باید عددی بین صفر تا ۱۰۰۰۰۰ باشد.")
+        await message.answer(_tr("ترتیب باید عددی بین صفر تا ۱۰۰۰۰۰ باشد."))
         return
     data = await state.get_data()
     card_data = dict(data.get("card_data") or {})
@@ -633,7 +572,7 @@ async def receive_card_order(message: Message, state: FSMContext) -> None:
     await state.update_data(card_data=card_data)
     await state.set_state(AdminFinanceStates.confirming_action)
     await message.answer(
-        _card_review_text(card_data, action="مرور کارت جدید"),
+        _card_review_text(card_data, action=_tr("مرور کارت جدید")),
         parse_mode="HTML",
         reply_markup=build_finance_confirmation_keyboard(),
     )
@@ -656,7 +595,7 @@ async def start_card_edit(callback: CallbackQuery, state: FSMContext) -> None:
         callback.from_user.id,
         "payment_destinations.manage",
     ) is None:
-        await callback.answer("دسترسی مدیریت کارت‌ها ندارید.", show_alert=True)
+        await callback.answer(_tr("دسترسی مدیریت کارت‌ها ندارید."), show_alert=True)
         return
     parts = callback.data.split(":")
     if len(parts) != 5 or parts[3] not in _CARD_EDIT_FIELDS:
@@ -683,8 +622,7 @@ async def start_card_edit(callback: CallbackQuery, state: FSMContext) -> None:
     await state.set_state(AdminFinanceStates.waiting_for_card_edit_value)
     await callback.message.edit_text(
         (
-            "✏️ <b>ویرایش کارت</b>\n\n"
-            f"کارت: <b>{html.escape(str(card.get('label') or '—'))}</b>"
+            f"{_tr('✏️ <b>ویرایش کارت</b>\n\nکارت: <b>')}{html.escape(str(card.get('label') or '—'))}</b>"
         ),
         parse_mode="HTML",
         reply_markup=build_finance_cancel_keyboard(),
@@ -702,24 +640,24 @@ async def receive_card_edit_value(message: Message, state: FSMContext) -> None:
     if field == "card_number":
         normalized = _normalize_card_number(raw)
         if normalized is None:
-            await message.answer("شماره کارت باید دقیقاً ۱۶ رقم باشد.")
+            await message.answer(_tr("شماره کارت باید دقیقاً ۱۶ رقم باشد."))
             return
         value = normalized
     elif field == "sort_order":
         parsed = _parse_integer(raw)
         if parsed is None or parsed > 100000:
-            await message.answer("ترتیب باید بین صفر تا ۱۰۰۰۰۰ باشد.")
+            await message.answer(_tr("ترتیب باید بین صفر تا ۱۰۰۰۰۰ باشد."))
             return
         value = parsed
     elif field == "bank_name":
         if len(raw) > 100:
-            await message.answer("نام بانک حداکثر ۱۰۰ نویسه است.")
+            await message.answer(_tr("نام بانک حداکثر ۱۰۰ نویسه است."))
             return
         value = None if raw == "-" else raw
     else:
         maximum = 100 if field == "label" else 120
         if not 2 <= len(raw) <= maximum:
-            await message.answer(f"مقدار باید بین ۲ تا {maximum} نویسه باشد.")
+            await message.answer(f"{_tr('مقدار باید بین ۲ تا ')}{maximum}{_tr(' نویسه باشد.')}")
             return
         value = raw
 
@@ -727,9 +665,7 @@ async def receive_card_edit_value(message: Message, state: FSMContext) -> None:
     await state.set_state(AdminFinanceStates.confirming_action)
     await message.answer(
         (
-            "✏️ <b>تأیید ویرایش کارت</b>\n\n"
-            f"فیلد: <code>{html.escape(field)}</code>\n"
-            f"مقدار جدید: <code>{html.escape(str(value or 'خالی'))}</code>"
+            f"{_tr('✏️ <b>تأیید ویرایش کارت</b>\n\nفیلد: <code>')}{html.escape(field)}{_tr('</code>\nمقدار جدید: <code>')}{html.escape(str(value or _tr('خالی')))}</code>"
         ),
         parse_mode="HTML",
         reply_markup=build_finance_confirmation_keyboard(),
@@ -744,7 +680,7 @@ async def prepare_card_toggle(callback: CallbackQuery, state: FSMContext) -> Non
         callback.from_user.id,
         "payment_destinations.manage",
     ) is None:
-        await callback.answer("دسترسی مدیریت کارت‌ها ندارید.", show_alert=True)
+        await callback.answer(_tr("دسترسی مدیریت کارت‌ها ندارید."), show_alert=True)
         return
     try:
         card_id = int(callback.data.rsplit(":", 1)[-1])
@@ -766,9 +702,7 @@ async def prepare_card_toggle(callback: CallbackQuery, state: FSMContext) -> Non
     await state.set_state(AdminFinanceStates.confirming_action)
     await callback.message.edit_text(
         (
-            "⚠️ <b>تأیید تغییر وضعیت کارت</b>\n\n"
-            f"کارت: <b>{html.escape(str(card.get('label') or '—'))}</b>\n"
-            f"وضعیت جدید: <b>{'فعال' if new_status else 'غیرفعال'}</b>"
+            f"{_tr('⚠️ <b>تأیید تغییر وضعیت کارت</b>\n\nکارت: <b>')}{html.escape(str(card.get('label') or '—'))}{_tr('</b>\nوضعیت جدید: <b>')}{(_tr('فعال') if new_status else _tr('غیرفعال'))}</b>"
         ),
         parse_mode="HTML",
         reply_markup=build_finance_confirmation_keyboard(),
@@ -784,7 +718,7 @@ async def prepare_card_delete(callback: CallbackQuery, state: FSMContext) -> Non
         callback.from_user.id,
         "payment_destinations.manage",
     ) is None:
-        await callback.answer("دسترسی مدیریت کارت‌ها ندارید.", show_alert=True)
+        await callback.answer(_tr("دسترسی مدیریت کارت‌ها ندارید."), show_alert=True)
         return
     try:
         card_id = int(callback.data.rsplit(":", 1)[-1])
@@ -804,9 +738,7 @@ async def prepare_card_delete(callback: CallbackQuery, state: FSMContext) -> Non
     await state.set_state(AdminFinanceStates.confirming_action)
     await callback.message.edit_text(
         (
-            "🚨 <b>حذف کارت</b>\n\n"
-            f"کارت «{html.escape(str(card.get('label') or '—'))}» حذف شود؟\n"
-            "سوابق پرداخت، Snapshot کارت خود را حفظ می‌کنند."
+            f"{_tr('🚨 <b>حذف کارت</b>\n\nکارت «')}{html.escape(str(card.get('label') or '—'))}{_tr('» حذف شود؟\nسوابق پرداخت، Snapshot کارت خود را حفظ می\u200cکنند.')}"
         ),
         parse_mode="HTML",
         reply_markup=build_finance_confirmation_keyboard(),
@@ -822,7 +754,7 @@ async def show_usdt(callback: CallbackQuery, state: FSMContext) -> None:
         callback.from_user.id,
         "payment_destinations.manage",
     ) is None:
-        await callback.answer("دسترسی مدیریت کیف‌پول‌ها ندارید.", show_alert=True)
+        await callback.answer(_tr("دسترسی مدیریت کیف‌پول‌ها ندارید."), show_alert=True)
         return
     try:
         await state.clear()
@@ -840,7 +772,7 @@ async def show_usdt_detail(callback: CallbackQuery) -> None:
         callback.from_user.id,
         "payment_destinations.manage",
     ) is None:
-        await callback.answer("دسترسی مدیریت کیف‌پول‌ها ندارید.", show_alert=True)
+        await callback.answer(_tr("دسترسی مدیریت کیف‌پول‌ها ندارید."), show_alert=True)
         return
     try:
         destination = await get_usdt_destination(
@@ -868,7 +800,7 @@ async def start_usdt_create(
         callback.from_user.id,
         "payment_destinations.manage",
     ) is None:
-        await callback.answer("دسترسی مدیریت کیف‌پول‌ها ندارید.", show_alert=True)
+        await callback.answer(_tr("دسترسی مدیریت کیف‌پول‌ها ندارید."), show_alert=True)
         return
     await state.clear()
     await state.update_data(
@@ -879,14 +811,14 @@ async def start_usdt_create(
     await state.set_state(AdminFinanceStates.waiting_for_usdt_label)
     await callback.message.edit_text(
         (
-            "➕ <b>افزودن کیف‌پول USDT</b>\n\n"
+            _tr("➕ <b>افزودن کیف‌پول USDT</b>\n\n"
             "فقط آدرس عمومی دریافت را وارد کنید؛ کلید خصوصی یا عبارت بازیابی "
-            "نباید در ربات ثبت شود."
+            "نباید در ربات ثبت شود.")
         ),
         parse_mode="HTML",
         reply_markup=build_finance_cancel_keyboard(),
     )
-    await _ask_reply(callback.message, "عنوان مقصد را بفرستید؛ مثلاً «TRC20 اصلی»:")
+    await _ask_reply(callback.message, _tr("عنوان مقصد را بفرستید؛ مثلاً «TRC20 اصلی»:"))
     await callback.answer()
 
 
@@ -905,33 +837,33 @@ async def _update_usdt_data(
 async def receive_usdt_label(message: Message, state: FSMContext) -> None:
     value = str(message.text or "").strip()
     if not 2 <= len(value) <= 100:
-        await message.answer("عنوان باید بین ۲ تا ۱۰۰ نویسه باشد.")
+        await message.answer(_tr("عنوان باید بین ۲ تا ۱۰۰ نویسه باشد."))
         return
     await _update_usdt_data(state, "label", value)
     await state.set_state(AdminFinanceStates.waiting_for_usdt_network_name)
-    await _ask_reply(message, "نام کامل شبکه را بفرستید؛ مثلاً TRON:")
+    await _ask_reply(message, _tr("نام کامل شبکه را بفرستید؛ مثلاً TRON:"))
 
 
 @router.message(AdminFinanceStates.waiting_for_usdt_network_name)
 async def receive_usdt_network_name(message: Message, state: FSMContext) -> None:
     value = str(message.text or "").strip()
     if not 2 <= len(value) <= 100:
-        await message.answer("نام شبکه باید بین ۲ تا ۱۰۰ نویسه باشد.")
+        await message.answer(_tr("نام شبکه باید بین ۲ تا ۱۰۰ نویسه باشد."))
         return
     await _update_usdt_data(state, "network_name", value)
     await state.set_state(AdminFinanceStates.waiting_for_usdt_network_code)
-    await _ask_reply(message, "کد شبکه را بفرستید؛ مثلاً TRC20:")
+    await _ask_reply(message, _tr("کد شبکه را بفرستید؛ مثلاً TRC20:"))
 
 
 @router.message(AdminFinanceStates.waiting_for_usdt_network_code)
 async def receive_usdt_network_code(message: Message, state: FSMContext) -> None:
     value = str(message.text or "").strip().upper()
     if not 2 <= len(value) <= 32 or any(character.isspace() for character in value):
-        await message.answer("کد شبکه باید ۲ تا ۳۲ نویسه و بدون فاصله باشد.")
+        await message.answer(_tr("کد شبکه باید ۲ تا ۳۲ نویسه و بدون فاصله باشد."))
         return
     await _update_usdt_data(state, "network_code", value)
     await state.set_state(AdminFinanceStates.waiting_for_usdt_address)
-    await _ask_reply(message, "آدرس عمومی دریافت USDT را بفرستید:")
+    await _ask_reply(message, _tr("آدرس عمومی دریافت USDT را بفرستید:"))
 
 
 @router.message(AdminFinanceStates.waiting_for_usdt_address)
@@ -940,11 +872,11 @@ async def receive_usdt_address(message: Message, state: FSMContext) -> None:
     if not 10 <= len(value) <= 255 or any(
         character.isspace() for character in value
     ):
-        await message.answer("آدرس باید ۱۰ تا ۲۵۵ نویسه و بدون فاصله باشد.")
+        await message.answer(_tr("آدرس باید ۱۰ تا ۲۵۵ نویسه و بدون فاصله باشد."))
         return
     await _update_usdt_data(state, "address", value)
     await state.set_state(AdminFinanceStates.waiting_for_usdt_confirmations)
-    await _ask_reply(message, "تعداد تأیید شبکه لازم را بفرستید؛ مثلاً ۲۰:")
+    await _ask_reply(message, _tr("تعداد تأیید شبکه لازم را بفرستید؛ مثلاً ۲۰:"))
 
 
 @router.message(AdminFinanceStates.waiting_for_usdt_confirmations)
@@ -954,13 +886,13 @@ async def receive_usdt_confirmations(
 ) -> None:
     value = _parse_integer(str(message.text or ""))
     if value is None or not 1 <= value <= 1000:
-        await message.answer("تعداد تأیید باید بین ۱ تا ۱۰۰۰ باشد.")
+        await message.answer(_tr("تعداد تأیید باید بین ۱ تا ۱۰۰۰ باشد."))
         return
     await _update_usdt_data(state, "confirmations_required", value)
     await state.set_state(AdminFinanceStates.waiting_for_usdt_contract)
     await _ask_reply(
         message,
-        "آدرس قرارداد توکن را بفرستید؛ اگر لازم نیست، <code>-</code> بفرستید:",
+        _tr("آدرس قرارداد توکن را بفرستید؛ اگر لازم نیست، <code>-</code> بفرستید:"),
     )
 
 
@@ -968,7 +900,7 @@ async def receive_usdt_confirmations(
 async def receive_usdt_contract(message: Message, state: FSMContext) -> None:
     value = str(message.text or "").strip()
     if len(value) > 255:
-        await message.answer("آدرس قرارداد حداکثر ۲۵۵ نویسه است.")
+        await message.answer(_tr("آدرس قرارداد حداکثر ۲۵۵ نویسه است."))
         return
     await _update_usdt_data(
         state,
@@ -978,7 +910,7 @@ async def receive_usdt_contract(message: Message, state: FSMContext) -> None:
     await state.set_state(AdminFinanceStates.waiting_for_usdt_explorer)
     await _ask_reply(
         message,
-        "نشانی مرورگر شبکه را بفرستید؛ اگر لازم نیست، <code>-</code> بفرستید:",
+        _tr("نشانی مرورگر شبکه را بفرستید؛ اگر لازم نیست، <code>-</code> بفرستید:"),
     )
 
 
@@ -988,7 +920,7 @@ async def receive_usdt_explorer(message: Message, state: FSMContext) -> None:
     if value != "-" and (
         len(value) > 500 or not value.startswith(("https://", "http://"))
     ):
-        await message.answer("لینک باید با https:// یا http:// شروع شود.")
+        await message.answer(_tr("لینک باید با https:// یا http:// شروع شود."))
         return
     await _update_usdt_data(
         state,
@@ -996,19 +928,12 @@ async def receive_usdt_explorer(message: Message, state: FSMContext) -> None:
         None if value == "-" else value,
     )
     await state.set_state(AdminFinanceStates.waiting_for_usdt_order)
-    await _ask_reply(message, "ترتیب نمایش را به‌صورت عدد صفر یا بزرگ‌تر بفرستید:")
+    await _ask_reply(message, _tr("ترتیب نمایش را به‌صورت عدد صفر یا بزرگ‌تر بفرستید:"))
 
 
 def _usdt_review_text(data: dict, *, action: str) -> str:
     return (
-        f"💵 <b>{html.escape(action)}</b>\n\n"
-        f"عنوان: <b>{html.escape(str(data.get('label') or '—'))}</b>\n"
-        f"شبکه: <b>{html.escape(str(data.get('network_name') or '—'))}</b> "
-        f"(<code>{html.escape(str(data.get('network_code') or '—'))}</code>)\n"
-        f"آدرس: <code>{html.escape(str(data.get('address') or '—'))}</code>\n"
-        f"تأیید لازم: <code>{int(data.get('confirmations_required', 20))}</code>\n"
-        f"ترتیب: <code>{int(data.get('sort_order', 0))}</code>\n\n"
-        "اطلاعات شبکه و آدرس را با دقت بررسی کنید."
+        f"💵 <b>{html.escape(action)}{_tr('</b>\n\nعنوان: <b>')}{html.escape(str(data.get('label') or '—'))}{_tr('</b>\nشبکه: <b>')}{html.escape(str(data.get('network_name') or '—'))}</b> (<code>{html.escape(str(data.get('network_code') or '—'))}{_tr('</code>)\nآدرس: <code>')}{html.escape(str(data.get('address') or '—'))}{_tr('</code>\nتأیید لازم: <code>')}{int(data.get('confirmations_required', 20))}{_tr('</code>\nترتیب: <code>')}{int(data.get('sort_order', 0))}{_tr('</code>\n\nاطلاعات شبکه و آدرس را با دقت بررسی کنید.')}"
     )
 
 
@@ -1016,7 +941,7 @@ def _usdt_review_text(data: dict, *, action: str) -> str:
 async def receive_usdt_order(message: Message, state: FSMContext) -> None:
     value = _parse_integer(str(message.text or ""))
     if value is None or value > 100000:
-        await message.answer("ترتیب باید عددی بین صفر تا ۱۰۰۰۰۰ باشد.")
+        await message.answer(_tr("ترتیب باید عددی بین صفر تا ۱۰۰۰۰۰ باشد."))
         return
     await _update_usdt_data(state, "sort_order", value)
     data = await state.get_data()
@@ -1024,7 +949,7 @@ async def receive_usdt_order(message: Message, state: FSMContext) -> None:
     await message.answer(
         _usdt_review_text(
             dict(data.get("usdt_data") or {}) | {"sort_order": value},
-            action="مرور کیف‌پول جدید",
+            action=_tr("مرور کیف‌پول جدید"),
         ),
         parse_mode="HTML",
         reply_markup=build_finance_confirmation_keyboard(),
@@ -1051,7 +976,7 @@ async def start_usdt_edit(callback: CallbackQuery, state: FSMContext) -> None:
         callback.from_user.id,
         "payment_destinations.manage",
     ) is None:
-        await callback.answer("دسترسی مدیریت کیف‌پول‌ها ندارید.", show_alert=True)
+        await callback.answer(_tr("دسترسی مدیریت کیف‌پول‌ها ندارید."), show_alert=True)
         return
     parts = callback.data.split(":")
     if len(parts) != 5 or parts[3] not in _USDT_EDIT_FIELDS:
@@ -1077,8 +1002,7 @@ async def start_usdt_edit(callback: CallbackQuery, state: FSMContext) -> None:
     await state.set_state(AdminFinanceStates.waiting_for_usdt_edit_value)
     await callback.message.edit_text(
         (
-            "✏️ <b>ویرایش مقصد USDT</b>\n\n"
-            f"مقصد: <b>{html.escape(str(destination.get('label') or '—'))}</b>"
+            f"{_tr('✏️ <b>ویرایش مقصد USDT</b>\n\nمقصد: <b>')}{html.escape(str(destination.get('label') or '—'))}</b>"
         ),
         parse_mode="HTML",
         reply_markup=build_finance_cancel_keyboard(),
@@ -1098,14 +1022,14 @@ async def receive_usdt_edit_value(message: Message, state: FSMContext) -> None:
         maximum = 1000 if field == "confirmations_required" else 100000
         minimum = 1 if field == "confirmations_required" else 0
         if parsed is None or not minimum <= parsed <= maximum:
-            await message.answer(f"عدد باید بین {minimum} تا {maximum} باشد.")
+            await message.answer(f"{_tr('عدد باید بین ')}{minimum}{_tr(' تا ')}{maximum}{_tr(' باشد.')}")
             return
         value = parsed
     elif field == "address":
         if not 10 <= len(raw) <= 255 or any(
             character.isspace() for character in raw
         ):
-            await message.answer("آدرس باید ۱۰ تا ۲۵۵ نویسه و بدون فاصله باشد.")
+            await message.answer(_tr("آدرس باید ۱۰ تا ۲۵۵ نویسه و بدون فاصله باشد."))
             return
         value = raw
     elif field == "network_code":
@@ -1113,22 +1037,22 @@ async def receive_usdt_edit_value(message: Message, state: FSMContext) -> None:
         if not 2 <= len(str(value)) <= 32 or any(
             character.isspace() for character in str(value)
         ):
-            await message.answer("کد شبکه باید ۲ تا ۳۲ نویسه و بدون فاصله باشد.")
+            await message.answer(_tr("کد شبکه باید ۲ تا ۳۲ نویسه و بدون فاصله باشد."))
             return
     elif field in {"contract_address", "explorer_url"}:
         value = None if raw == "-" else raw
         maximum = 255 if field == "contract_address" else 500
         if value is not None and len(str(value)) > maximum:
-            await message.answer(f"مقدار حداکثر {maximum} نویسه است.")
+            await message.answer(f"{_tr('مقدار حداکثر ')}{maximum}{_tr(' نویسه است.')}")
             return
         if field == "explorer_url" and value is not None and not str(value).startswith(
             ("https://", "http://")
         ):
-            await message.answer("لینک باید با https:// یا http:// شروع شود.")
+            await message.answer(_tr("لینک باید با https:// یا http:// شروع شود."))
             return
     else:
         if not 2 <= len(raw) <= 100:
-            await message.answer("مقدار باید بین ۲ تا ۱۰۰ نویسه باشد.")
+            await message.answer(_tr("مقدار باید بین ۲ تا ۱۰۰ نویسه باشد."))
             return
         value = raw
 
@@ -1136,9 +1060,7 @@ async def receive_usdt_edit_value(message: Message, state: FSMContext) -> None:
     await state.set_state(AdminFinanceStates.confirming_action)
     await message.answer(
         (
-            "✏️ <b>تأیید ویرایش مقصد USDT</b>\n\n"
-            f"فیلد: <code>{html.escape(field)}</code>\n"
-            f"مقدار جدید: <code>{html.escape(str(value or 'خالی'))}</code>"
+            f"{_tr('✏️ <b>تأیید ویرایش مقصد USDT</b>\n\nفیلد: <code>')}{html.escape(field)}{_tr('</code>\nمقدار جدید: <code>')}{html.escape(str(value or _tr('خالی')))}</code>"
         ),
         parse_mode="HTML",
         reply_markup=build_finance_confirmation_keyboard(),
@@ -1153,7 +1075,7 @@ async def prepare_usdt_toggle(callback: CallbackQuery, state: FSMContext) -> Non
         callback.from_user.id,
         "payment_destinations.manage",
     ) is None:
-        await callback.answer("دسترسی مدیریت کیف‌پول‌ها ندارید.", show_alert=True)
+        await callback.answer(_tr("دسترسی مدیریت کیف‌پول‌ها ندارید."), show_alert=True)
         return
     try:
         destination_id = int(callback.data.rsplit(":", 1)[-1])
@@ -1175,9 +1097,7 @@ async def prepare_usdt_toggle(callback: CallbackQuery, state: FSMContext) -> Non
     await state.set_state(AdminFinanceStates.confirming_action)
     await callback.message.edit_text(
         (
-            "⚠️ <b>تأیید تغییر وضعیت کیف‌پول</b>\n\n"
-            f"مقصد: <b>{html.escape(str(destination.get('label') or '—'))}</b>\n"
-            f"وضعیت جدید: <b>{'فعال' if new_status else 'غیرفعال'}</b>"
+            f"{_tr('⚠️ <b>تأیید تغییر وضعیت کیف\u200cپول</b>\n\nمقصد: <b>')}{html.escape(str(destination.get('label') or '—'))}{_tr('</b>\nوضعیت جدید: <b>')}{(_tr('فعال') if new_status else _tr('غیرفعال'))}</b>"
         ),
         parse_mode="HTML",
         reply_markup=build_finance_confirmation_keyboard(),
@@ -1193,7 +1113,7 @@ async def prepare_usdt_delete(callback: CallbackQuery, state: FSMContext) -> Non
         callback.from_user.id,
         "payment_destinations.manage",
     ) is None:
-        await callback.answer("دسترسی مدیریت کیف‌پول‌ها ندارید.", show_alert=True)
+        await callback.answer(_tr("دسترسی مدیریت کیف‌پول‌ها ندارید."), show_alert=True)
         return
     try:
         destination_id = int(callback.data.rsplit(":", 1)[-1])
@@ -1213,9 +1133,7 @@ async def prepare_usdt_delete(callback: CallbackQuery, state: FSMContext) -> Non
     await state.set_state(AdminFinanceStates.confirming_action)
     await callback.message.edit_text(
         (
-            "🚨 <b>حذف کیف‌پول USDT</b>\n\n"
-            f"مقصد «{html.escape(str(destination.get('label') or '—'))}» "
-            "به‌طور کامل حذف شود؟"
+            f"{_tr('🚨 <b>حذف کیف\u200cپول USDT</b>\n\nمقصد «')}{html.escape(str(destination.get('label') or '—'))}{_tr('» به\u200cطور کامل حذف شود؟')}"
         ),
         parse_mode="HTML",
         reply_markup=build_finance_confirmation_keyboard(),
@@ -1237,7 +1155,7 @@ async def confirm_finance_action(
         callback.from_user.id,
         "payment_destinations.manage",
     ) is None:
-        await callback.answer("دسترسی لازم را ندارید.", show_alert=True)
+        await callback.answer(_tr("دسترسی لازم را ندارید."), show_alert=True)
         return
     data = await state.get_data()
     workflow = str(data.get("workflow") or "")
@@ -1275,7 +1193,7 @@ async def confirm_finance_action(
                 destination_id=int(data["destination_id"]),
             )
         else:
-            await callback.answer("درخواست منقضی شده است.", show_alert=True)
+            await callback.answer(_tr("درخواست منقضی شده است."), show_alert=True)
             await state.clear()
             return
 
@@ -1287,7 +1205,7 @@ async def confirm_finance_action(
             await _show_usdt(callback.message, callback.from_user.id)
         else:
             await _show_finance_home(callback.message, callback.from_user.id)
-        await callback.answer("تغییر با موفقیت ثبت شد.")
+        await callback.answer(_tr("تغییر با موفقیت ثبت شد."))
     except BackendAPIError as exc:
         await callback.answer(_finance_error_text(exc), show_alert=True)
 
@@ -1309,6 +1227,11 @@ async def cancel_finance_action(
             await _show_usdt(callback.message, callback.from_user.id)
         else:
             await _show_finance_home(callback.message, callback.from_user.id)
-        await callback.answer("لغو شد.")
+        await callback.answer(_tr("لغو شد."))
     except BackendAPIError as exc:
         await callback.answer(_finance_error_text(exc), show_alert=True)
+
+
+# Resolve static labels using the language of the current update.
+_CARD_EDIT_FIELDS = _localized_collection(_CARD_EDIT_FIELDS)
+_USDT_EDIT_FIELDS = _localized_collection(_USDT_EDIT_FIELDS)

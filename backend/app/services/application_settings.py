@@ -162,6 +162,13 @@ class ApplicationSettingsService:
             validate_managed_setting,
         )
 
+        if normalized_key.startswith(("notifications.", "monitor.")):
+            from app.services.operations import validate_operation
+            try:
+                value = validate_operation(normalized_key, value)
+            except ValueError as exc:
+                raise SettingValidationError(str(exc)) from exc
+
         definition = MANAGED_SETTINGS.get(normalized_key)
         if definition is not None:
             if normalized_category != definition.category:

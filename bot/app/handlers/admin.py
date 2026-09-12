@@ -1,3 +1,4 @@
+from app.localization import tr as _tr, localized_collection as _localized_collection
 import html
 import re
 from decimal import Decimal, InvalidOperation
@@ -73,13 +74,11 @@ def _admin_panel_text(context: dict) -> str:
     ]
 
     if context.get("is_superadmin"):
-        role_names.insert(0, "سوپرادمین")
+        role_names.insert(0, _tr("سوپرادمین"))
 
-    role_text = ", ".join(dict.fromkeys(role_names)) or "مدیر"
+    role_text = ", ".join(dict.fromkeys(role_names)) or _tr("مدیر")
     return (
-        "⚙️ <b>پنل مدیریت MediaHub AI</b>\n\n"
-        f"👮 نقش: <code>{html.escape(role_text)}</code>\n"
-        f"🔐 تعداد دسترسی‌ها: <code>{len(context.get('permissions', []))}</code>"
+        f"{_tr('⚙️ <b>پنل مدیریت MediaHub AI</b>\n\n👮 نقش: <code>')}{html.escape(role_text)}{_tr('</code>\n🔐 تعداد دسترسی\u200cها: <code>')}{len(context.get('permissions', []))}</code>"
     )
 
 
@@ -97,27 +96,27 @@ def _backend_error_text(exc: BackendAPIError) -> str:
     code = detail.get("code") if isinstance(detail, dict) else None
     messages = {
         "admin_target_not_found": (
-            "کاربر پیدا نشد. کاربر باید ابتدا ربات را Start کرده باشد."
+            _tr("کاربر پیدا نشد. کاربر باید ابتدا ربات را Start کرده باشد.")
         ),
-        "admin_account_not_found": "حساب مدیر پیدا نشد.",
-        "admin_account_conflict": "این کاربر هم‌اکنون مدیر فعال است.",
+        "admin_account_not_found": _tr("حساب مدیر پیدا نشد."),
+        "admin_account_conflict": _tr("این کاربر هم‌اکنون مدیر فعال است."),
         "last_superadmin": (
-            "آخرین سوپرادمین فعال را نمی‌توان غیرفعال یا تنزل داد."
+            _tr("آخرین سوپرادمین فعال را نمی‌توان غیرفعال یا تنزل داد.")
         ),
-        "admin_role_not_found": "یک یا چند نقش انتخاب‌شده معتبر نیست.",
-        "admin_role_conflict": "کد این نقش قبلاً ثبت شده است.",
-        "admin_role_validation": "ترکیب نقش یا دسترسی معتبر نیست.",
+        "admin_role_not_found": _tr("یک یا چند نقش انتخاب‌شده معتبر نیست."),
+        "admin_role_conflict": _tr("کد این نقش قبلاً ثبت شده است."),
+        "admin_role_validation": _tr("ترکیب نقش یا دسترسی معتبر نیست."),
         "admin_role_in_use": (
-            "این تغییر بعضی مدیران را بدون دسترسی پنل می‌گذارد؛ "
-            "ابتدا نقش آن مدیران را عوض کنید."
+            _tr("این تغییر بعضی مدیران را بدون دسترسی پنل می‌گذارد؛ "
+            "ابتدا نقش آن مدیران را عوض کنید.")
         ),
-        "system_role_protected": "نقش سیستمی قابل غیرفعال‌سازی نیست.",
-        "plan_not_found": "پلن پیدا نشد.",
-        "plan_conflict": "پلنی با این نام از قبل وجود دارد.",
-        "plan_validation": "اطلاعات پلن معتبر نیست.",
+        "system_role_protected": _tr("نقش سیستمی قابل غیرفعال‌سازی نیست."),
+        "plan_not_found": _tr("پلن پیدا نشد."),
+        "plan_conflict": _tr("پلنی با این نام از قبل وجود دارد."),
+        "plan_validation": _tr("اطلاعات پلن معتبر نیست."),
         "system_plan_protected": (
-            "نام، قیمت، مدت و وضعیت پلن رایگان قابل تغییر نیست؛ "
-            "محدودیت‌های آن قابل ویرایش است."
+            _tr("نام، قیمت، مدت و وضعیت پلن رایگان قابل تغییر نیست؛ "
+            "محدودیت‌های آن قابل ویرایش است.")
         ),
     }
 
@@ -137,7 +136,7 @@ def _account_identity(account: dict) -> str:
         if value
     ).strip()
     username = account.get("username")
-    parts = [full_name or "بدون نام"]
+    parts = [full_name or _tr("بدون نام")]
 
     if username:
         parts.append(f"@{username}")
@@ -153,18 +152,13 @@ def _admin_account_text(account: dict) -> str:
             str(role.get("name") or role.get("code") or ""),
         )
         for role in roles
-    )[:1200] or "بدون نقش"
-    status = "فعال ✅" if account.get("is_active") else "غیرفعال ⛔️"
+    )[:1200] or _tr("بدون نقش")
+    status = _tr("فعال ✅") if account.get("is_active") else _tr("غیرفعال ⛔️")
     authority = (
-        "سوپرادمین 👑" if account.get("is_superadmin") else "مدیر 👮"
+        _tr("سوپرادمین 👑") if account.get("is_superadmin") else _tr("مدیر 👮")
     )
     return (
-        "👤 <b>مشخصات مدیر</b>\n\n"
-        f"نام: {html.escape(_account_identity(account))}\n"
-        f"Telegram ID: <code>{int(account['telegram_id'])}</code>\n"
-        f"سطح: <b>{authority}</b>\n"
-        f"وضعیت: <b>{status}</b>\n"
-        f"نقش‌ها: <code>{html.escape(role_text)}</code>"
+        f"{_tr('👤 <b>مشخصات مدیر</b>\n\nنام: ')}{html.escape(_account_identity(account))}\nTelegram ID: <code>{int(account['telegram_id'])}{_tr('</code>\nسطح: <b>')}{authority}{_tr('</b>\nوضعیت: <b>')}{status}{_tr('</b>\nنقش\u200cها: <code>')}{html.escape(role_text)}</code>"
     )
 
 
@@ -173,9 +167,9 @@ def _admin_role_text(role: dict) -> str:
     permission_lines = "\n".join(
         f"• {html.escape(permission_label_fa(str(code)))}"
         for code in permissions[:50]
-    ) or "• بدون دسترسی"
-    status = "فعال ✅" if role.get("is_active") else "غیرفعال ⛔️"
-    kind = "سیستمی 🔒" if role.get("is_system") else "سفارشی 🧩"
+    ) or _tr("• بدون دسترسی")
+    status = _tr("فعال ✅") if role.get("is_active") else _tr("غیرفعال ⛔️")
+    kind = _tr("سیستمی 🔒") if role.get("is_system") else _tr("سفارشی 🧩")
     role_code = str(role.get("code") or "")
     role_name = role_label_fa(role_code, str(role.get("name") or role_code))
     description = role_description_fa(
@@ -183,14 +177,7 @@ def _admin_role_text(role: dict) -> str:
         str(role.get("description") or "—"),
     )
     return (
-        "🔐 <b>مشخصات نقش</b>\n\n"
-        f"نام: <b>{html.escape(role_name)}</b>\n"
-        f"شناسه فنی: <code>{html.escape(role_code)}</code>\n"
-        f"نوع: {kind}\n"
-        f"وضعیت: {status}\n"
-        f"مدیران دارای نقش: <code>{int(role.get('assignment_count', 0))}</code>\n"
-        f"توضیح: {html.escape(description)}\n\n"
-        f"<b>دسترسی‌ها:</b>\n{permission_lines}"
+        f"{_tr('🔐 <b>مشخصات نقش</b>\n\nنام: <b>')}{html.escape(role_name)}{_tr('</b>\nشناسه فنی: <code>')}{html.escape(role_code)}{_tr('</code>\nنوع: ')}{kind}{_tr('\nوضعیت: ')}{status}{_tr('\nمدیران دارای نقش: <code>')}{int(role.get('assignment_count', 0))}{_tr('</code>\nتوضیح: ')}{html.escape(description)}{_tr('\n\n<b>دسترسی\u200cها:</b>\n')}{permission_lines}"
     )
 
 
@@ -234,17 +221,17 @@ def _parse_plan_decimal(value: str) -> Decimal | None:
 
 def _plan_daily_limit_text(value: object) -> str:
     if value is None:
-        return "نامحدود"
+        return _tr("نامحدود")
 
-    return f"{int(value):,} خروجی"
+    return f"{int(value):,}{_tr(' خروجی')}"
 
 
 def _admin_plan_text(plan: dict) -> str:
     is_free = bool(plan.get("is_system"))
-    status = "فعال ✅" if plan.get("is_active") else "غیرفعال ⛔️"
-    plan_type = "رایگان و سیستمی 🆓" if is_free else "سفارشی 💎"
-    duration = "همیشگی" if is_free else f"{int(plan['duration_days'])} روز"
-    price = "رایگان" if is_free else format_toman(plan.get("price", 0))
+    status = _tr("فعال ✅") if plan.get("is_active") else _tr("غیرفعال ⛔️")
+    plan_type = _tr("رایگان و سیستمی 🆓") if is_free else _tr("سفارشی 💎")
+    duration = _tr("همیشگی") if is_free else f"{int(plan['duration_days'])}{_tr(' روز')}"
+    price = _tr("رایگان") if is_free else format_toman(plan.get("price", 0))
     price_usdt = (
         "—"
         if plan.get("price_usdt") is None
@@ -253,37 +240,19 @@ def _admin_plan_text(plan: dict) -> str:
     file_size = (
         f"{int(plan['max_file_size_mb'])} MB"
         if plan.get("max_file_size_mb") is not None
-        else "نامحدود"
+        else _tr("نامحدود")
     )
     quality = (
         format_quality_limit(int(plan["max_quality"]))
         if plan.get("max_quality") is not None
-        else "نامحدود"
+        else _tr("نامحدود")
     )
-    priority = "بالا" if plan.get("priority_processing") else "عادی"
-    forced_join = "بله" if plan.get("forced_join_required") else "خیر"
+    priority = _tr("بالا") if plan.get("priority_processing") else _tr("عادی")
+    forced_join = _tr("بله") if plan.get("forced_join_required") else _tr("خیر")
     description = html.escape(str(plan.get("description") or "—"))
     description_en = html.escape(str(plan.get("description_en") or "—"))
     return (
-        "📦 <b>مشخصات پلن</b>\n\n"
-        f"نام فارسی: <b>{html.escape(str(plan['name']))}</b>\n"
-        "نام انگلیسی: "
-        f"<b>{html.escape(str(plan.get('name_en') or plan['name']))}</b>\n"
-        f"نوع: {plan_type}\n"
-        f"وضعیت: <b>{status}</b>\n"
-        f"مدت: <code>{duration}</code>\n"
-        f"مبلغ ریالی: <b>{price}</b>\n"
-        f"مبلغ بین‌المللی: <b>{price_usdt}</b>\n\n"
-        f"📊 سقف روزانه: <code>{_plan_daily_limit_text(plan.get('daily_download_limit'))}</code>\n"
-        f"📦 حداکثر حجم: <code>{file_size}</code>\n"
-        f"🎞 حداکثر کیفیت: <code>{quality}</code>\n"
-        "⚙️ دانلود هم‌زمان: "
-        f"<code>{int(plan.get('max_concurrent_downloads', 1))}</code>\n"
-        f"🚀 اولویت پردازش: <code>{priority}</code>\n"
-        f"📣 عضویت اجباری: <code>{forced_join}</code>\n"
-        f"↕️ ترتیب نمایش: <code>{int(plan.get('sort_order', 0))}</code>\n\n"
-        f"📝 توضیح فارسی: {description}\n"
-        f"🌐 توضیح انگلیسی: {description_en}"
+        f"{_tr('📦 <b>مشخصات پلن</b>\n\nنام فارسی: <b>')}{html.escape(str(plan['name']))}{_tr('</b>\nنام انگلیسی: <b>')}{html.escape(str(plan.get('name_en') or plan['name']))}{_tr('</b>\nنوع: ')}{plan_type}{_tr('\nوضعیت: <b>')}{status}{_tr('</b>\nمدت: <code>')}{duration}{_tr('</code>\nمبلغ ریالی: <b>')}{price}{_tr('</b>\nمبلغ بین\u200cالمللی: <b>')}{price_usdt}{_tr('</b>\n\n📊 سقف روزانه: <code>')}{_plan_daily_limit_text(plan.get('daily_download_limit'))}{_tr('</code>\n📦 حداکثر حجم: <code>')}{file_size}{_tr('</code>\n🎞 حداکثر کیفیت: <code>')}{quality}{_tr('</code>\n⚙️ دانلود هم\u200cزمان: <code>')}{int(plan.get('max_concurrent_downloads', 1))}{_tr('</code>\n🚀 اولویت پردازش: <code>')}{priority}{_tr('</code>\n📣 عضویت اجباری: <code>')}{forced_join}{_tr('</code>\n↕️ ترتیب نمایش: <code>')}{int(plan.get('sort_order', 0))}{_tr('</code>\n\n📝 توضیح فارسی: ')}{description}{_tr('\n🌐 توضیح انگلیسی: ')}{description_en}"
     )
 
 
@@ -292,62 +261,44 @@ def _plan_create_summary(data: dict) -> str:
     description = html.escape(str(data.get("description") or "—"))
     description_en = html.escape(str(data.get("description_en") or "—"))
     return (
-        "➕ <b>مرور پلن جدید</b>\n\n"
-        f"نام فارسی: <b>{html.escape(str(data['name']))}</b>\n"
-        f"نام انگلیسی: <b>{html.escape(str(data['name_en']))}</b>\n"
-        f"مدت: <code>{int(data['duration_days'])} روز</code>\n"
-        f"مبلغ ریالی: <b>{format_toman(data['price'])}</b>\n"
-        "مبلغ بین‌المللی: "
-        f"<b>{format_usdt(data['price_usdt']) if data.get('price_usdt') is not None else 'غیرفعال'}</b>\n"
-        f"سقف روزانه: <code>{_plan_daily_limit_text(daily_limit)}</code>\n"
-        f"حداکثر حجم: <code>{int(data['max_file_size_mb'])} MB</code>\n"
-        "حداکثر کیفیت: "
-        f"<code>{format_quality_limit(int(data['max_quality']))}</code>\n"
-        "دانلود هم‌زمان: "
-        f"<code>{int(data['max_concurrent_downloads'])}</code>\n"
-        "اولویت پردازش: "
-        f"<code>{'بالا' if data['priority_processing'] else 'عادی'}</code>\n"
-        "عضویت اجباری: "
-        f"<code>{'بله' if data['forced_join_required'] else 'خیر'}</code>\n"
-        f"توضیح فارسی: {description}\n"
-        f"توضیح انگلیسی: {description_en}"
+        f"{_tr('➕ <b>مرور پلن جدید</b>\n\nنام فارسی: <b>')}{html.escape(str(data['name']))}{_tr('</b>\nنام انگلیسی: <b>')}{html.escape(str(data['name_en']))}{_tr('</b>\nمدت: <code>')}{int(data['duration_days'])}{_tr(' روز</code>\nمبلغ ریالی: <b>')}{format_toman(data['price'])}{_tr('</b>\nمبلغ بین\u200cالمللی: <b>')}{(format_usdt(data['price_usdt']) if data.get('price_usdt') is not None else _tr('غیرفعال'))}{_tr('</b>\nسقف روزانه: <code>')}{_plan_daily_limit_text(daily_limit)}{_tr('</code>\nحداکثر حجم: <code>')}{int(data['max_file_size_mb'])}{_tr(' MB</code>\nحداکثر کیفیت: <code>')}{format_quality_limit(int(data['max_quality']))}{_tr('</code>\nدانلود هم\u200cزمان: <code>')}{int(data['max_concurrent_downloads'])}{_tr('</code>\nاولویت پردازش: <code>')}{(_tr('بالا') if data['priority_processing'] else _tr('عادی'))}{_tr('</code>\nعضویت اجباری: <code>')}{(_tr('بله') if data['forced_join_required'] else _tr('خیر'))}{_tr('</code>\nتوضیح فارسی: ')}{description}{_tr('\nتوضیح انگلیسی: ')}{description_en}"
     )
 
 
 def _plan_update_summary(plan: dict, changes: dict) -> str:
     labels = {
-        "name": "نام فارسی",
-        "name_en": "نام انگلیسی",
-        "description": "توضیح",
-        "description_en": "توضیح انگلیسی",
-        "duration_days": "مدت به روز",
-        "price": "مبلغ تومان",
-        "price_usdt": "مبلغ USDT",
-        "daily_download_limit": "سقف روزانه",
-        "max_file_size_mb": "حداکثر حجم MB",
-        "max_quality": "حداکثر کیفیت",
-        "max_concurrent_downloads": "دانلود هم‌زمان",
-        "priority_processing": "اولویت پردازش",
-        "forced_join_required": "عضویت اجباری",
-        "sort_order": "ترتیب نمایش",
-        "is_active": "وضعیت فعال",
-        "is_deleted": "حذف نرم",
+        "name": _tr("نام فارسی"),
+        "name_en": _tr("نام انگلیسی"),
+        "description": _tr("توضیح"),
+        "description_en": _tr("توضیح انگلیسی"),
+        "duration_days": _tr("مدت به روز"),
+        "price": _tr("مبلغ تومان"),
+        "price_usdt": _tr("مبلغ USDT"),
+        "daily_download_limit": _tr("سقف روزانه"),
+        "max_file_size_mb": _tr("حداکثر حجم MB"),
+        "max_quality": _tr("حداکثر کیفیت"),
+        "max_concurrent_downloads": _tr("دانلود هم‌زمان"),
+        "priority_processing": _tr("اولویت پردازش"),
+        "forced_join_required": _tr("عضویت اجباری"),
+        "sort_order": _tr("ترتیب نمایش"),
+        "is_active": _tr("وضعیت فعال"),
+        "is_deleted": _tr("حذف نرم"),
     }
     lines = [
-        "✏️ <b>مرور تغییر پلن</b>",
+        _tr("✏️ <b>مرور تغییر پلن</b>"),
         "",
-        f"پلن: <b>{html.escape(str(plan['name']))}</b>",
+        f"{_tr('پلن: <b>')}{html.escape(str(plan['name']))}</b>",
     ]
 
     for key, value in changes.items():
         if isinstance(value, bool):
-            rendered = "بله" if value else "خیر"
+            rendered = _tr("بله") if value else _tr("خیر")
         elif value is None:
-            rendered = "نامحدود / خالی"
+            rendered = _tr("نامحدود / خالی")
         elif key == "price":
             rendered = format_toman(value)
         elif key == "price_usdt":
-            rendered = "غیرفعال" if value is None else format_usdt(value)
+            rendered = _tr("غیرفعال") if value is None else format_usdt(value)
         else:
             rendered = str(value)
 
@@ -363,9 +314,7 @@ async def _show_plans(message: Message, actor_telegram_id: int) -> None:
     custom_count = sum(not bool(plan.get("is_system")) for plan in plans)
     await message.edit_text(
         (
-            "📦 <b>مدیریت پلن‌ها</b>\n\n"
-            "پلن رایگان همیشه وجود دارد و محدودیت‌هایش قابل ویرایش است.\n"
-            f"تعداد پلن‌های سفارشی: <code>{custom_count}</code>"
+            f"{_tr('📦 <b>مدیریت پلن\u200cها</b>\n\nپلن رایگان همیشه وجود دارد و محدودیت\u200cهایش قابل ویرایش است.\nتعداد پلن\u200cهای سفارشی: <code>')}{custom_count}</code>"
         ),
         parse_mode="HTML",
         reply_markup=build_admin_plans_keyboard(plans),
@@ -404,17 +353,15 @@ async def _show_accounts(
     if not (can_manage_accounts or can_manage_roles):
         return
     accounts = []
-    text = "👮 <b>مدیریت مدیران</b>\n\n"
+    text = _tr("👮 <b>مدیریت مدیران</b>\n\n")
     if can_manage_accounts:
         accounts = await list_admin_accounts(actor_telegram_id)
         active_count = sum(bool(row.get("is_active")) for row in accounts)
         text += (
-            f"تعداد کل: <code>{len(accounts)}</code>\n"
-            f"فعال: <code>{active_count}</code>\n\n"
-            "برای مشاهده یا ویرایش، یک مدیر را انتخاب کنید."
+            f"{_tr('تعداد کل: <code>')}{len(accounts)}{_tr('</code>\nفعال: <code>')}{active_count}{_tr('</code>\n\nبرای مشاهده یا ویرایش، یک مدیر را انتخاب کنید.')}"
         )
     if can_manage_roles:
-        text += "\n\nبرای تنظیم نقش‌ها، «نقش‌ها و دسترسی‌ها» را انتخاب کنید."
+        text += _tr("\n\nبرای تنظیم نقش‌ها، «نقش‌ها و دسترسی‌ها» را انتخاب کنید.")
     await message.edit_text(
         text,
         parse_mode="HTML",
@@ -447,9 +394,9 @@ async def _show_roles(message: Message, actor_telegram_id: int) -> None:
     roles = await list_admin_roles(actor_telegram_id)
     await message.edit_text(
         (
-            "🔐 <b>نقش‌ها و سطح دسترسی</b>\n\n"
+            _tr("🔐 <b>نقش‌ها و سطح دسترسی</b>\n\n"
             "🔒 نقش سیستمی، 🧩 نقش سفارشی\n"
-            "برای مشاهده یا ویرایش، یک نقش را انتخاب کنید."
+            "برای مشاهده یا ویرایش، یک نقش را انتخاب کنید.")
         ),
         parse_mode="HTML",
         reply_markup=build_admin_roles_keyboard(roles),
@@ -483,7 +430,7 @@ def _selected_names(rows: list[dict], selected_codes: set[str]) -> str:
         )
         for row in rows
         if str(row.get("code")) in selected_codes
-    ) or "بدون نقش"
+    ) or _tr("بدون نقش")
 
 
 async def _edit_role_picker(message: Message, data: dict) -> None:
@@ -491,9 +438,9 @@ async def _edit_role_picker(message: Message, data: dict) -> None:
     selected_codes = set(data.get("selected_role_codes", []))
     await message.edit_text(
         (
-            "🔐 <b>انتخاب نقش‌ها</b>\n\n"
+            _tr("🔐 <b>انتخاب نقش‌ها</b>\n\n"
             "هر مدیر می‌تواند هم‌زمان چند نقش داشته باشد. "
-            "روی نقش‌ها بزنید و سپس ادامه را انتخاب کنید."
+            "روی نقش‌ها بزنید و سپس ادامه را انتخاب کنید.")
         ),
         parse_mode="HTML",
         reply_markup=build_role_picker_keyboard(
@@ -510,8 +457,8 @@ async def _edit_permission_picker(message: Message, data: dict) -> None:
     selected_codes = set(data.get("selected_permission_codes", []))
     await message.edit_text(
         (
-            "🔐 <b>انتخاب دسترسی‌ها</b>\n\n"
-            "دسترسی‌های موردنیاز را انتخاب کنید و سپس ادامه را بزنید."
+            _tr("🔐 <b>انتخاب دسترسی‌ها</b>\n\n"
+            "دسترسی‌های موردنیاز را انتخاب کنید و سپس ادامه را بزنید.")
         ),
         parse_mode="HTML",
         reply_markup=build_permission_picker_keyboard(
@@ -571,7 +518,7 @@ async def open_admin_panel(
     context = await _context_or_none(callback.from_user.id)
 
     if context is None:
-        await callback.answer("دسترسی مدیریت ندارید.", show_alert=True)
+        await callback.answer(_tr("دسترسی مدیریت ندارید."), show_alert=True)
         return
 
     await state.clear()
@@ -598,7 +545,7 @@ async def show_application_settings(
     context = await _context_or_none(callback.from_user.id)
 
     if context is None or not _can(context, "settings.view"):
-        await callback.answer("دسترسی مشاهده تنظیمات ندارید.", show_alert=True)
+        await callback.answer(_tr("دسترسی مشاهده تنظیمات ندارید."), show_alert=True)
         return
 
     try:
@@ -607,7 +554,7 @@ async def show_application_settings(
             callback.from_user.id
         )
     except BackendAPIError:
-        await callback.answer("دریافت تنظیمات ممکن نشد.", show_alert=True)
+        await callback.answer(_tr("دریافت تنظیمات ممکن نشد."), show_alert=True)
         return
 
     await callback.message.edit_text(
@@ -635,7 +582,7 @@ async def show_admin_accounts(
     if context is None or not (
         _can(context, "admins.manage") or _can(context, "roles.manage")
     ):
-        await callback.answer("دسترسی مدیریت مدیران ندارید.", show_alert=True)
+        await callback.answer(_tr("دسترسی مدیریت مدیران ندارید."), show_alert=True)
         return
 
     try:
@@ -659,7 +606,7 @@ async def start_add_admin(
     context = await _context_or_none(callback.from_user.id)
 
     if context is None or not _can(context, "admins.manage"):
-        await callback.answer("دسترسی مدیریت مدیران ندارید.", show_alert=True)
+        await callback.answer(_tr("دسترسی مدیریت مدیران ندارید."), show_alert=True)
         return
 
     try:
@@ -678,15 +625,15 @@ async def start_add_admin(
         await state.set_state(AdminManagementStates.waiting_for_admin_id)
         await callback.message.edit_text(
             (
-                "➕ <b>افزودن مدیر</b>\n\n"
+                _tr("➕ <b>افزودن مدیر</b>\n\n"
                 "Telegram ID عددی کاربر را بفرستید.\n"
-                "کاربر باید قبلاً ربات را Start کرده باشد."
+                "کاربر باید قبلاً ربات را Start کرده باشد.")
             ),
             parse_mode="HTML",
             reply_markup=None,
         )
         await callback.message.answer(
-            "Telegram ID را ارسال کنید:",
+            _tr("Telegram ID را ارسال کنید:"),
             reply_markup=ForceReply(selective=True),
         )
         await callback.answer()
@@ -705,14 +652,14 @@ async def receive_admin_id(message: Message, state: FSMContext) -> None:
         target_telegram_id = int(raw_value)
     except ValueError:
         await message.answer(
-            "❌ Telegram ID باید فقط عدد باشد. دوباره ارسال کنید.",
+            _tr("❌ Telegram ID باید فقط عدد باشد. دوباره ارسال کنید."),
             reply_markup=ForceReply(selective=True),
         )
         return
 
     if target_telegram_id <= 0:
         await message.answer(
-            "❌ Telegram ID معتبر نیست. دوباره ارسال کنید.",
+            _tr("❌ Telegram ID معتبر نیست. دوباره ارسال کنید."),
             reply_markup=ForceReply(selective=True),
         )
         return
@@ -723,9 +670,9 @@ async def receive_admin_id(message: Message, state: FSMContext) -> None:
     roles = list(data.get("available_roles", []))
     await message.answer(
         (
-            "🔐 <b>انتخاب نقش‌ها</b>\n\n"
+            _tr("🔐 <b>انتخاب نقش‌ها</b>\n\n"
             "هر مدیر می‌تواند هم‌زمان چند نقش داشته باشد. "
-            "روی نقش‌ها بزنید و سپس ادامه را انتخاب کنید."
+            "روی نقش‌ها بزنید و سپس ادامه را انتخاب کنید.")
         ),
         parse_mode="HTML",
         reply_markup=build_role_picker_keyboard(
@@ -757,7 +704,7 @@ async def toggle_admin_role(
 
         if not selected and not is_superadmin:
             await callback.answer(
-                "برای مدیر معمولی حداقل یک نقش انتخاب کنید.",
+                _tr("برای مدیر معمولی حداقل یک نقش انتخاب کنید."),
                 show_alert=True,
             )
             return
@@ -765,15 +712,15 @@ async def toggle_admin_role(
         await state.set_state(AdminManagementStates.waiting_for_admin_reason)
         await callback.message.edit_text(
             (
-                "📝 <b>دلیل تغییر</b>\n\n"
+                _tr("📝 <b>دلیل تغییر</b>\n\n"
                 "دلیل افزودن یا تغییر دسترسی این مدیر را بنویسید. "
-                "این متن در Audit Log ثبت می‌شود."
+                "این متن در Audit Log ثبت می‌شود.")
             ),
             parse_mode="HTML",
             reply_markup=None,
         )
         await callback.message.answer(
-            "دلیل را ارسال کنید:",
+            _tr("دلیل را ارسال کنید:"),
             reply_markup=ForceReply(selective=True),
         )
         await callback.answer()
@@ -781,7 +728,7 @@ async def toggle_admin_role(
 
     if choice == "super":
         if data.get("workflow") != "admin_create":
-            await callback.answer("این گزینه در این فرم فعال نیست.")
+            await callback.answer(_tr("این گزینه در این فرم فعال نیست."))
             return
 
         await state.update_data(
@@ -795,14 +742,14 @@ async def toggle_admin_role(
     try:
         role_id = int(choice)
     except ValueError:
-        await callback.answer("انتخاب نامعتبر است.", show_alert=True)
+        await callback.answer(_tr("انتخاب نامعتبر است."), show_alert=True)
         return
 
     roles = list(data.get("available_roles", []))
     role = next((row for row in roles if int(row["id"]) == role_id), None)
 
     if role is None:
-        await callback.answer("نقش پیدا نشد.", show_alert=True)
+        await callback.answer(_tr("نقش پیدا نشد."), show_alert=True)
         return
 
     selected = set(data.get("selected_role_codes", []))
@@ -826,7 +773,7 @@ async def show_admin_account_detail(callback: CallbackQuery) -> None:
     context = await _context_or_none(callback.from_user.id)
 
     if context is None or not _can(context, "admins.manage"):
-        await callback.answer("دسترسی مدیریت مدیران ندارید.", show_alert=True)
+        await callback.answer(_tr("دسترسی مدیریت مدیران ندارید."), show_alert=True)
         return
 
     try:
@@ -852,7 +799,7 @@ async def start_edit_admin_roles(
     context = await _context_or_none(callback.from_user.id)
 
     if context is None or not _can(context, "admins.manage"):
-        await callback.answer("دسترسی مدیریت مدیران ندارید.", show_alert=True)
+        await callback.answer(_tr("دسترسی مدیریت مدیران ندارید."), show_alert=True)
         return
 
     target_telegram_id = int(callback.data.rsplit(":", 1)[-1])
@@ -897,7 +844,7 @@ async def start_change_superadmin(
     context = await _context_or_none(callback.from_user.id)
 
     if context is None or not _can(context, "admins.manage"):
-        await callback.answer("دسترسی مدیریت مدیران ندارید.", show_alert=True)
+        await callback.answer(_tr("دسترسی مدیریت مدیران ندارید."), show_alert=True)
         return
 
     target_telegram_id = int(callback.data.rsplit(":", 1)[-1])
@@ -917,14 +864,14 @@ async def start_change_superadmin(
         await state.set_state(AdminManagementStates.waiting_for_admin_reason)
         await callback.message.edit_text(
             (
-                "⚠️ <b>تغییر سطح سوپرادمین</b>\n\n"
-                "دلیل این تغییر حساس را بنویسید."
+                _tr("⚠️ <b>تغییر سطح سوپرادمین</b>\n\n"
+                "دلیل این تغییر حساس را بنویسید.")
             ),
             parse_mode="HTML",
             reply_markup=None,
         )
         await callback.message.answer(
-            "دلیل را ارسال کنید:",
+            _tr("دلیل را ارسال کنید:"),
             reply_markup=ForceReply(selective=True),
         )
         await callback.answer()
@@ -943,7 +890,7 @@ async def start_change_admin_status(
     context = await _context_or_none(callback.from_user.id)
 
     if context is None or not _can(context, "admins.manage"):
-        await callback.answer("دسترسی مدیریت مدیران ندارید.", show_alert=True)
+        await callback.answer(_tr("دسترسی مدیریت مدیران ندارید."), show_alert=True)
         return
 
     target_telegram_id = int(callback.data.rsplit(":", 1)[-1])
@@ -964,14 +911,14 @@ async def start_change_admin_status(
         await state.set_state(AdminManagementStates.waiting_for_admin_reason)
         await callback.message.edit_text(
             (
-                "📝 <b>تغییر وضعیت مدیر</b>\n\n"
-                "دلیل فعال‌سازی یا غیرفعال‌سازی را بنویسید."
+                _tr("📝 <b>تغییر وضعیت مدیر</b>\n\n"
+                "دلیل فعال‌سازی یا غیرفعال‌سازی را بنویسید.")
             ),
             parse_mode="HTML",
             reply_markup=None,
         )
         await callback.message.answer(
-            "دلیل را ارسال کنید:",
+            _tr("دلیل را ارسال کنید:"),
             reply_markup=ForceReply(selective=True),
         )
         await callback.answer()
@@ -988,14 +935,14 @@ async def receive_admin_change_reason(
 
     if len(reason) < 3:
         await message.answer(
-            "❌ دلیل باید حداقل ۳ کاراکتر باشد. دوباره بفرستید.",
+            _tr("❌ دلیل باید حداقل ۳ کاراکتر باشد. دوباره بفرستید."),
             reply_markup=ForceReply(selective=True),
         )
         return
 
     if len(reason) > 500:
         await message.answer(
-            "❌ دلیل حداکثر ۵۰۰ کاراکتر است. خلاصه‌تر بفرستید.",
+            _tr("❌ دلیل حداکثر ۵۰۰ کاراکتر است. خلاصه‌تر بفرستید."),
             reply_markup=ForceReply(selective=True),
         )
         return
@@ -1008,39 +955,25 @@ async def receive_admin_change_reason(
 
     if workflow == "admin_create":
         summary = (
-            "➕ افزودن مدیر جدید\n"
-            f"Telegram ID: <code>{int(data['target_telegram_id'])}</code>\n"
-            "نقش‌ها: "
-            f"<code>{html.escape(_selected_names(roles, selected))}</code>\n"
-            "سوپرادمین: "
-            f"<b>{'بله' if data.get('is_superadmin') else 'خیر'}</b>"
+            f"{_tr('➕ افزودن مدیر جدید\nTelegram ID: <code>')}{int(data['target_telegram_id'])}{_tr('</code>\nنقش\u200cها: <code>')}{html.escape(_selected_names(roles, selected))}{_tr('</code>\nسوپرادمین: <b>')}{(_tr('بله') if data.get('is_superadmin') else _tr('خیر'))}</b>"
         )
     elif workflow == "admin_roles_update":
         summary = (
-            "🔐 ویرایش نقش‌های مدیر\n"
-            f"Telegram ID: <code>{int(data['target_telegram_id'])}</code>\n"
-            "نقش‌های جدید: "
-            f"<code>{html.escape(_selected_names(roles, selected))}</code>"
+            f"{_tr('🔐 ویرایش نقش\u200cهای مدیر\nTelegram ID: <code>')}{int(data['target_telegram_id'])}{_tr('</code>\nنقش\u200cهای جدید: <code>')}{html.escape(_selected_names(roles, selected))}</code>"
         )
     elif workflow == "admin_super_update":
         summary = (
-            "👑 تغییر سطح سوپرادمین\n"
-            f"Telegram ID: <code>{int(data['target_telegram_id'])}</code>\n"
-            f"مقدار جدید: <b>{'بله' if data.get('is_superadmin') else 'خیر'}</b>"
+            f"{_tr('👑 تغییر سطح سوپرادمین\nTelegram ID: <code>')}{int(data['target_telegram_id'])}{_tr('</code>\nمقدار جدید: <b>')}{(_tr('بله') if data.get('is_superadmin') else _tr('خیر'))}</b>"
         )
     else:
         summary = (
-            "🚦 تغییر وضعیت مدیر\n"
-            f"Telegram ID: <code>{int(data['target_telegram_id'])}</code>\n"
-            f"وضعیت جدید: <b>{'فعال' if data.get('is_active') else 'غیرفعال'}</b>"
+            f"{_tr('🚦 تغییر وضعیت مدیر\nTelegram ID: <code>')}{int(data['target_telegram_id'])}{_tr('</code>\nوضعیت جدید: <b>')}{(_tr('فعال') if data.get('is_active') else _tr('غیرفعال'))}</b>"
         )
 
     await state.set_state(AdminManagementStates.confirming_admin_change)
     await message.answer(
         (
-            "<b>مرور تغییر</b>\n\n"
-            f"{summary}\n\n"
-            f"دلیل: {html.escape(reason)}"
+            f"{_tr('<b>مرور تغییر</b>\n\n')}{summary}{_tr('\n\nدلیل: ')}{html.escape(reason)}"
         ),
         parse_mode="HTML",
         reply_markup=build_change_confirmation_keyboard(
@@ -1090,11 +1023,11 @@ async def _apply_admin_change(
 
         await state.clear()
         await callback.message.edit_text(
-            "✅ تغییر با موفقیت ثبت شد.\n\n" + _admin_account_text(account),
+            _tr("✅ تغییر با موفقیت ثبت شد.\n\n") + _admin_account_text(account),
             parse_mode="HTML",
             reply_markup=build_admin_account_detail_keyboard(account),
         )
-        await callback.answer("ثبت شد")
+        await callback.answer(_tr("ثبت شد"))
     except BackendAPIError as exc:
         await callback.answer(_backend_error_text(exc), show_alert=True)
 
@@ -1116,9 +1049,9 @@ async def confirm_admin_change(
             )
             await callback.message.edit_text(
                 (
-                    "🚨 <b>تأیید نهایی تغییر حساس</b>\n\n"
+                    _tr("🚨 <b>تأیید نهایی تغییر حساس</b>\n\n"
                     "این عملیات می‌تواند دسترسی مدیریتی را تغییر دهد. "
-                    "فقط در صورت اطمینان کامل تأیید کنید."
+                    "فقط در صورت اطمینان کامل تأیید کنید.")
                 ),
                 parse_mode="HTML",
                 reply_markup=build_final_danger_confirmation_keyboard(),
@@ -1151,7 +1084,7 @@ async def show_admin_roles(
     context = await _context_or_none(callback.from_user.id)
 
     if context is None or not _can(context, "roles.manage"):
-        await callback.answer("دسترسی مدیریت نقش‌ها ندارید.", show_alert=True)
+        await callback.answer(_tr("دسترسی مدیریت نقش‌ها ندارید."), show_alert=True)
         return
 
     try:
@@ -1173,7 +1106,7 @@ async def start_add_admin_role(
     context = await _context_or_none(callback.from_user.id)
 
     if context is None or not _can(context, "roles.manage"):
-        await callback.answer("دسترسی مدیریت نقش‌ها ندارید.", show_alert=True)
+        await callback.answer(_tr("دسترسی مدیریت نقش‌ها ندارید."), show_alert=True)
         return
 
     await state.clear()
@@ -1181,15 +1114,15 @@ async def start_add_admin_role(
     await state.set_state(AdminManagementStates.waiting_for_role_code)
     await callback.message.edit_text(
         (
-            "➕ <b>ساخت نقش سفارشی</b>\n\n"
+            _tr("➕ <b>ساخت نقش سفارشی</b>\n\n"
             "یک کد انگلیسی یکتا بنویسید؛ مانند:\n"
-            "<code>content_reviewer</code>"
+            "<code>content_reviewer</code>")
         ),
         parse_mode="HTML",
         reply_markup=None,
     )
     await callback.message.answer(
-        "کد نقش را ارسال کنید:",
+        _tr("کد نقش را ارسال کنید:"),
         reply_markup=ForceReply(selective=True),
     )
     await callback.answer()
@@ -1202,8 +1135,8 @@ async def receive_role_code(message: Message, state: FSMContext) -> None:
     if not re.fullmatch(r"[a-z][a-z0-9_.-]{1,99}", code):
         await message.answer(
             (
-                "❌ کد نامعتبر است. با حرف انگلیسی شروع شود و فقط از "
-                "حروف کوچک، عدد، نقطه، خط تیره یا زیرخط استفاده کند."
+                _tr("❌ کد نامعتبر است. با حرف انگلیسی شروع شود و فقط از "
+                "حروف کوچک، عدد، نقطه، خط تیره یا زیرخط استفاده کند.")
             ),
             reply_markup=ForceReply(selective=True),
         )
@@ -1212,7 +1145,7 @@ async def receive_role_code(message: Message, state: FSMContext) -> None:
     await state.update_data(role_code=code)
     await state.set_state(AdminManagementStates.waiting_for_role_name)
     await message.answer(
-        "نام نمایشی نقش را بنویسید؛ مثلاً «بازبین محتوا»: ",
+        _tr("نام نمایشی نقش را بنویسید؛ مثلاً «بازبین محتوا»: "),
         reply_markup=ForceReply(selective=True),
     )
 
@@ -1225,7 +1158,7 @@ async def show_admin_role_detail(callback: CallbackQuery) -> None:
     context = await _context_or_none(callback.from_user.id)
 
     if context is None or not _can(context, "roles.manage"):
-        await callback.answer("دسترسی مدیریت نقش‌ها ندارید.", show_alert=True)
+        await callback.answer(_tr("دسترسی مدیریت نقش‌ها ندارید."), show_alert=True)
         return
 
     try:
@@ -1274,14 +1207,13 @@ async def start_rename_admin_role(
         await state.set_state(AdminManagementStates.waiting_for_role_name)
         await callback.message.edit_text(
             (
-                "✏️ <b>تغییر نام نقش</b>\n\n"
-                f"نام فعلی: <b>{html.escape(str(role['name']))}</b>"
+                f"{_tr('✏️ <b>تغییر نام نقش</b>\n\nنام فعلی: <b>')}{html.escape(str(role['name']))}</b>"
             ),
             parse_mode="HTML",
             reply_markup=None,
         )
         await callback.message.answer(
-            "نام جدید را ارسال کنید:",
+            _tr("نام جدید را ارسال کنید:"),
             reply_markup=ForceReply(selective=True),
         )
         await callback.answer()
@@ -1295,7 +1227,7 @@ async def receive_role_name(message: Message, state: FSMContext) -> None:
 
     if not 2 <= len(name) <= 150:
         await message.answer(
-            "❌ نام نقش باید بین ۲ تا ۱۵۰ کاراکتر باشد.",
+            _tr("❌ نام نقش باید بین ۲ تا ۱۵۰ کاراکتر باشد."),
             reply_markup=ForceReply(selective=True),
         )
         return
@@ -1307,8 +1239,8 @@ async def receive_role_name(message: Message, state: FSMContext) -> None:
         await state.set_state(AdminManagementStates.waiting_for_role_description)
         await message.answer(
             (
-                "توضیح نقش را ارسال کنید. اگر توضیح نمی‌خواهید، "
-                "فقط یک خط تیره <code>-</code> بفرستید."
+                _tr("توضیح نقش را ارسال کنید. اگر توضیح نمی‌خواهید، "
+                "فقط یک خط تیره <code>-</code> بفرستید.")
             ),
             parse_mode="HTML",
             reply_markup=ForceReply(selective=True),
@@ -1317,7 +1249,7 @@ async def receive_role_name(message: Message, state: FSMContext) -> None:
 
     await state.set_state(AdminManagementStates.waiting_for_role_reason)
     await message.answer(
-        "دلیل تغییر نام را ارسال کنید:",
+        _tr("دلیل تغییر نام را ارسال کنید:"),
         reply_markup=ForceReply(selective=True),
     )
 
@@ -1345,15 +1277,15 @@ async def start_edit_role_description(
         )
         await callback.message.edit_text(
             (
-                "📝 <b>تغییر توضیح نقش</b>\n\n"
+                _tr("📝 <b>تغییر توضیح نقش</b>\n\n"
                 "توضیح جدید را بفرستید؛ برای حذف توضیح، فقط "
-                "یک خط تیره <code>-</code> ارسال کنید."
+                "یک خط تیره <code>-</code> ارسال کنید.")
             ),
             parse_mode="HTML",
             reply_markup=None,
         )
         await callback.message.answer(
-            "توضیح جدید را ارسال کنید:",
+            _tr("توضیح جدید را ارسال کنید:"),
             reply_markup=ForceReply(selective=True),
         )
         await callback.answer()
@@ -1375,7 +1307,7 @@ async def receive_role_description(
 
     if len(raw_description) > 2000:
         await message.answer(
-            "❌ توضیح نقش حداکثر ۲۰۰۰ کاراکتر است.",
+            _tr("❌ توضیح نقش حداکثر ۲۰۰۰ کاراکتر است."),
             reply_markup=ForceReply(selective=True),
         )
         return
@@ -1403,8 +1335,8 @@ async def receive_role_description(
         )
         await message.answer(
             (
-                "🔐 <b>انتخاب دسترسی‌ها</b>\n\n"
-                "دسترسی‌های موردنیاز را انتخاب کنید و سپس ادامه را بزنید."
+                _tr("🔐 <b>انتخاب دسترسی‌ها</b>\n\n"
+                "دسترسی‌های موردنیاز را انتخاب کنید و سپس ادامه را بزنید.")
             ),
             parse_mode="HTML",
             reply_markup=build_permission_picker_keyboard(
@@ -1416,7 +1348,7 @@ async def receive_role_description(
 
     await state.set_state(AdminManagementStates.waiting_for_role_reason)
     await message.answer(
-        "دلیل تغییر توضیح را ارسال کنید:",
+        _tr("دلیل تغییر توضیح را ارسال کنید:"),
         reply_markup=ForceReply(selective=True),
     )
 
@@ -1470,7 +1402,7 @@ async def toggle_role_permission(
 
         if not selected:
             await callback.answer(
-                "حداقل یک دسترسی انتخاب کنید.",
+                _tr("حداقل یک دسترسی انتخاب کنید."),
                 show_alert=True,
             )
             return
@@ -1478,15 +1410,15 @@ async def toggle_role_permission(
         await state.set_state(AdminManagementStates.waiting_for_role_reason)
         await callback.message.edit_text(
             (
-                "📝 <b>دلیل تغییر</b>\n\n"
+                _tr("📝 <b>دلیل تغییر</b>\n\n"
                 "دلیل ساخت یا تغییر این نقش را بنویسید. "
-                "این متن در Audit Log ثبت می‌شود."
+                "این متن در Audit Log ثبت می‌شود.")
             ),
             parse_mode="HTML",
             reply_markup=None,
         )
         await callback.message.answer(
-            "دلیل را ارسال کنید:",
+            _tr("دلیل را ارسال کنید:"),
             reply_markup=ForceReply(selective=True),
         )
         await callback.answer()
@@ -1495,7 +1427,7 @@ async def toggle_role_permission(
     try:
         permission_id = int(choice)
     except ValueError:
-        await callback.answer("انتخاب نامعتبر است.", show_alert=True)
+        await callback.answer(_tr("انتخاب نامعتبر است."), show_alert=True)
         return
 
     permissions = list(data.get("available_permissions", []))
@@ -1505,7 +1437,7 @@ async def toggle_role_permission(
     )
 
     if permission is None:
-        await callback.answer("دسترسی پیدا نشد.", show_alert=True)
+        await callback.answer(_tr("دسترسی پیدا نشد."), show_alert=True)
         return
 
     selected = set(data.get("selected_permission_codes", []))
@@ -1536,7 +1468,7 @@ async def start_change_role_status(
 
         if role.get("is_system"):
             await callback.answer(
-                "نقش سیستمی قابل غیرفعال‌سازی نیست.",
+                _tr("نقش سیستمی قابل غیرفعال‌سازی نیست."),
                 show_alert=True,
             )
             return
@@ -1550,11 +1482,11 @@ async def start_change_role_status(
         )
         await state.set_state(AdminManagementStates.waiting_for_role_reason)
         await callback.message.edit_text(
-            "📝 دلیل تغییر وضعیت این نقش را بنویسید.",
+            _tr("📝 دلیل تغییر وضعیت این نقش را بنویسید."),
             reply_markup=None,
         )
         await callback.message.answer(
-            "دلیل را ارسال کنید:",
+            _tr("دلیل را ارسال کنید:"),
             reply_markup=ForceReply(selective=True),
         )
         await callback.answer()
@@ -1571,7 +1503,7 @@ async def receive_role_change_reason(
 
     if not 3 <= len(reason) <= 500:
         await message.answer(
-            "❌ دلیل باید بین ۳ تا ۵۰۰ کاراکتر باشد.",
+            _tr("❌ دلیل باید بین ۳ تا ۵۰۰ کاراکتر باشد."),
             reply_markup=ForceReply(selective=True),
         )
         return
@@ -1583,42 +1515,30 @@ async def receive_role_change_reason(
 
     if workflow == "role_create":
         summary = (
-            "➕ ساخت نقش سفارشی\n"
-            f"نام: <b>{html.escape(str(data['role_name']))}</b>\n"
-            f"کد: <code>{html.escape(str(data['role_code']))}</code>\n"
-            "تعداد دسترسی‌ها: "
-            f"<code>{len(data.get('selected_permission_codes', []))}</code>"
+            f"{_tr('➕ ساخت نقش سفارشی\nنام: <b>')}{html.escape(str(data['role_name']))}{_tr('</b>\nکد: <code>')}{html.escape(str(data['role_code']))}{_tr('</code>\nتعداد دسترسی\u200cها: <code>')}{len(data.get('selected_permission_codes', []))}</code>"
         )
     elif workflow == "role_name_update":
         summary = (
-            f"✏️ تغییر نام نقش <code>{html.escape(str(role['code']))}</code>\n"
-            f"نام جدید: <b>{html.escape(str(data['role_name']))}</b>"
+            f"{_tr('✏️ تغییر نام نقش <code>')}{html.escape(str(role['code']))}{_tr('</code>\nنام جدید: <b>')}{html.escape(str(data['role_name']))}</b>"
         )
     elif workflow == "role_description_update":
-        description = data.get("role_description") or "بدون توضیح"
+        description = data.get("role_description") or _tr("بدون توضیح")
         summary = (
-            f"📝 تغییر توضیح نقش <code>{html.escape(str(role['code']))}</code>\n"
-            f"توضیح جدید: {html.escape(str(description))}"
+            f"{_tr('📝 تغییر توضیح نقش <code>')}{html.escape(str(role['code']))}{_tr('</code>\nتوضیح جدید: ')}{html.escape(str(description))}"
         )
     elif workflow == "role_permissions_update":
         summary = (
-            f"🔐 تغییر دسترسی‌های نقش <code>{html.escape(str(role['code']))}</code>\n"
-            "تعداد دسترسی‌های جدید: "
-            f"<code>{len(data.get('selected_permission_codes', []))}</code>"
+            f"{_tr('🔐 تغییر دسترسی\u200cهای نقش <code>')}{html.escape(str(role['code']))}{_tr('</code>\nتعداد دسترسی\u200cهای جدید: <code>')}{len(data.get('selected_permission_codes', []))}</code>"
         )
     else:
         summary = (
-            f"🚦 تغییر وضعیت نقش <code>{html.escape(str(role['code']))}</code>\n"
-            "وضعیت جدید: "
-            f"<b>{'فعال' if data.get('role_is_active') else 'غیرفعال'}</b>"
+            f"{_tr('🚦 تغییر وضعیت نقش <code>')}{html.escape(str(role['code']))}{_tr('</code>\nوضعیت جدید: <b>')}{(_tr('فعال') if data.get('role_is_active') else _tr('غیرفعال'))}</b>"
         )
 
     await state.set_state(AdminManagementStates.confirming_role_change)
     await message.answer(
         (
-            "<b>مرور تغییر نقش</b>\n\n"
-            f"{summary}\n\n"
-            f"دلیل: {html.escape(reason)}"
+            f"{_tr('<b>مرور تغییر نقش</b>\n\n')}{summary}{_tr('\n\nدلیل: ')}{html.escape(reason)}"
         ),
         parse_mode="HTML",
         reply_markup=build_change_confirmation_keyboard(dangerous=False),
@@ -1675,11 +1595,11 @@ async def confirm_role_change(
 
         await state.clear()
         await callback.message.edit_text(
-            "✅ تغییر نقش ثبت شد.\n\n" + _admin_role_text(role),
+            _tr("✅ تغییر نقش ثبت شد.\n\n") + _admin_role_text(role),
             parse_mode="HTML",
             reply_markup=build_admin_role_detail_keyboard(role),
         )
-        await callback.answer("ثبت شد")
+        await callback.answer(_tr("ثبت شد"))
     except BackendAPIError as exc:
         await callback.answer(_backend_error_text(exc), show_alert=True)
 
@@ -1695,7 +1615,7 @@ async def show_admin_plans(
     context = await _context_or_none(callback.from_user.id)
 
     if context is None or not _can(context, "plans.manage"):
-        await callback.answer("دسترسی مدیریت پلن‌ها ندارید.", show_alert=True)
+        await callback.answer(_tr("دسترسی مدیریت پلن‌ها ندارید."), show_alert=True)
         return
 
     try:
@@ -1714,7 +1634,7 @@ async def show_admin_plan_detail(callback: CallbackQuery) -> None:
     context = await _context_or_none(callback.from_user.id)
 
     if context is None or not _can(context, "plans.manage"):
-        await callback.answer("دسترسی مدیریت پلن‌ها ندارید.", show_alert=True)
+        await callback.answer(_tr("دسترسی مدیریت پلن‌ها ندارید."), show_alert=True)
         return
 
     try:
@@ -1740,7 +1660,7 @@ async def start_create_plan(
     context = await _context_or_none(callback.from_user.id)
 
     if context is None or not _can(context, "plans.manage"):
-        await callback.answer("دسترسی ایجاد پلن ندارید.", show_alert=True)
+        await callback.answer(_tr("دسترسی ایجاد پلن ندارید."), show_alert=True)
         return
 
     await state.clear()
@@ -1748,14 +1668,14 @@ async def start_create_plan(
     await state.set_state(AdminManagementStates.waiting_for_plan_name)
     await callback.message.edit_text(
         (
-            "➕ <b>ایجاد پلن جدید</b>\n\n"
-            "نام نمایشی پلن را ارسال کنید؛ مثلاً «ویژه ۴۵ روزه»."
+            _tr("➕ <b>ایجاد پلن جدید</b>\n\n"
+            "نام نمایشی پلن را ارسال کنید؛ مثلاً «ویژه ۴۵ روزه».")
         ),
         parse_mode="HTML",
         reply_markup=None,
     )
     await callback.message.answer(
-        "نام پلن را بفرستید:",
+        _tr("نام پلن را بفرستید:"),
         reply_markup=ForceReply(selective=True),
     )
     await callback.answer()
@@ -1767,7 +1687,7 @@ async def receive_plan_name(message: Message, state: FSMContext) -> None:
 
     if not 2 <= len(name) <= 100:
         await message.answer(
-            "❌ نام پلن باید بین ۲ تا ۱۰۰ کاراکتر باشد.",
+            _tr("❌ نام پلن باید بین ۲ تا ۱۰۰ کاراکتر باشد."),
             reply_markup=ForceReply(selective=True),
         )
         return
@@ -1776,8 +1696,8 @@ async def receive_plan_name(message: Message, state: FSMContext) -> None:
     await state.set_state(AdminManagementStates.waiting_for_plan_name_en)
     await message.answer(
         (
-            "🌐 نام انگلیسی همین پلن را وارد کنید؛ "
-            "مثلاً Silver 30 Days:"
+            _tr("🌐 نام انگلیسی همین پلن را وارد کنید؛ "
+            "مثلاً Silver 30 Days:")
         ),
         reply_markup=ForceReply(selective=True),
     )
@@ -1790,8 +1710,8 @@ async def receive_plan_name_en(message: Message, state: FSMContext) -> None:
     if not 2 <= len(name_en) <= 100 or not re.search(r"[A-Za-z]", name_en):
         await message.answer(
             (
-                "❌ نام انگلیسی باید بین ۲ تا ۱۰۰ کاراکتر و "
-                "دارای حداقل یک حرف انگلیسی باشد."
+                _tr("❌ نام انگلیسی باید بین ۲ تا ۱۰۰ کاراکتر و "
+                "دارای حداقل یک حرف انگلیسی باشد.")
             ),
             reply_markup=ForceReply(selective=True),
         )
@@ -1800,7 +1720,7 @@ async def receive_plan_name_en(message: Message, state: FSMContext) -> None:
     await state.update_data(name_en=name_en)
     await state.set_state(AdminManagementStates.waiting_for_plan_duration)
     await message.answer(
-        "📅 مدت اعتبار پلن را به روز وارد کنید؛ مثلاً 30:",
+        _tr("📅 مدت اعتبار پلن را به روز وارد کنید؛ مثلاً 30:"),
         reply_markup=ForceReply(selective=True),
     )
 
@@ -1811,7 +1731,7 @@ async def receive_plan_duration(message: Message, state: FSMContext) -> None:
 
     if duration_days is None or not 1 <= duration_days <= 3650:
         await message.answer(
-            "❌ مدت باید عددی بین ۱ تا ۳۶۵۰ روز باشد.",
+            _tr("❌ مدت باید عددی بین ۱ تا ۳۶۵۰ روز باشد."),
             reply_markup=ForceReply(selective=True),
         )
         return
@@ -1819,7 +1739,7 @@ async def receive_plan_duration(message: Message, state: FSMContext) -> None:
     await state.update_data(duration_days=duration_days)
     await state.set_state(AdminManagementStates.waiting_for_plan_price)
     await message.answer(
-        "💰 مبلغ پلن را به تومان وارد کنید؛ مثلاً 79000:",
+        _tr("💰 مبلغ پلن را به تومان وارد کنید؛ مثلاً 79000:"),
         reply_markup=ForceReply(selective=True),
     )
 
@@ -1830,7 +1750,7 @@ async def receive_plan_price(message: Message, state: FSMContext) -> None:
 
     if price is None or price <= 0 or price > 9_999_999_999:
         await message.answer(
-            "❌ مبلغ باید یک عدد صحیح بزرگ‌تر از صفر باشد.",
+            _tr("❌ مبلغ باید یک عدد صحیح بزرگ‌تر از صفر باشد."),
             reply_markup=ForceReply(selective=True),
         )
         return
@@ -1839,8 +1759,8 @@ async def receive_plan_price(message: Message, state: FSMContext) -> None:
     await state.set_state(AdminManagementStates.waiting_for_plan_price_usdt)
     await message.answer(
         (
-            "💵 مبلغ بین‌المللی همین پلن را به USDT وارد کنید؛ مثلاً 2.5.\n"
-            "اگر فعلاً نمی‌خواهید این پلن برای کاربران انگلیسی نمایش داده شود، - بفرستید:"
+            _tr("💵 مبلغ بین‌المللی همین پلن را به USDT وارد کنید؛ مثلاً 2.5.\n"
+            "اگر فعلاً نمی‌خواهید این پلن برای کاربران انگلیسی نمایش داده شود، - بفرستید:")
         ),
         reply_markup=ForceReply(selective=True),
     )
@@ -1855,7 +1775,7 @@ async def receive_plan_price_usdt(message: Message, state: FSMContext) -> None:
         price_usdt is None or price_usdt <= 0 or price_usdt > Decimal("99999999")
     ):
         await message.answer(
-            "❌ مبلغ USDT باید عددی بزرگ‌تر از صفر با حداکثر ۴ رقم اعشار باشد؛ یا - بفرستید.",
+            _tr("❌ مبلغ USDT باید عددی بزرگ‌تر از صفر با حداکثر ۴ رقم اعشار باشد؛ یا - بفرستید."),
             reply_markup=ForceReply(selective=True),
         )
         return
@@ -1866,8 +1786,8 @@ async def receive_plan_price_usdt(message: Message, state: FSMContext) -> None:
     await state.set_state(AdminManagementStates.waiting_for_plan_daily_limit)
     await message.answer(
         (
-            "📊 حداکثر خروجی موفق روزانه را وارد کنید.\n"
-            "برای نامحدود عدد 0 را بفرستید:"
+            _tr("📊 حداکثر خروجی موفق روزانه را وارد کنید.\n"
+            "برای نامحدود عدد 0 را بفرستید:")
         ),
         reply_markup=ForceReply(selective=True),
     )
@@ -1879,7 +1799,7 @@ async def receive_plan_daily_limit(message: Message, state: FSMContext) -> None:
 
     if daily_limit is None or daily_limit > 1_000_000:
         await message.answer(
-            "❌ یک عدد بین ۰ تا ۱٬۰۰۰٬۰۰۰ وارد کنید.",
+            _tr("❌ یک عدد بین ۰ تا ۱٬۰۰۰٬۰۰۰ وارد کنید."),
             reply_markup=ForceReply(selective=True),
         )
         return
@@ -1889,7 +1809,7 @@ async def receive_plan_daily_limit(message: Message, state: FSMContext) -> None:
     )
     await state.set_state(AdminManagementStates.waiting_for_plan_file_size)
     await message.answer(
-        "📦 حداکثر حجم هر خروجی را به MB وارد کنید (۱ تا ۱۹۰۰):",
+        _tr("📦 حداکثر حجم هر خروجی را به MB وارد کنید (۱ تا ۱۹۰۰):"),
         reply_markup=ForceReply(selective=True),
     )
 
@@ -1900,7 +1820,7 @@ async def receive_plan_file_size(message: Message, state: FSMContext) -> None:
 
     if file_size is None or not 1 <= file_size <= 1900:
         await message.answer(
-            "❌ حجم باید عددی بین ۱ تا ۱۹۰۰ مگابایت باشد.",
+            _tr("❌ حجم باید عددی بین ۱ تا ۱۹۰۰ مگابایت باشد."),
             reply_markup=ForceReply(selective=True),
         )
         return
@@ -1908,7 +1828,7 @@ async def receive_plan_file_size(message: Message, state: FSMContext) -> None:
     await state.update_data(max_file_size_mb=file_size)
     await state.set_state(AdminManagementStates.selecting_plan_quality)
     await message.answer(
-        "🎞 حداکثر کیفیت مجاز را انتخاب کنید:",
+        _tr("🎞 حداکثر کیفیت مجاز را انتخاب کنید:"),
         reply_markup=build_plan_quality_keyboard(mode="create"),
     )
 
@@ -1928,7 +1848,7 @@ async def select_plan_quality(
     await state.update_data(max_quality=quality)
     await state.set_state(AdminManagementStates.selecting_plan_concurrency)
     await callback.message.edit_text(
-        "⚙️ تعداد دانلود هم‌زمان را انتخاب کنید:",
+        _tr("⚙️ تعداد دانلود هم‌زمان را انتخاب کنید:"),
         reply_markup=build_plan_concurrency_keyboard(mode="create"),
     )
     await callback.answer()
@@ -1949,7 +1869,7 @@ async def select_plan_concurrency(
     await state.update_data(max_concurrent_downloads=concurrency)
     await state.set_state(AdminManagementStates.selecting_plan_priority)
     await callback.message.edit_text(
-        "🚀 آیا این پلن اولویت پردازش بالا داشته باشد؟",
+        _tr("🚀 آیا این پلن اولویت پردازش بالا داشته باشد؟"),
         reply_markup=build_plan_boolean_keyboard(
             mode="create",
             field="priority",
@@ -1973,7 +1893,7 @@ async def select_plan_priority(
     await state.update_data(priority_processing=enabled)
     await state.set_state(AdminManagementStates.selecting_plan_forced_join)
     await callback.message.edit_text(
-        "📣 آیا کاربران این پلن مشمول عضویت اجباری باشند؟",
+        _tr("📣 آیا کاربران این پلن مشمول عضویت اجباری باشند؟"),
         reply_markup=build_plan_boolean_keyboard(
             mode="create",
             field="forced_join",
@@ -1997,11 +1917,11 @@ async def select_plan_forced_join(
     await state.update_data(forced_join_required=enabled)
     await state.set_state(AdminManagementStates.waiting_for_plan_description)
     await callback.message.edit_text(
-        "📝 توضیح کوتاه پلن را بفرستید؛ برای بدون توضیح، فقط - بفرستید.",
+        _tr("📝 توضیح کوتاه پلن را بفرستید؛ برای بدون توضیح، فقط - بفرستید."),
         reply_markup=None,
     )
     await callback.message.answer(
-        "توضیح پلن:",
+        _tr("توضیح پلن:"),
         reply_markup=ForceReply(selective=True),
     )
     await callback.answer()
@@ -2013,7 +1933,7 @@ async def receive_plan_description(message: Message, state: FSMContext) -> None:
 
     if len(description) > 2000:
         await message.answer(
-            "❌ توضیح پلن حداکثر ۲۰۰۰ کاراکتر است.",
+            _tr("❌ توضیح پلن حداکثر ۲۰۰۰ کاراکتر است."),
             reply_markup=ForceReply(selective=True),
         )
         return
@@ -2021,7 +1941,7 @@ async def receive_plan_description(message: Message, state: FSMContext) -> None:
     await state.update_data(description=None if description == "-" else description)
     await state.set_state(AdminManagementStates.waiting_for_plan_description_en)
     await message.answer(
-        "🌐 توضیح انگلیسی پلن را بفرستید؛ برای بدون توضیح، فقط - بفرستید.",
+        _tr("🌐 توضیح انگلیسی پلن را بفرستید؛ برای بدون توضیح، فقط - بفرستید."),
         reply_markup=ForceReply(selective=True),
     )
 
@@ -2031,13 +1951,13 @@ async def receive_plan_description_en(message: Message, state: FSMContext) -> No
     description_en = str(message.text or "").strip()
     if len(description_en) > 2000:
         await message.answer(
-            "❌ توضیح انگلیسی پلن حداکثر ۲۰۰۰ کاراکتر است.",
+            _tr("❌ توضیح انگلیسی پلن حداکثر ۲۰۰۰ کاراکتر است."),
             reply_markup=ForceReply(selective=True),
         )
         return
     if description_en != "-" and re.search(r"[\u0600-\u06ff]", description_en):
         await message.answer(
-            "❌ توضیح انگلیسی نباید شامل متن فارسی باشد.",
+            _tr("❌ توضیح انگلیسی نباید شامل متن فارسی باشد."),
             reply_markup=ForceReply(selective=True),
         )
         return
@@ -2085,15 +2005,15 @@ async def confirm_create_plan(
         plan = await create_admin_plan(
             actor_telegram_id=callback.from_user.id,
             plan=plan_payload,
-            reason="ایجاد پلن از پنل مدیریت تلگرام",
+            reason=_tr("ایجاد پلن از پنل مدیریت تلگرام"),
         )
         await state.clear()
         await callback.message.edit_text(
-            "✅ پلن با موفقیت ایجاد شد.\n\n" + _admin_plan_text(plan),
+            _tr("✅ پلن با موفقیت ایجاد شد.\n\n") + _admin_plan_text(plan),
             parse_mode="HTML",
             reply_markup=build_admin_plan_detail_keyboard(plan),
         )
-        await callback.answer("پلن ایجاد شد")
+        await callback.answer(_tr("پلن ایجاد شد"))
     except BackendAPIError as exc:
         await callback.answer(_backend_error_text(exc), show_alert=True)
 
@@ -2130,30 +2050,30 @@ async def start_edit_plan_field(
 
         if field == "quality":
             await callback.message.edit_text(
-                "🎞 حداکثر کیفیت جدید را انتخاب کنید:",
+                _tr("🎞 حداکثر کیفیت جدید را انتخاب کنید:"),
                 reply_markup=build_plan_quality_keyboard(mode="edit"),
             )
         elif field == "concurrency":
             await callback.message.edit_text(
-                "⚙️ تعداد دانلود هم‌زمان جدید را انتخاب کنید:",
+                _tr("⚙️ تعداد دانلود هم‌زمان جدید را انتخاب کنید:"),
                 reply_markup=build_plan_concurrency_keyboard(mode="edit"),
             )
         else:
             prompts = {
-                "name": "نام فارسی جدید پلن را بفرستید:",
-                "name_en": "نام انگلیسی جدید پلن را بفرستید؛ مثلاً Silver 30 Days:",
-                "description": "توضیح جدید را بفرستید؛ برای حذف توضیح، - بفرستید:",
-                "description_en": "توضیح انگلیسی جدید را بفرستید؛ برای حذف توضیح، - بفرستید:",
-                "duration": "مدت جدید را به روز وارد کنید:",
-                "price": "مبلغ جدید را به تومان وارد کنید:",
-                "usdt": "مبلغ جدید USDT را وارد کنید؛ برای غیرفعال‌کردن فروش بین‌المللی - بفرستید:",
-                "daily": "سقف روزانه جدید را بفرستید؛ 0 یعنی نامحدود:",
-                "size": "حداکثر حجم جدید را به MB وارد کنید (۱ تا ۱۹۰۰):",
-                "order": "ترتیب نمایش را وارد کنید؛ عدد کوچک‌تر بالاتر نمایش داده می‌شود:",
+                "name": _tr("نام فارسی جدید پلن را بفرستید:"),
+                "name_en": _tr("نام انگلیسی جدید پلن را بفرستید؛ مثلاً Silver 30 Days:"),
+                "description": _tr("توضیح جدید را بفرستید؛ برای حذف توضیح، - بفرستید:"),
+                "description_en": _tr("توضیح انگلیسی جدید را بفرستید؛ برای حذف توضیح، - بفرستید:"),
+                "duration": _tr("مدت جدید را به روز وارد کنید:"),
+                "price": _tr("مبلغ جدید را به تومان وارد کنید:"),
+                "usdt": _tr("مبلغ جدید USDT را وارد کنید؛ برای غیرفعال‌کردن فروش بین‌المللی - بفرستید:"),
+                "daily": _tr("سقف روزانه جدید را بفرستید؛ 0 یعنی نامحدود:"),
+                "size": _tr("حداکثر حجم جدید را به MB وارد کنید (۱ تا ۱۹۰۰):"),
+                "order": _tr("ترتیب نمایش را وارد کنید؛ عدد کوچک‌تر بالاتر نمایش داده می‌شود:"),
             }
             await callback.message.edit_text(prompts[field], reply_markup=None)
             await callback.message.answer(
-                "مقدار جدید را ارسال کنید:",
+                _tr("مقدار جدید را ارسال کنید:"),
                 reply_markup=ForceReply(selective=True),
             )
 
@@ -2179,7 +2099,7 @@ async def receive_plan_edit_value(message: Message, state: FSMContext) -> None:
         if 2 <= len(normalized_name) <= 100:
             changes["name"] = normalized_name
         else:
-            error = "نام فارسی باید بین ۲ تا ۱۰۰ کاراکتر باشد."
+            error = _tr("نام فارسی باید بین ۲ تا ۱۰۰ کاراکتر باشد.")
     elif field == "name_en":
         normalized_name = " ".join(raw_value.split())
         if 2 <= len(normalized_name) <= 100 and re.search(
@@ -2189,45 +2109,45 @@ async def receive_plan_edit_value(message: Message, state: FSMContext) -> None:
             changes["name_en"] = normalized_name
         else:
             error = (
-                "نام انگلیسی باید بین ۲ تا ۱۰۰ کاراکتر و "
-                "دارای حداقل یک حرف انگلیسی باشد."
+                _tr("نام انگلیسی باید بین ۲ تا ۱۰۰ کاراکتر و "
+                "دارای حداقل یک حرف انگلیسی باشد.")
             )
     elif field == "description":
         if len(raw_value) <= 2000:
             changes["description"] = None if raw_value == "-" else raw_value
         else:
-            error = "توضیح حداکثر ۲۰۰۰ کاراکتر است."
+            error = _tr("توضیح حداکثر ۲۰۰۰ کاراکتر است.")
     elif field == "description_en":
         if re.search(r"[\u0600-\u06ff]", raw_value):
-            error = "توضیح انگلیسی نباید شامل متن فارسی باشد."
+            error = _tr("توضیح انگلیسی نباید شامل متن فارسی باشد.")
         elif len(raw_value) <= 2000:
             changes["description_en"] = None if raw_value == "-" else raw_value
         else:
-            error = "توضیح انگلیسی حداکثر ۲۰۰۰ کاراکتر است."
+            error = _tr("توضیح انگلیسی حداکثر ۲۰۰۰ کاراکتر است.")
     elif field == "usdt":
         if raw_value in {"-", "۰", "0"}:
             changes["price_usdt"] = None
         else:
             amount = _parse_plan_decimal(raw_value)
             if amount is None or amount <= 0 or amount > Decimal("99999999"):
-                error = "مبلغ USDT معتبر نیست؛ حداکثر ۴ رقم اعشار مجاز است."
+                error = _tr("مبلغ USDT معتبر نیست؛ حداکثر ۴ رقم اعشار مجاز است.")
             else:
                 changes["price_usdt"] = str(amount)
     else:
         number = _parse_plan_integer(raw_value)
 
         if number is None:
-            error = "مقدار باید فقط عدد باشد."
+            error = _tr("مقدار باید فقط عدد باشد.")
         elif field == "duration" and not 1 <= number <= 3650:
-            error = "مدت باید بین ۱ تا ۳۶۵۰ روز باشد."
+            error = _tr("مدت باید بین ۱ تا ۳۶۵۰ روز باشد.")
         elif field == "price" and number > 9_999_999_999:
-            error = "مبلغ واردشده بیش از حد مجاز است."
+            error = _tr("مبلغ واردشده بیش از حد مجاز است.")
         elif field == "daily" and number > 1_000_000:
-            error = "سقف روزانه بیش از حد مجاز است."
+            error = _tr("سقف روزانه بیش از حد مجاز است.")
         elif field == "size" and not 1 <= number <= 1900:
-            error = "حجم باید بین ۱ تا ۱۹۰۰ مگابایت باشد."
+            error = _tr("حجم باید بین ۱ تا ۱۹۰۰ مگابایت باشد.")
         elif field == "order" and number > 100_000:
-            error = "ترتیب نمایش باید بین ۰ تا ۱۰۰٬۰۰۰ باشد."
+            error = _tr("ترتیب نمایش باید بین ۰ تا ۱۰۰٬۰۰۰ باشد.")
         elif field == "duration":
             changes["duration_days"] = number
         elif field == "price":
@@ -2273,7 +2193,7 @@ async def select_plan_edit_choice(
     expected_field = str(data.get("plan_edit_field") or "")
 
     if field != expected_field:
-        await callback.answer("این فرم منقضی شده است.", show_alert=True)
+        await callback.answer(_tr("این فرم منقضی شده است."), show_alert=True)
         return
 
     changes = {
@@ -2359,7 +2279,7 @@ async def start_soft_delete_plan(
         await state.set_state(AdminManagementStates.confirming_plan_update)
         await callback.message.edit_text(
             (
-                "⚠️ این عملیات پلن را غیرفعال و از فهرست فروش مخفی می‌کند.\n\n"
+                _tr("⚠️ این عملیات پلن را غیرفعال و از فهرست فروش مخفی می‌کند.\n\n")
                 + _plan_update_summary(plan, changes)
             ),
             parse_mode="HTML",
@@ -2389,7 +2309,7 @@ async def confirm_plan_update(
             actor_telegram_id=callback.from_user.id,
             plan_id=int(data["plan_id"]),
             changes=changes,
-            reason="ویرایش پلن از پنل مدیریت تلگرام",
+            reason=_tr("ویرایش پلن از پنل مدیریت تلگرام"),
         )
         await state.clear()
 
@@ -2397,12 +2317,12 @@ async def confirm_plan_update(
             await _show_plans(callback.message, callback.from_user.id)
         else:
             await callback.message.edit_text(
-                "✅ تغییر پلن ثبت شد.\n\n" + _admin_plan_text(plan),
+                _tr("✅ تغییر پلن ثبت شد.\n\n") + _admin_plan_text(plan),
                 parse_mode="HTML",
                 reply_markup=build_admin_plan_detail_keyboard(plan),
             )
 
-        await callback.answer("ثبت شد")
+        await callback.answer(_tr("ثبت شد"))
     except BackendAPIError as exc:
         await callback.answer(_backend_error_text(exc), show_alert=True)
 
@@ -2429,7 +2349,7 @@ async def cancel_plan_workflow(
         else:
             await _show_plans(callback.message, callback.from_user.id)
 
-        await callback.answer("لغو شد")
+        await callback.answer(_tr("لغو شد"))
     except BackendAPIError as exc:
         await callback.answer(_backend_error_text(exc), show_alert=True)
 
@@ -2452,7 +2372,7 @@ async def cancel_admin_workflow(
         else:
             await _show_accounts(callback.message, callback.from_user.id)
 
-        await callback.answer("لغو شد")
+        await callback.answer(_tr("لغو شد"))
     except BackendAPIError as exc:
         await callback.answer(_backend_error_text(exc), show_alert=True)
 
@@ -2467,7 +2387,7 @@ async def close_admin_panel(
 
     if isinstance(callback.message, Message):
         await callback.message.edit_text(
-            "پنل مدیریت بسته شد.",
+            _tr("پنل مدیریت بسته شد."),
             reply_markup=build_home_keyboard(
                 include_admin=context is not None,
             ),

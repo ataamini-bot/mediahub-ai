@@ -15,6 +15,9 @@ from app.workers.celery_app import celery_app
 
 
 SERVICE_LABELS = {
+    "bot": "Bot polling", "telegram_api": "Local Telegram API",
+    "celery_queue": "Celery queue", "disk": "Disk", "ram": "RAM",
+    "cpu": "CPU", "download_errors": "Download errors",
     "backend": "Backend",
     "worker": "Worker",
     "postgres": "PostgreSQL",
@@ -23,6 +26,8 @@ SERVICE_LABELS = {
 
 
 FAILURE_LEVELS = {
+    "bot": "error", "telegram_api": "error", "celery_queue": "warning",
+    "disk": "warning", "ram": "warning", "cpu": "warning", "download_errors": "warning",
     "backend": "error",
     "worker": "error",
     "postgres": "critical",
@@ -409,7 +414,7 @@ def run_monitor() -> None:
             states=states,
         )
 
-        _run_check(
+        postgres_healthy = _run_check(
             service_name="postgres",
             check=_check_postgres,
             states=states,
@@ -507,9 +512,17 @@ def run_monitor() -> None:
                     states=states,
                 )
 
-        time.sleep(
-            interval_seconds
-        )
+        from app.services.operations import operations_cache
+        from app.monitoring.resources import collect, save_snapshot
+        thresholds = operations_cache.thresholds()
+        metrics = collect(thresholds, redis_healthy=redis_healthy, postgres_healthy=postgres_healthy)
+        for name, metric in metrics.items():
+            _update_state(service_name=name, healthy=metric["healthy"], states=states)
+        try:
+            save_snapshot(states, metrics, thresholds)
+        except Exception:
+            pass
+        time.sleep(thresholds["interval_seconds"])
 
 
 if __name__ == "__main__":

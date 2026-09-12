@@ -1,3 +1,4 @@
+from app.localization import tr as _tr, localized_collection as _localized_collection
 from aiogram.types import (
     InlineKeyboardButton,
     InlineKeyboardMarkup,
@@ -26,7 +27,7 @@ def format_toman(value: object) -> str:
     except (TypeError, ValueError):
         return str(value)
 
-    return f"{amount:,} تومان"
+    return f"{amount:,}{_tr(' تومان')}"
 
 
 def format_usdt(value: object) -> str:
@@ -152,19 +153,19 @@ def build_home_reply_keyboard(
         ],
     ]
 
+    customs = [c for c in config.get("custom_buttons", []) if isinstance(c, dict) and c.get("is_active", True)]
     custom_row: list[KeyboardButton] = []
-    for custom in config.get("custom_buttons", []):
-        if not isinstance(custom, dict) or not custom.get("is_active", True):
-            continue
+    for custom in customs[:6]:
         label = str(custom.get(f"label_{config.get('language', language)}") or "").strip()
         if not label:
             continue
         custom_row.append(_reply_button(label[:64], str(custom.get("style") or "default")))
         if len(custom_row) == 2:
-            rows.append(custom_row)
-            custom_row = []
+            rows.append(custom_row); custom_row = []
     if custom_row:
         rows.append(custom_row)
+    if len(customs) > 6:
+        rows.append([_reply_button("🧩 More options" if language == "en" else "🧩 گزینه‌های بیشتر")])
 
     if include_admin:
         rows.append(
@@ -209,9 +210,7 @@ def build_payment_offers_keyboard(
             [
                 InlineKeyboardButton(
                     text=(
-                        f"{offer['label']} — {int(offer['duration_days'])} "
-                        f"{'روز' if is_fa else 'days'} — "
-                        f"{format_usdt(offer.get('price')) if offer.get('currency') == 'USDT' else format_toman(offer['price'])}"
+                        f"{offer['label']} — {int(offer['duration_days'])} {(_tr('روز') if is_fa else 'days')} — {(format_usdt(offer.get('price')) if offer.get('currency') == 'USDT' else format_toman(offer['price']))}"
                     ),
                     callback_data=f"payment:offer:{offer['code']}",
                 )
@@ -221,7 +220,7 @@ def build_payment_offers_keyboard(
     rows.append(
         [
             InlineKeyboardButton(
-                text="❌ بستن" if is_fa else "❌ Close",
+                text=_tr("❌ بستن") if is_fa else "❌ Close",
                 callback_data="payment:cancel",
             )
         ]
@@ -235,14 +234,14 @@ def build_payment_offer_detail_keyboard(language: str = "fa") -> InlineKeyboardM
         inline_keyboard=[
             [
                 InlineKeyboardButton(
-                    text="✅ ادامه پرداخت" if is_fa else "✅ Continue to payment",
+                    text=_tr("✅ ادامه پرداخت") if is_fa else "✅ Continue to payment",
                     callback_data="payment:offer:continue",
                     style="success",
                 )
             ],
             [
                 InlineKeyboardButton(
-                    text="🔙 بازگشت به پلن‌ها" if is_fa else "🔙 Back to plans",
+                    text=_tr("🔙 بازگشت به پلن‌ها") if is_fa else "🔙 Back to plans",
                     callback_data="payment:open",
                 )
             ],
@@ -294,7 +293,7 @@ def build_receipt_cancel_keyboard(language: str = "fa") -> InlineKeyboardMarkup:
             [
                 InlineKeyboardButton(
                     text=(
-                        "🔙 انتخاب پلن دیگر"
+                        _tr("🔙 انتخاب پلن دیگر")
                         if is_fa
                         else "🔙 Choose another plan"
                     ),
@@ -303,7 +302,7 @@ def build_receipt_cancel_keyboard(language: str = "fa") -> InlineKeyboardMarkup:
             ],
             [
                 InlineKeyboardButton(
-                    text="❌ انصراف" if is_fa else "❌ Cancel",
+                    text=_tr("❌ انصراف") if is_fa else "❌ Cancel",
                     callback_data="payment:cancel",
                 )
             ],
@@ -311,18 +310,66 @@ def build_receipt_cancel_keyboard(language: str = "fa") -> InlineKeyboardMarkup:
     )
 
 
-def build_admin_payment_keyboard(payment_id: int) -> InlineKeyboardMarkup:
+def build_admin_payment_keyboard(
+    payment_id: int,
+    *,
+    explorer_url: str | None = None,
+) -> InlineKeyboardMarkup:
+    rows = []
+    if explorer_url:
+        rows.append(
+            [InlineKeyboardButton(text=_tr("🔎 مشاهده تراکنش"), url=explorer_url)]
+        )
+    rows.append(
+            [
+                InlineKeyboardButton(
+                    text=_tr("✅ تأیید و فعال‌سازی"),
+                    callback_data=f"payment_admin:approve:{payment_id}",
+                ),
+                InlineKeyboardButton(
+                    text=_tr("❌ رد رسید"),
+                    callback_data=f"payment_admin:reject:{payment_id}",
+                ),
+            ]
+    )
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def build_usdt_screenshot_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
                 InlineKeyboardButton(
-                    text="✅ تأیید و فعال‌سازی",
-                    callback_data=f"payment_admin:approve:{payment_id}",
-                ),
+                    text="⏭ Submit without screenshot",
+                    callback_data="payment:usdt-screenshot:skip",
+                    style="success",
+                )
+            ],
+            [
                 InlineKeyboardButton(
-                    text="❌ رد رسید",
-                    callback_data=f"payment_admin:reject:{payment_id}",
-                ),
-            ]
+                    text="❌ Cancel",
+                    callback_data="payment:cancel",
+                )
+            ],
+        ]
+    )
+
+
+def build_payment_approval_confirmation_keyboard(payment_id: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text=_tr("✅ تأیید نهایی و فعال‌سازی"),
+                    callback_data=f"payment_admin:approve-confirm:{payment_id}",
+                    style="danger",
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text=_tr("انصراف"),
+                    callback_data=f"payment_admin:approve-cancel:{payment_id}",
+                )
+            ],
         ]
     )

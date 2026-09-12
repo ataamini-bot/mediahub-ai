@@ -1,3 +1,4 @@
+from app.localization import tr as _tr, localized_collection as _localized_collection
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
 from app.admin_labels import permission_label_fa, role_label_fa
@@ -15,7 +16,7 @@ def build_admin_home_keyboard(
         rows.append(
             [
                 InlineKeyboardButton(
-                    text="👮 مدیریت مدیران",
+                    text=_tr("👮 مدیریت مدیران"),
                     callback_data="admin:accounts",
                 )
             ]
@@ -25,7 +26,7 @@ def build_admin_home_keyboard(
         rows.append(
             [
                 InlineKeyboardButton(
-                    text="⚙️ تنظیمات ربات",
+                    text=_tr("⚙️ تنظیمات ربات"),
                     callback_data="admin:settings",
                 )
             ]
@@ -35,7 +36,7 @@ def build_admin_home_keyboard(
         rows.append(
             [
                 InlineKeyboardButton(
-                    text="📦 مدیریت پلن‌ها",
+                    text=_tr("📦 مدیریت پلن‌ها"),
                     callback_data="admin:plans",
                 )
             ]
@@ -45,7 +46,7 @@ def build_admin_home_keyboard(
         rows.append(
             [
                 InlineKeyboardButton(
-                    text="💳 مدیریت پرداخت‌ها",
+                    text=_tr("💳 مدیریت پرداخت‌ها"),
                     callback_data="admin:payments",
                 )
             ]
@@ -55,7 +56,7 @@ def build_admin_home_keyboard(
         rows.append(
             [
                 InlineKeyboardButton(
-                    text="📊 آمار ربات",
+                    text=_tr("📊 آمار ربات"),
                     callback_data="admin:statistics",
                 )
             ]
@@ -65,16 +66,20 @@ def build_admin_home_keyboard(
         rows.append(
             [
                 InlineKeyboardButton(
-                    text="🛟 پشتیبانی کاربران",
+                    text=_tr("🛟 پشتیبانی کاربران"),
                     callback_data="admin:support",
                 )
             ]
         )
 
+    if is_superadmin or "monitoring.view" in permissions:
+        rows.append([InlineKeyboardButton(text=_tr("🖥 مانیتورینگ و Topicها"), callback_data="ops:open")])
+    if is_superadmin or "audit.view" in permissions:
+        rows.append([InlineKeyboardButton(text=_tr("📜 فعالیت مدیران و Audit"), callback_data="reports:audit")])
     rows.append(
         [
             InlineKeyboardButton(
-                text="❌ بستن پنل",
+                text=_tr("❌ بستن پنل"),
                 callback_data="admin:close",
             )
         ]
@@ -87,7 +92,7 @@ def build_admin_back_keyboard() -> InlineKeyboardMarkup:
         inline_keyboard=[
             [
                 InlineKeyboardButton(
-                    text="🔙 بازگشت به پنل",
+                    text=_tr("🔙 بازگشت به پنل"),
                     callback_data="admin:open",
                 )
             ]
@@ -107,7 +112,7 @@ def build_admin_accounts_keyboard(
         rows.append(
             [
                 InlineKeyboardButton(
-                    text="🔐 نقش‌ها و دسترسی‌ها",
+                    text=_tr("🔐 نقش‌ها و دسترسی‌ها"),
                     callback_data="admin:roles",
                 )
             ]
@@ -138,7 +143,7 @@ def build_admin_accounts_keyboard(
         rows.append(
             [
                 InlineKeyboardButton(
-                    text="➕ افزودن مدیر",
+                    text=_tr("➕ افزودن مدیر"),
                     callback_data="admin:account:add",
                 )
             ]
@@ -146,7 +151,7 @@ def build_admin_accounts_keyboard(
     rows.append(
         [
             InlineKeyboardButton(
-                text="🔙 بازگشت به پنل",
+                text=_tr("🔙 بازگشت به پنل"),
                 callback_data="admin:open",
             )
         ]
@@ -161,16 +166,16 @@ def build_admin_account_detail_keyboard(
     rows: list[list[InlineKeyboardButton]] = [
         [
             InlineKeyboardButton(
-                text="🔐 ویرایش نقش‌ها",
+                text=_tr("🔐 ویرایش نقش‌ها"),
                 callback_data=f"admin:account:roles:{telegram_id}",
             )
         ],
         [
             InlineKeyboardButton(
                 text=(
-                    "⬇️ لغو سوپرادمین"
+                    _tr("⬇️ لغو سوپرادمین")
                     if account.get("is_superadmin")
-                    else "⬆️ ارتقا به سوپرادمین"
+                    else _tr("⬆️ ارتقا به سوپرادمین")
                 ),
                 callback_data=f"admin:account:super:{telegram_id}",
             )
@@ -178,16 +183,16 @@ def build_admin_account_detail_keyboard(
         [
             InlineKeyboardButton(
                 text=(
-                    "⛔️ غیرفعال‌سازی"
+                    _tr("⛔️ غیرفعال‌سازی")
                     if account.get("is_active")
-                    else "✅ فعال‌سازی"
+                    else _tr("✅ فعال‌سازی")
                 ),
                 callback_data=f"admin:account:status:{telegram_id}",
             )
         ],
         [
             InlineKeyboardButton(
-                text="🔙 فهرست مدیران",
+                text=_tr("🔙 فهرست مدیران"),
                 callback_data="admin:accounts",
             )
         ],
@@ -228,9 +233,9 @@ def build_role_picker_keyboard(
             [
                 InlineKeyboardButton(
                     text=(
-                        "👑 سوپرادمین: بله"
+                        _tr("👑 سوپرادمین: بله")
                         if is_superadmin
-                        else "👑 سوپرادمین: خیر"
+                        else _tr("👑 سوپرادمین: خیر")
                     ),
                     callback_data="admin:rolepick:super",
                 )
@@ -241,13 +246,13 @@ def build_role_picker_keyboard(
         [
             [
                 InlineKeyboardButton(
-                    text="ادامه ✅",
+                    text=_tr("ادامه ✅"),
                     callback_data="admin:rolepick:done",
                 )
             ],
             [
                 InlineKeyboardButton(
-                    text="انصراف",
+                    text=_tr("انصراف"),
                     callback_data="admin:workflow:cancel",
                 )
             ],
@@ -265,16 +270,16 @@ def build_change_confirmation_keyboard(
             [
                 InlineKeyboardButton(
                     text=(
-                        "⚠️ ادامه برای تأیید نهایی"
+                        _tr("⚠️ ادامه برای تأیید نهایی")
                         if dangerous
-                        else "✅ تأیید و ثبت"
+                        else _tr("✅ تأیید و ثبت")
                     ),
                     callback_data="admin:change:confirm",
                 )
             ],
             [
                 InlineKeyboardButton(
-                    text="انصراف",
+                    text=_tr("انصراف"),
                     callback_data="admin:workflow:cancel",
                 )
             ],
@@ -287,13 +292,13 @@ def build_final_danger_confirmation_keyboard() -> InlineKeyboardMarkup:
         inline_keyboard=[
             [
                 InlineKeyboardButton(
-                    text="🚨 بله، تغییر حساس ثبت شود",
+                    text=_tr("🚨 بله، تغییر حساس ثبت شود"),
                     callback_data="admin:change:final",
                 )
             ],
             [
                 InlineKeyboardButton(
-                    text="انصراف",
+                    text=_tr("انصراف"),
                     callback_data="admin:workflow:cancel",
                 )
             ],
@@ -328,13 +333,13 @@ def build_admin_roles_keyboard(
         [
             [
                 InlineKeyboardButton(
-                    text="➕ ساخت نقش سفارشی",
+                    text=_tr("➕ ساخت نقش سفارشی"),
                     callback_data="admin:role:add",
                 )
             ],
             [
                 InlineKeyboardButton(
-                    text="🔙 مدیریت مدیران",
+                    text=_tr("🔙 مدیریت مدیران"),
                     callback_data="admin:accounts",
                 )
             ],
@@ -348,17 +353,17 @@ def build_admin_role_detail_keyboard(role: dict) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = [
         [
             InlineKeyboardButton(
-                text="✏️ تغییر نام",
+                text=_tr("✏️ تغییر نام"),
                 callback_data=f"admin:role:name:{role_id}",
             ),
             InlineKeyboardButton(
-                text="📝 تغییر توضیح",
+                text=_tr("📝 تغییر توضیح"),
                 callback_data=f"admin:role:description:{role_id}",
             ),
         ],
         [
             InlineKeyboardButton(
-                text="🔐 ویرایش دسترسی‌ها",
+                text=_tr("🔐 ویرایش دسترسی‌ها"),
                 callback_data=f"admin:role:permissions:{role_id}",
             )
         ],
@@ -369,9 +374,9 @@ def build_admin_role_detail_keyboard(role: dict) -> InlineKeyboardMarkup:
             [
                 InlineKeyboardButton(
                     text=(
-                        "⛔️ غیرفعال‌سازی نقش"
+                        _tr("⛔️ غیرفعال‌سازی نقش")
                         if role.get("is_active")
-                        else "✅ فعال‌سازی نقش"
+                        else _tr("✅ فعال‌سازی نقش")
                     ),
                     callback_data=f"admin:role:status:{role_id}",
                 )
@@ -381,7 +386,7 @@ def build_admin_role_detail_keyboard(role: dict) -> InlineKeyboardMarkup:
     rows.append(
         [
             InlineKeyboardButton(
-                text="🔙 فهرست نقش‌ها",
+                text=_tr("🔙 فهرست نقش‌ها"),
                 callback_data="admin:roles",
             )
         ]
@@ -412,13 +417,13 @@ def build_permission_picker_keyboard(
         [
             [
                 InlineKeyboardButton(
-                    text="ادامه ✅",
+                    text=_tr("ادامه ✅"),
                     callback_data="admin:permpick:done",
                 )
             ],
             [
                 InlineKeyboardButton(
-                    text="انصراف",
+                    text=_tr("انصراف"),
                     callback_data="admin:workflow:cancel",
                 )
             ],
@@ -432,17 +437,16 @@ def build_admin_plans_keyboard(plans: list[dict]) -> InlineKeyboardMarkup:
 
     for plan in plans:
         duration = (
-            "همیشگی"
+            _tr("همیشگی")
             if plan.get("is_system")
-            else f"{int(plan.get('duration_days', 0))} روز"
+            else f"{int(plan.get('duration_days', 0))}{_tr(' روز')}"
         )
-        status = "" if plan.get("is_active") else " [غیرفعال]"
+        status = "" if plan.get("is_active") else _tr(" [غیرفعال]")
         rows.append(
             [
                 InlineKeyboardButton(
                     text=(
-                        f"{str(plan.get('name') or 'بدون نام')[:32]}"
-                        f"{status} — {duration}"
+                        f"{str(plan.get('name') or _tr('بدون نام'))[:32]}{status} — {duration}"
                     ),
                     callback_data=f"admin:plan:{int(plan['id'])}",
                 )
@@ -453,13 +457,13 @@ def build_admin_plans_keyboard(plans: list[dict]) -> InlineKeyboardMarkup:
         [
             [
                 InlineKeyboardButton(
-                    text="➕ ایجاد پلن جدید",
+                    text=_tr("➕ ایجاد پلن جدید"),
                     callback_data="admin:plan:add",
                 )
             ],
             [
                 InlineKeyboardButton(
-                    text="🔙 بازگشت به پنل",
+                    text=_tr("🔙 بازگشت به پنل"),
                     callback_data="admin:open",
                 )
             ],
@@ -477,43 +481,43 @@ def build_admin_plan_detail_keyboard(plan: dict) -> InlineKeyboardMarkup:
             [
                 [
                     InlineKeyboardButton(
-                        text="✏️ نام فارسی",
+                        text=_tr("✏️ نام فارسی"),
                         callback_data=f"admin:plan:edit:name:{plan_id}",
                     ),
                     InlineKeyboardButton(
-                        text="🌐 نام انگلیسی",
+                        text=_tr("🌐 نام انگلیسی"),
                         callback_data=f"admin:plan:edit:name_en:{plan_id}",
                     ),
                 ],
                 [
                     InlineKeyboardButton(
-                        text="📝 توضیح فارسی",
+                        text=_tr("📝 توضیح فارسی"),
                         callback_data=f"admin:plan:edit:description:{plan_id}",
                     ),
                     InlineKeyboardButton(
-                        text="🌐 توضیح انگلیسی",
+                        text=_tr("🌐 توضیح انگلیسی"),
                         callback_data=f"admin:plan:edit:description_en:{plan_id}",
                     ),
                 ],
                 [
                     InlineKeyboardButton(
-                        text="📅 مدت",
+                        text=_tr("📅 مدت"),
                         callback_data=f"admin:plan:edit:duration:{plan_id}",
                     ),
                     InlineKeyboardButton(
-                        text="💰 مبلغ تومان",
+                        text=_tr("💰 مبلغ تومان"),
                         callback_data=f"admin:plan:edit:price:{plan_id}",
                     ),
                 ],
                 [
                     InlineKeyboardButton(
-                        text="💵 مبلغ USDT",
+                        text=_tr("💵 مبلغ USDT"),
                         callback_data=f"admin:plan:edit:usdt:{plan_id}",
                     )
                 ],
                 [
                     InlineKeyboardButton(
-                        text="↕️ ترتیب نمایش",
+                        text=_tr("↕️ ترتیب نمایش"),
                         callback_data=f"admin:plan:edit:order:{plan_id}",
                     )
                 ],
@@ -524,31 +528,31 @@ def build_admin_plan_detail_keyboard(plan: dict) -> InlineKeyboardMarkup:
         [
             [
                 InlineKeyboardButton(
-                    text="📊 سقف روزانه",
+                    text=_tr("📊 سقف روزانه"),
                     callback_data=f"admin:plan:edit:daily:{plan_id}",
                 ),
                 InlineKeyboardButton(
-                    text="📦 حداکثر حجم",
+                    text=_tr("📦 حداکثر حجم"),
                     callback_data=f"admin:plan:edit:size:{plan_id}",
                 ),
             ],
             [
                 InlineKeyboardButton(
-                    text="🎞 حداکثر کیفیت",
+                    text=_tr("🎞 حداکثر کیفیت"),
                     callback_data=f"admin:plan:edit:quality:{plan_id}",
                 ),
                 InlineKeyboardButton(
-                    text="⚙️ دانلود هم‌زمان",
+                    text=_tr("⚙️ دانلود هم‌زمان"),
                     callback_data=f"admin:plan:edit:concurrency:{plan_id}",
                 ),
             ],
             [
                 InlineKeyboardButton(
-                    text="🚀 تغییر اولویت",
+                    text=_tr("🚀 تغییر اولویت"),
                     callback_data=f"admin:plan:toggle:priority:{plan_id}",
                 ),
                 InlineKeyboardButton(
-                    text="📣 تغییر عضویت اجباری",
+                    text=_tr("📣 تغییر عضویت اجباری"),
                     callback_data=f"admin:plan:toggle:forced_join:{plan_id}",
                 ),
             ],
@@ -561,16 +565,16 @@ def build_admin_plan_detail_keyboard(plan: dict) -> InlineKeyboardMarkup:
                 [
                     InlineKeyboardButton(
                         text=(
-                            "⛔️ غیرفعال‌سازی"
+                            _tr("⛔️ غیرفعال‌سازی")
                             if plan.get("is_active")
-                            else "✅ فعال‌سازی"
+                            else _tr("✅ فعال‌سازی")
                         ),
                         callback_data=f"admin:plan:toggle:active:{plan_id}",
                     )
                 ],
                 [
                     InlineKeyboardButton(
-                        text="🗑 حذف نرم پلن",
+                        text=_tr("🗑 حذف نرم پلن"),
                         callback_data=f"admin:plan:delete:{plan_id}",
                     )
                 ],
@@ -580,7 +584,7 @@ def build_admin_plan_detail_keyboard(plan: dict) -> InlineKeyboardMarkup:
     rows.append(
         [
             InlineKeyboardButton(
-                text="🔙 فهرست پلن‌ها",
+                text=_tr("🔙 فهرست پلن‌ها"),
                 callback_data="admin:plans",
             )
         ]
@@ -607,7 +611,7 @@ def build_plan_quality_keyboard(*, mode: str) -> InlineKeyboardMarkup:
         + [
             [
                 InlineKeyboardButton(
-                    text="انصراف",
+                    text=_tr("انصراف"),
                     callback_data="admin:plan:cancel",
                 )
             ]
@@ -629,7 +633,7 @@ def build_plan_concurrency_keyboard(*, mode: str) -> InlineKeyboardMarkup:
             ],
             [
                 InlineKeyboardButton(
-                    text="انصراف",
+                    text=_tr("انصراف"),
                     callback_data="admin:plan:cancel",
                 )
             ],
@@ -646,17 +650,17 @@ def build_plan_boolean_keyboard(
         inline_keyboard=[
             [
                 InlineKeyboardButton(
-                    text="✅ بله",
+                    text=_tr("✅ بله"),
                     callback_data=f"admin:plan:choice:{mode}:{field}:yes",
                 ),
                 InlineKeyboardButton(
-                    text="❌ خیر",
+                    text=_tr("❌ خیر"),
                     callback_data=f"admin:plan:choice:{mode}:{field}:no",
                 ),
             ],
             [
                 InlineKeyboardButton(
-                    text="انصراف",
+                    text=_tr("انصراف"),
                     callback_data="admin:plan:cancel",
                 )
             ],
@@ -669,13 +673,13 @@ def build_plan_confirmation_keyboard(*, action: str) -> InlineKeyboardMarkup:
         inline_keyboard=[
             [
                 InlineKeyboardButton(
-                    text="✅ تأیید و ثبت",
+                    text=_tr("✅ تأیید و ثبت"),
                     callback_data=f"admin:plan:{action}:confirm",
                 )
             ],
             [
                 InlineKeyboardButton(
-                    text="انصراف",
+                    text=_tr("انصراف"),
                     callback_data="admin:plan:cancel",
                 )
             ],

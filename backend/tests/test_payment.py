@@ -279,6 +279,7 @@ def test_usdt_payment_accepts_selected_destination():
         offer_code="plan_test",
         currency="USDT",
         usdt_destination_id=7,
+        txid="a" * 64,
         receipt_file_id="file-id",
         receipt_file_type="photo",
     )

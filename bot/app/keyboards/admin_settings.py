@@ -1,3 +1,4 @@
+from app.localization import tr as _tr, localized_collection as _localized_collection
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
 from app.admin_runtime_settings import (
@@ -21,13 +22,13 @@ def build_runtime_settings_keyboard(
             [
                 [
                     InlineKeyboardButton(
-                        text="📝 متن‌ها و عنوان دکمه‌ها",
+                        text=_tr("📝 متن‌ها و عنوان دکمه‌ها"),
                         callback_data="admin:copy",
                     )
                 ],
                 [
                     InlineKeyboardButton(
-                        text="🧩 دکمه‌های سفارشی صفحه اصلی",
+                        text=_tr("🧩 دکمه‌های سفارشی صفحه اصلی"),
                         callback_data="admin:homebuttons",
                     )
                 ],
@@ -38,7 +39,7 @@ def build_runtime_settings_keyboard(
         keyboard_rows.append(
             [
                 InlineKeyboardButton(
-                    text="📢 عضویت اجباری کانال‌ها",
+                    text=_tr("📢 عضویت اجباری کانال‌ها"),
                     callback_data="admin:channels",
                 )
             ]
@@ -64,7 +65,7 @@ def build_runtime_settings_keyboard(
     keyboard_rows.append(
         [
             InlineKeyboardButton(
-                text="🔙 بازگشت به پنل",
+                text=_tr("🔙 بازگشت به پنل"),
                 callback_data="admin:open",
             )
         ]
@@ -81,7 +82,7 @@ def build_setting_value_keyboard(key: str) -> InlineKeyboardMarkup:
             [
                 [
                     InlineKeyboardButton(
-                        text="🇮🇷 تهران",
+                        text=_tr("🇮🇷 تهران"),
                         callback_data="admin:setting:zone:tehran",
                     ),
                     InlineKeyboardButton(
@@ -91,7 +92,7 @@ def build_setting_value_keyboard(key: str) -> InlineKeyboardMarkup:
                 ],
                 [
                     InlineKeyboardButton(
-                        text="🇦🇪 دبی",
+                        text=_tr("🇦🇪 دبی"),
                         callback_data="admin:setting:zone:dubai",
                     )
                 ],
@@ -101,7 +102,7 @@ def build_setting_value_keyboard(key: str) -> InlineKeyboardMarkup:
     rows.append(
         [
             InlineKeyboardButton(
-                text="انصراف",
+                text=_tr("انصراف"),
                 callback_data="admin:setting:cancel",
             )
         ]
@@ -114,13 +115,13 @@ def build_setting_confirmation_keyboard() -> InlineKeyboardMarkup:
         inline_keyboard=[
             [
                 InlineKeyboardButton(
-                    text="✅ تأیید و اعمال",
+                    text=_tr("✅ تأیید و اعمال"),
                     callback_data="admin:setting:confirm",
                 )
             ],
             [
                 InlineKeyboardButton(
-                    text="انصراف",
+                    text=_tr("انصراف"),
                     callback_data="admin:setting:cancel",
                 )
             ],

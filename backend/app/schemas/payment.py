@@ -1,5 +1,6 @@
 from datetime import datetime
 from decimal import Decimal
+import re
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field, computed_field, field_validator, model_validator
@@ -59,12 +60,13 @@ class PaymentCreate(BaseModel):
     currency: Literal["IRT", "USDT"] = "IRT"
     payment_card_id: int | None = Field(default=None, gt=0)
     usdt_destination_id: int | None = Field(default=None, gt=0)
-    receipt_file_id: str = Field(min_length=1, max_length=512)
+    txid: str | None = Field(default=None, min_length=16, max_length=255)
+    receipt_file_id: str | None = Field(default=None, min_length=1, max_length=512)
     receipt_file_unique_id: str | None = Field(
         default=None,
         max_length=255,
     )
-    receipt_file_type: Literal["photo", "document"]
+    receipt_file_type: Literal["photo", "document"] | None = None
     receipt_file_size: int | None = Field(default=None, ge=0)
     receipt_mime_type: str | None = Field(default=None, max_length=128)
     receipt_file_name: str | None = Field(default=None, max_length=255)
@@ -75,14 +77,36 @@ class PaymentCreate(BaseModel):
     def normalize_offer_code(cls, value: str) -> str:
         return value.strip().lower()
 
+    @field_validator("txid")
+    @classmethod
+    def normalize_txid(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        if not re.fullmatch(r"[A-Za-z0-9_-]{16,255}", normalized):
+            raise ValueError(
+                "TxID must contain 16-255 letters, digits, underscores, or hyphens"
+            )
+        return normalized
+
     @model_validator(mode="after")
     def destination_matches_currency(self):
         if self.currency == "USDT" and self.usdt_destination_id is None:
             raise ValueError("USDT destination is required")
+        if self.currency == "USDT" and self.txid is None:
+            raise ValueError("TxID is required for USDT payment")
         if self.currency == "USDT" and self.payment_card_id is not None:
             raise ValueError("Payment card is not valid for USDT payment")
         if self.currency == "IRT" and self.usdt_destination_id is not None:
             raise ValueError("USDT destination is not valid for IRT payment")
+        if self.currency == "IRT" and self.txid is not None:
+            raise ValueError("TxID is not valid for IRT payment")
+        if self.currency == "IRT" and (
+            self.receipt_file_id is None or self.receipt_file_type is None
+        ):
+            raise ValueError("Receipt image or PDF is required for IRT payment")
+        if (self.receipt_file_id is None) != (self.receipt_file_type is None):
+            raise ValueError("Receipt file id and type must be supplied together")
         return self
 
 
@@ -116,9 +140,9 @@ class PaymentResponse(BaseModel):
     plan_name_snapshot: str
     plan_limits_snapshot: dict[str, Any]
     status: PaymentStatus
-    receipt_file_id: str
+    receipt_file_id: str | None
     receipt_file_unique_id: str | None
-    receipt_file_type: str
+    receipt_file_type: str | None
     receipt_file_size: int | None
     receipt_mime_type: str | None
     receipt_file_name: str | None
@@ -133,6 +157,9 @@ class PaymentResponse(BaseModel):
     payment_method: str
     payment_card_id: int | None
     payment_destination_snapshot: dict[str, Any]
+    txid: str | None
+    usdt_network_code: str | None
+    subscription_change_type: str | None
     created_at: datetime
     updated_at: datetime
 
@@ -176,6 +203,7 @@ class PaymentActionResponse(BaseModel):
 
 
 class CurrentSubscriptionResponse(BaseModel):
+    scheduled: list[dict[str, Any]] = Field(default_factory=list)
     is_active: bool
     plan_slug: str | None = None
     plan_name: str | None = None

@@ -17,6 +17,7 @@ from app.schemas.payment import (
 )
 from app.services.payment import (
     DuplicateReceipt,
+    DuplicateTxID,
     InvalidReceipt,
     PaymentActionResult,
     PaymentConflict,
@@ -100,6 +101,11 @@ async def create_payment(
         raise HTTPException(
             status_code=409,
             detail={"code": "duplicate_receipt", "message": str(exc)},
+        ) from exc
+    except DuplicateTxID as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={"code": "duplicate_txid", "message": str(exc)},
         ) from exc
     except InvalidReceipt as exc:
         status_code = 413 if "size limit" in str(exc) else 400

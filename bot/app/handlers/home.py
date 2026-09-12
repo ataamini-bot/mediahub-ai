@@ -1,3 +1,4 @@
+from app.localization import tr as _tr, localized_collection as _localized_collection
 from aiogram import F, Router
 from aiogram.filters import BaseFilter
 from aiogram.fsm.context import FSMContext
@@ -15,7 +16,7 @@ from app.handlers.experience import (
 )
 from app.i18n import HOME_BUTTON_ACTIONS, normalize_language, translate
 from app.keyboards.language import build_language_keyboard
-from app.keyboards.payment import build_home_reply_keyboard
+from app.keyboards.payment import build_home_reply_keyboard, build_home_keyboard
 from app.services.backend import register_telegram_user
 from app.runtime_config import (
     action_for_runtime_text,
@@ -69,6 +70,10 @@ async def persistent_home_button(
     configuration = await runtime_configuration(language)
     await state.clear()
 
+    if action == "more":
+        await message.answer(translate(language, "home.ready"), reply_markup=build_home_keyboard(language, include_admin=include_admin, configuration=configuration))
+        return
+
     if action == "buy":
         await send_payment_offers_menu(message, state)
         return
@@ -79,7 +84,7 @@ async def persistent_home_button(
 
     if action == "language":
         await message.answer(
-            "🌐 <b>زبان ربات را انتخاب کنید / Choose the bot language:</b>",
+            _tr("🌐 <b>زبان ربات را انتخاب کنید / Choose the bot language:</b>"),
             parse_mode="HTML",
             reply_markup=build_language_keyboard(),
         )

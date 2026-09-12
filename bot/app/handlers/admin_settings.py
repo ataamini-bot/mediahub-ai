@@ -1,3 +1,4 @@
+from app.localization import tr as _tr, localized_collection as _localized_collection
 import html
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -68,17 +69,14 @@ def _confirmation_text(key: str, value: object) -> str:
     warning = ""
     if key == "bot.maintenance_mode" and value is True:
         warning = (
-            "\n\n⚠️ دانلود و خرید جدید کاربران متوقف می‌شود؛ "
-            "پنل مدیریت در دسترس می‌ماند."
+            _tr("\n\n⚠️ دانلود و خرید جدید کاربران متوقف می‌شود؛ "
+            "پنل مدیریت در دسترس می‌ماند.")
         )
     elif key in {"downloads.enabled", "payments.enabled"} and value is False:
-        warning = "\n\n⚠️ عملیات جدید کاربران در این بخش متوقف می‌شود."
+        warning = _tr("\n\n⚠️ عملیات جدید کاربران در این بخش متوقف می‌شود.")
 
     return (
-        "⚙️ <b>تأیید تغییر تنظیم</b>\n\n"
-        f"تنظیم: <b>{html.escape(definition.label)}</b>\n"
-        f"مقدار جدید: <code>{html.escape(rendered)}</code>"
-        f"{warning}"
+        f"{_tr('⚙️ <b>تأیید تغییر تنظیم</b>\n\nتنظیم: <b>')}{html.escape(definition.label)}{_tr('</b>\nمقدار جدید: <code>')}{html.escape(rendered)}</code>{warning}"
     )
 
 
@@ -109,23 +107,23 @@ async def edit_runtime_setting(
         return
     context = await _context(callback.from_user.id, "settings.manage")
     if context is None:
-        await callback.answer("دسترسی ویرایش تنظیمات ندارید.", show_alert=True)
+        await callback.answer(_tr("دسترسی ویرایش تنظیمات ندارید."), show_alert=True)
         return
 
     key = callback.data.split(":", 3)[-1]
     definition = RUNTIME_SETTINGS_BY_KEY.get(key)
     if definition is None:
-        await callback.answer("تنظیم معتبر نیست.", show_alert=True)
+        await callback.answer(_tr("تنظیم معتبر نیست."), show_alert=True)
         return
 
     try:
         rows = await list_application_settings(callback.from_user.id)
     except BackendAPIError:
-        await callback.answer("دریافت تنظیمات ممکن نشد.", show_alert=True)
+        await callback.answer(_tr("دریافت تنظیمات ممکن نشد."), show_alert=True)
         return
     row = next((item for item in rows if item.get("key") == key), None)
     if row is None:
-        await callback.answer("تنظیم در دیتابیس پیدا نشد.", show_alert=True)
+        await callback.answer(_tr("تنظیم در دیتابیس پیدا نشد."), show_alert=True)
         return
 
     await state.clear()
@@ -143,13 +141,12 @@ async def edit_runtime_setting(
         await state.set_state(AdminSettingStates.waiting_for_value)
         if definition.kind == "integer":
             instruction = (
-                f"یک عدد بین {definition.minimum} تا "
-                f"{definition.maximum} مگابایت بفرستید."
+                f"{_tr('یک عدد بین ')}{definition.minimum}{_tr(' تا ')}{definition.maximum}{_tr(' مگابایت بفرستید.')}"
             )
         else:
             instruction = (
-                "نام معتبر منطقه زمانی IANA را بفرستید؛ "
-                "مثلاً <code>Asia/Tehran</code>."
+                _tr("نام معتبر منطقه زمانی IANA را بفرستید؛ "
+                "مثلاً <code>Asia/Tehran</code>.")
             )
         await callback.message.edit_text(
             (
@@ -160,7 +157,7 @@ async def edit_runtime_setting(
             reply_markup=build_setting_value_keyboard(key),
         )
         await callback.message.answer(
-            "مقدار جدید را ارسال کنید:",
+            _tr("مقدار جدید را ارسال کنید:"),
             reply_markup=ForceReply(selective=True),
         )
     await callback.answer()
@@ -183,7 +180,7 @@ async def choose_setting_timezone(
     }
     value = values.get(callback.data.rsplit(":", 1)[-1])
     if value is None:
-        await callback.answer("منطقه زمانی معتبر نیست.", show_alert=True)
+        await callback.answer(_tr("منطقه زمانی معتبر نیست."), show_alert=True)
         return
     await _prepare_confirmation(
         callback.message,
@@ -210,7 +207,7 @@ async def receive_setting_value(message: Message, state: FSMContext) -> None:
             str.maketrans("۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩", "01234567890123456789")
         )
         if not translated.isdigit():
-            await message.answer("فقط یک عدد صحیح بفرستید.")
+            await message.answer(_tr("فقط یک عدد صحیح بفرستید."))
             return
         value: object = int(translated)
         if (
@@ -221,8 +218,7 @@ async def receive_setting_value(message: Message, state: FSMContext) -> None:
             and int(value) > definition.maximum
         ):
             await message.answer(
-                f"عدد باید بین {definition.minimum} تا "
-                f"{definition.maximum} باشد."
+                f"{_tr('عدد باید بین ')}{definition.minimum}{_tr(' تا ')}{definition.maximum}{_tr(' باشد.')}"
             )
             return
     else:
@@ -230,7 +226,7 @@ async def receive_setting_value(message: Message, state: FSMContext) -> None:
             ZoneInfo(raw_value)
         except (ZoneInfoNotFoundError, ValueError):
             await message.answer(
-                "منطقه زمانی معتبر نیست؛ مثلاً Asia/Tehran بفرستید."
+                _tr("منطقه زمانی معتبر نیست؛ مثلاً Asia/Tehran بفرستید.")
             )
             return
         value = raw_value
@@ -256,7 +252,7 @@ async def confirm_setting_change(
         return
     context = await _context(callback.from_user.id, "settings.manage")
     if context is None:
-        await callback.answer("دسترسی ویرایش تنظیمات ندارید.", show_alert=True)
+        await callback.answer(_tr("دسترسی ویرایش تنظیمات ندارید."), show_alert=True)
         return
 
     data = await state.get_data()
@@ -265,7 +261,7 @@ async def confirm_setting_change(
     definition = RUNTIME_SETTINGS_BY_KEY.get(key)
     if definition is None or not isinstance(row, dict):
         await state.clear()
-        await callback.answer("درخواست تغییر منقضی شده است.", show_alert=True)
+        await callback.answer(_tr("درخواست تغییر منقضی شده است."), show_alert=True)
         return
 
     try:
@@ -279,14 +275,14 @@ async def confirm_setting_change(
         )
         await state.clear()
         await _show_settings(callback.message, callback.from_user.id)
-        await callback.answer("تنظیم با موفقیت اعمال شد.")
+        await callback.answer(_tr("تنظیم با موفقیت اعمال شد."))
     except BackendAPIError as exc:
         if exc.status_code == 409:
-            message_text = "تنظیم هم‌زمان تغییر کرده؛ صفحه را دوباره باز کنید."
+            message_text = _tr("تنظیم هم‌زمان تغییر کرده؛ صفحه را دوباره باز کنید.")
         elif exc.status_code == 422:
-            message_text = "مقدار واردشده معتبر نیست."
+            message_text = _tr("مقدار واردشده معتبر نیست.")
         else:
-            message_text = "ثبت تنظیم انجام نشد."
+            message_text = _tr("ثبت تنظیم انجام نشد.")
         await callback.answer(message_text, show_alert=True)
 
 
@@ -300,6 +296,6 @@ async def cancel_setting_change(
         try:
             await _show_settings(callback.message, callback.from_user.id)
         except BackendAPIError:
-            await callback.answer("دریافت تنظیمات ممکن نشد.", show_alert=True)
+            await callback.answer(_tr("دریافت تنظیمات ممکن نشد."), show_alert=True)
             return
-    await callback.answer("لغو شد.")
+    await callback.answer(_tr("لغو شد."))

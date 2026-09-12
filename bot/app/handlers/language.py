@@ -1,3 +1,4 @@
+from app.localization import tr as _tr, localized_collection as _localized_collection
 from aiogram import F, Router
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
@@ -23,13 +24,13 @@ async def language_command(message: Message, state: FSMContext) -> None:
         await register_telegram_user(message)
     except Exception:
         await message.answer(
-            "❌ اتصال به Backend برقرار نشد / Backend is unavailable."
+            _tr("❌ اتصال به Backend برقرار نشد / Backend is unavailable.")
         )
         return
 
     await state.clear()
     await message.answer(
-        "🌐 <b>زبان ربات را انتخاب کنید / Choose the bot language:</b>",
+        _tr("🌐 <b>زبان ربات را انتخاب کنید / Choose the bot language:</b>"),
         parse_mode="HTML",
         reply_markup=build_language_keyboard(),
     )
@@ -44,7 +45,7 @@ async def open_language_menu(
 
     if isinstance(callback.message, Message):
         await callback.message.edit_text(
-            "🌐 <b>زبان ربات را انتخاب کنید / Choose the bot language:</b>",
+            _tr("🌐 <b>زبان ربات را انتخاب کنید / Choose the bot language:</b>"),
             parse_mode="HTML",
             reply_markup=build_language_keyboard(),
         )
@@ -65,6 +66,8 @@ async def select_language(callback: CallbackQuery) -> None:
 
     try:
         user = await set_user_language(callback.from_user.id, language)
+        from app.middleware.interface import ui_language
+        ui_language.set(language)
         configuration = await runtime_configuration(language, refresh=True)
         await callback.message.edit_text(
             translate(language, "language.changed"),

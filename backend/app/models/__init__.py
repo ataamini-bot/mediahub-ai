@@ -12,6 +12,7 @@ from app.models.bot_experience import (
     RequiredChannel,
     SupportMessage,
     SupportTicket,
+    SupportTicketEvent,
 )
 from app.models.download_job import DownloadJob, DownloadJobStatus
 from app.models.payment import Payment, PaymentStatus
@@ -33,6 +34,7 @@ __all__ = [
     "RequiredChannel",
     "SupportMessage",
     "SupportTicket",
+    "SupportTicketEvent",
     "User",
     "Plan",
     "Payment",

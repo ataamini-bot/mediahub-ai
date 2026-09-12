@@ -14,8 +14,9 @@ ButtonAction = Literal[
     "faq",
 ]
 ButtonStyle = Literal["default", "primary", "success", "danger"]
-SupportCategory = Literal["financial", "technical", "account", "general"]
+SupportCategory = Literal["download", "payment", "subscription", "account", "other"]
 SupportFileType = Literal["photo", "document", "video", "voice"]
+SupportStatus = Literal["new", "in_progress", "waiting_user", "answered", "closed"]
 
 
 class BotConfigurationResponse(BaseModel):
@@ -121,14 +122,56 @@ class SupportReplyCreate(BaseModel):
     body: str = Field(min_length=1, max_length=3900)
 
 
+class SupportUserReplyCreate(BaseModel):
+    telegram_id: int = Field(gt=0)
+    body: str | None = Field(default=None, max_length=3900)
+    telegram_file_id: str | None = Field(default=None, max_length=512)
+    file_type: SupportFileType | None = None
+
+    @model_validator(mode="after")
+    def message_is_not_empty(self):
+        if not str(self.body or "").strip() and not str(self.telegram_file_id or "").strip():
+            raise ValueError("Support reply must contain text or an attachment")
+        if bool(self.telegram_file_id) != bool(self.file_type):
+            raise ValueError("Attachment type and file id must be provided together")
+        return self
+
+
+class SupportStatusUpdate(BaseModel):
+    actor_telegram_id: int = Field(gt=0)
+    status: SupportStatus
+
+
+class SupportAssignmentUpdate(BaseModel):
+    actor_telegram_id: int = Field(gt=0)
+    assignee_telegram_id: int = Field(gt=0)
+
+
+class SupportAdminMessageUpdate(BaseModel):
+    admin_chat_id: int
+    admin_message_id: int = Field(gt=0)
+    admin_message_thread_id: int | None = Field(default=None, gt=0)
+
+
 class SupportTicketResponse(BaseModel):
     id: int
     category: SupportCategory
-    status: Literal["open", "answered", "closed"]
+    status: SupportStatus
     created_at: datetime
     updated_at: datetime
     closed_at: datetime | None
+    assigned_admin_user_id: int | None
+    assigned_at: datetime | None
+    reopened_count: int
+    plan_name: str | None = None
     user: dict[str, Any]
     messages: list[dict[str, Any]]
+    events: list[dict[str, Any]] = Field(default_factory=list)
     recipients: list[int] = Field(default_factory=list)
 
+
+class SupportTicketPageResponse(BaseModel):
+    items: list[SupportTicketResponse]
+    total: int
+    page: int
+    page_size: int

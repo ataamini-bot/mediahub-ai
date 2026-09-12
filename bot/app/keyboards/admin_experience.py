@@ -1,3 +1,4 @@
+from app.localization import tr as _tr, localized_collection as _localized_collection
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
 
@@ -30,10 +31,10 @@ def build_copy_root_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
-                InlineKeyboardButton(text="🇮🇷 فارسی", callback_data="admin:copy:lang:fa"),
+                InlineKeyboardButton(text=_tr("🇮🇷 فارسی"), callback_data="admin:copy:lang:fa"),
                 InlineKeyboardButton(text="🇬🇧 English", callback_data="admin:copy:lang:en"),
             ],
-            [InlineKeyboardButton(text="🔙 تنظیمات ربات", callback_data="admin:settings")],
+            [InlineKeyboardButton(text=_tr("🔙 تنظیمات ربات"), callback_data="admin:settings")],
         ]
     )
 
@@ -43,17 +44,17 @@ def build_copy_section_keyboard(language: str) -> InlineKeyboardMarkup:
         inline_keyboard=[
             [
                 InlineKeyboardButton(
-                    text="📝 متن محتواها",
+                    text=_tr("📝 متن محتواها"),
                     callback_data=f"admin:copy:section:{language}:content",
                 )
             ],
             [
                 InlineKeyboardButton(
-                    text="🔘 عنوان دکمه‌ها",
+                    text=_tr("🔘 عنوان دکمه‌ها"),
                     callback_data=f"admin:copy:section:{language}:buttons",
                 )
             ],
-            [InlineKeyboardButton(text="🔙 انتخاب زبان", callback_data="admin:copy")],
+            [InlineKeyboardButton(text=_tr("🔙 انتخاب زبان"), callback_data="admin:copy")],
         ]
     )
 
@@ -72,7 +73,7 @@ def build_copy_items_keyboard(language: str, section: str) -> InlineKeyboardMark
     rows.append(
         [
             InlineKeyboardButton(
-                text="🔙 بازگشت",
+                text=_tr("🔙 بازگشت"),
                 callback_data=f"admin:copy:lang:{language}",
             )
         ]
@@ -85,7 +86,7 @@ def build_copy_cancel_keyboard(language: str, section: str) -> InlineKeyboardMar
         inline_keyboard=[
             [
                 InlineKeyboardButton(
-                    text="انصراف",
+                    text=_tr("انصراف"),
                     callback_data=f"admin:copy:section:{language}:{section}",
                 )
             ]
@@ -100,15 +101,15 @@ def build_home_buttons_admin_keyboard(buttons: list[dict]) -> InlineKeyboardMark
         rows.append(
             [
                 InlineKeyboardButton(
-                    text=f"{status} {str(button.get('label_fa') or 'بدون نام')[:50]}",
+                    text=f"{status} {str(button.get('label_fa') or _tr('بدون نام'))[:50]}",
                     callback_data=f"admin:homebutton:{button['id']}",
                 )
             ]
         )
     rows.extend(
         [
-            [InlineKeyboardButton(text="➕ افزودن دکمه", callback_data="admin:homebutton:add")],
-            [InlineKeyboardButton(text="🔙 تنظیمات ربات", callback_data="admin:settings")],
+            [InlineKeyboardButton(text=_tr("➕ افزودن دکمه"), callback_data="admin:homebutton:add")],
+            [InlineKeyboardButton(text=_tr("🔙 تنظیمات ربات"), callback_data="admin:settings")],
         ]
     )
     return InlineKeyboardMarkup(inline_keyboard=rows)
@@ -116,26 +117,26 @@ def build_home_buttons_admin_keyboard(buttons: list[dict]) -> InlineKeyboardMark
 
 def build_home_button_detail_keyboard(button: dict) -> InlineKeyboardMarkup:
     button_id = int(button["id"])
-    toggle = "⛔️ غیرفعال‌کردن" if button.get("is_active") else "✅ فعال‌کردن"
+    toggle = _tr("⛔️ غیرفعال‌کردن") if button.get("is_active") else _tr("✅ فعال‌کردن")
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
                 InlineKeyboardButton(
-                    text="✏️ عنوان فارسی",
+                    text=_tr("✏️ عنوان فارسی"),
                     callback_data=f"admin:homebutton:edit:fa:{button_id}",
                 ),
                 InlineKeyboardButton(
-                    text="✏️ عنوان انگلیسی",
+                    text=_tr("✏️ عنوان انگلیسی"),
                     callback_data=f"admin:homebutton:edit:en:{button_id}",
                 ),
             ],
             [
                 InlineKeyboardButton(
-                    text="🎨 تغییر رنگ",
+                    text=_tr("🎨 تغییر رنگ"),
                     callback_data=f"admin:homebutton:style:{button_id}",
                 ),
                 InlineKeyboardButton(
-                    text="🔗 تغییر عملکرد",
+                    text=_tr("🔗 تغییر عملکرد"),
                     callback_data=f"admin:homebutton:action:{button_id}",
                 ),
             ],
@@ -147,12 +148,12 @@ def build_home_button_detail_keyboard(button: dict) -> InlineKeyboardMarkup:
             ],
             [
                 InlineKeyboardButton(
-                    text="🗑 حذف دکمه",
+                    text=_tr("🗑 حذف دکمه"),
                     callback_data=f"admin:homebutton:deleteask:{button_id}",
                     style="danger",
                 )
             ],
-            [InlineKeyboardButton(text="🔙 فهرست دکمه‌ها", callback_data="admin:homebuttons")],
+            [InlineKeyboardButton(text=_tr("🔙 فهرست دکمه‌ها"), callback_data="admin:homebuttons")],
         ]
     )
 
@@ -160,13 +161,13 @@ def build_home_button_detail_keyboard(button: dict) -> InlineKeyboardMarkup:
 def build_home_action_keyboard(*, button_id: int | None = None) -> InlineKeyboardMarkup:
     suffix = str(button_id) if button_id is not None else "new"
     actions = [
-        ("🔗 بازکردن لینک", "url"),
-        ("📝 نمایش متن", "message"),
-        ("💎 خرید اشتراک", "buy"),
-        ("👤 وضعیت اشتراک", "subscription"),
-        ("🛟 پشتیبانی", "support"),
-        ("📘 آموزش", "tutorial"),
-        ("❓ سوالات متداول", "faq"),
+        (_tr("🔗 بازکردن لینک"), "url"),
+        (_tr("📝 نمایش متن"), "message"),
+        (_tr("💎 خرید اشتراک"), "buy"),
+        (_tr("👤 وضعیت اشتراک"), "subscription"),
+        (_tr("🛟 پشتیبانی"), "support"),
+        (_tr("📘 آموزش"), "tutorial"),
+        (_tr("❓ سوالات متداول"), "faq"),
     ]
     rows = [
         [
@@ -177,7 +178,7 @@ def build_home_action_keyboard(*, button_id: int | None = None) -> InlineKeyboar
         ]
         for label, action in actions
     ]
-    rows.append([InlineKeyboardButton(text="انصراف", callback_data="admin:homebuttons")])
+    rows.append([InlineKeyboardButton(text=_tr("انصراف"), callback_data="admin:homebuttons")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -186,26 +187,26 @@ def build_home_style_keyboard(*, button_id: int | None = None) -> InlineKeyboard
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
-                InlineKeyboardButton(text="معمولی", callback_data=f"admin:hbstyle:{suffix}:default"),
+                InlineKeyboardButton(text=_tr("معمولی"), callback_data=f"admin:hbstyle:{suffix}:default"),
                 InlineKeyboardButton(
-                    text="آبی",
+                    text=_tr("آبی"),
                     callback_data=f"admin:hbstyle:{suffix}:primary",
                     style="primary",
                 ),
             ],
             [
                 InlineKeyboardButton(
-                    text="سبز",
+                    text=_tr("سبز"),
                     callback_data=f"admin:hbstyle:{suffix}:success",
                     style="success",
                 ),
                 InlineKeyboardButton(
-                    text="قرمز",
+                    text=_tr("قرمز"),
                     callback_data=f"admin:hbstyle:{suffix}:danger",
                     style="danger",
                 ),
             ],
-            [InlineKeyboardButton(text="انصراف", callback_data="admin:homebuttons")],
+            [InlineKeyboardButton(text=_tr("انصراف"), callback_data="admin:homebuttons")],
         ]
     )
 
@@ -215,14 +216,14 @@ def build_home_button_delete_keyboard(button_id: int) -> InlineKeyboardMarkup:
         inline_keyboard=[
             [
                 InlineKeyboardButton(
-                    text="بله، حذف شود",
+                    text=_tr("بله، حذف شود"),
                     callback_data=f"admin:homebutton:delete:{button_id}",
                     style="danger",
                 )
             ],
             [
                 InlineKeyboardButton(
-                    text="انصراف",
+                    text=_tr("انصراف"),
                     callback_data=f"admin:homebutton:{button_id}",
                 )
             ],
@@ -237,15 +238,15 @@ def build_channels_admin_keyboard(channels: list[dict]) -> InlineKeyboardMarkup:
         rows.append(
             [
                 InlineKeyboardButton(
-                    text=f"{status} {str(channel.get('title') or 'بدون نام')[:50]}",
+                    text=f"{status} {str(channel.get('title') or _tr('بدون نام'))[:50]}",
                     callback_data=f"admin:channel:{channel['id']}",
                 )
             ]
         )
     rows.extend(
         [
-            [InlineKeyboardButton(text="➕ افزودن کانال", callback_data="admin:channel:add")],
-            [InlineKeyboardButton(text="🔙 تنظیمات ربات", callback_data="admin:settings")],
+            [InlineKeyboardButton(text=_tr("➕ افزودن کانال"), callback_data="admin:channel:add")],
+            [InlineKeyboardButton(text=_tr("🔙 تنظیمات ربات"), callback_data="admin:settings")],
         ]
     )
     return InlineKeyboardMarkup(inline_keyboard=rows)
@@ -253,7 +254,7 @@ def build_channels_admin_keyboard(channels: list[dict]) -> InlineKeyboardMarkup:
 
 def build_channel_detail_keyboard(channel: dict) -> InlineKeyboardMarkup:
     channel_id = int(channel["id"])
-    toggle = "⛔️ غیرفعال‌کردن" if channel.get("is_active") else "✅ فعال‌کردن"
+    toggle = _tr("⛔️ غیرفعال‌کردن") if channel.get("is_active") else _tr("✅ فعال‌کردن")
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
@@ -264,12 +265,12 @@ def build_channel_detail_keyboard(channel: dict) -> InlineKeyboardMarkup:
             ],
             [
                 InlineKeyboardButton(
-                    text="🗑 حذف کانال",
+                    text=_tr("🗑 حذف کانال"),
                     callback_data=f"admin:channel:deleteask:{channel_id}",
                     style="danger",
                 )
             ],
-            [InlineKeyboardButton(text="🔙 فهرست کانال‌ها", callback_data="admin:channels")],
+            [InlineKeyboardButton(text=_tr("🔙 فهرست کانال‌ها"), callback_data="admin:channels")],
         ]
     )
 
@@ -279,16 +280,21 @@ def build_channel_delete_keyboard(channel_id: int) -> InlineKeyboardMarkup:
         inline_keyboard=[
             [
                 InlineKeyboardButton(
-                    text="بله، حذف شود",
+                    text=_tr("بله، حذف شود"),
                     callback_data=f"admin:channel:delete:{channel_id}",
                     style="danger",
                 )
             ],
             [
                 InlineKeyboardButton(
-                    text="انصراف",
+                    text=_tr("انصراف"),
                     callback_data=f"admin:channel:{channel_id}",
                 )
             ],
         ]
     )
+
+
+# Resolve static labels using the language of the current update.
+CONTENT_LABELS = _localized_collection(CONTENT_LABELS)
+BUTTON_LABELS = _localized_collection(BUTTON_LABELS)

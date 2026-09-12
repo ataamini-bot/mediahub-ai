@@ -1,3 +1,4 @@
+from app.localization import tr as _tr, localized_collection as _localized_collection
 import asyncio
 import html
 import os
@@ -39,6 +40,7 @@ from app.keyboards.payment import (
     build_home_reply_keyboard,
     build_upgrade_keyboard,
 )
+from app.handlers.operations import router as operations_router
 from app.handlers.home import (
     router as home_router,
 )
@@ -144,6 +146,14 @@ dp = Dispatcher(
         REDIS_URL
     )
 )
+from app.middleware.interface import InterfaceContext, InterfaceCallbacks, InterfaceRequests
+from app.middleware.health import PollHeartbeatMiddleware
+
+dp.message.outer_middleware(InterfaceContext())
+dp.callback_query.outer_middleware(InterfaceContext())
+dp.callback_query.outer_middleware(InterfaceCallbacks(dp.storage.redis))
+
+dp.include_router(operations_router)
 dp.include_router(
     experience_router
 )
@@ -223,45 +233,44 @@ def download_error_text(exc: Exception) -> str:
         return str(exc)[:1000]
 
     code = str(exc.detail.get("code") or "")
-    plan_name = str(exc.detail.get("plan_name") or "پلن فعلی")
+    plan_name = str(exc.detail.get("plan_name") or _tr("پلن فعلی"))
+    from app.middleware.interface import ui_language
+    if ui_language.get() == "en" and any("\u0600" <= ch <= "\u06ff" for ch in plan_name):
+        plan_name = "your current plan"
     if plan_name.strip().lower() == "free":
-        plan_name = "رایگان"
+        plan_name = _tr("رایگان")
 
     if code == "daily_download_limit_reached":
         return (
-            f"سهمیه روزانه {plan_name} تمام شده است "
-            f"({exc.detail.get('used', 0)}/{exc.detail.get('limit', 0)})."
+            f"{_tr('سهمیه روزانه ')}{plan_name}{_tr(' تمام شده است (')}{exc.detail.get('used', 0)}/{exc.detail.get('limit', 0)})."
         )
     if code == "concurrent_download_limit_reached":
         return (
-            f"تعداد دانلودهای هم‌زمان {plan_name} به سقف "
-            f"{exc.detail.get('limit', 1)} رسیده است."
+            f"{_tr('تعداد دانلودهای هم\u200cزمان ')}{plan_name}{_tr(' به سقف ')}{exc.detail.get('limit', 1)}{_tr(' رسیده است.')}"
         )
     if code == "download_quality_limit_exceeded":
         return (
-            f"حداکثر کیفیت مجاز در {plan_name}، "
-            f"{exc.detail.get('max_quality', 0)}p است."
+            f"{_tr('حداکثر کیفیت مجاز در ')}{plan_name}{_tr('، ')}{exc.detail.get('max_quality', 0)}{_tr('p است.')}"
         )
     if code == "download_file_size_limit_exceeded":
         return (
-            f"حداکثر حجم مجاز در {plan_name}، "
-            f"{exc.detail.get('max_file_size_mb', 0)} مگابایت است."
+            f"{_tr('حداکثر حجم مجاز در ')}{plan_name}{_tr('، ')}{exc.detail.get('max_file_size_mb', 0)}{_tr(' مگابایت است.')}"
         )
     if code == "download_user_blocked":
-        return "حساب شما اجازه ایجاد دانلود جدید ندارد."
+        return _tr("حساب شما اجازه ایجاد دانلود جدید ندارد.")
     if code == "download_user_not_found":
-        return "ابتدا دستور /start را بفرستید و دوباره تلاش کنید."
+        return _tr("ابتدا دستور /start را بفرستید و دوباره تلاش کنید.")
     if code == "download_plan_unavailable":
-        return "پلن دانلود در حال حاضر در دسترس نیست؛ با پشتیبانی تماس بگیرید."
+        return _tr("پلن دانلود در حال حاضر در دسترس نیست؛ با پشتیبانی تماس بگیرید.")
     if code == "maintenance_mode":
-        return "🛠 ربات موقتاً در حالت تعمیرات است؛ کمی بعد تلاش کنید."
+        return _tr("🛠 ربات موقتاً در حالت تعمیرات است؛ کمی بعد تلاش کنید.")
     if code == "downloads_disabled":
-        return "⏸ دریافت لینک و دانلود جدید موقتاً غیرفعال است."
+        return _tr("⏸ دریافت لینک و دانلود جدید موقتاً غیرفعال است.")
     if code == "download_temporarily_unavailable":
         reason_code = str(exc.detail.get("reason_code") or "")
         if reason_code == "maintenance_mode":
-            return "🛠 ربات موقتاً در حالت تعمیرات است؛ کمی بعد تلاش کنید."
-        return "⏸ دریافت دانلود جدید موقتاً غیرفعال است."
+            return _tr("🛠 ربات موقتاً در حالت تعمیرات است؛ کمی بعد تلاش کنید.")
+        return _tr("⏸ دریافت دانلود جدید موقتاً غیرفعال است.")
 
     return str(exc.detail.get("message") or exc)[:1000]
 
@@ -275,7 +284,8 @@ def download_error_markup(exc: Exception):
         "download_quality_limit_exceeded",
         "download_file_size_limit_exceeded",
     }:
-        return build_upgrade_keyboard("fa")
+        from app.middleware.interface import ui_language
+        return build_upgrade_keyboard(ui_language.get())
     return None
 
 
@@ -535,7 +545,7 @@ def normalize_media_title(
     ):
 
         return (
-            "ویدئو"
+            _tr("ویدئو")
         )
 
     return (
@@ -947,7 +957,7 @@ def format_eta(
     if seconds < 60:
 
         return (
-            f"{seconds} ثانیه"
+            f"{seconds}{_tr(' ثانیه')}"
         )
 
     hours, remainder = divmod(
@@ -967,13 +977,13 @@ def format_eta(
     if hours:
 
         parts.append(
-            f"{hours} ساعت"
+            f"{hours}{_tr(' ساعت')}"
         )
 
     if minutes:
 
         parts.append(
-            f"{minutes} دقیقه"
+            f"{minutes}{_tr(' دقیقه')}"
         )
 
     if (
@@ -982,7 +992,7 @@ def format_eta(
     ):
 
         parts.append(
-            f"{secs} ثانیه"
+            f"{secs}{_tr(' ثانیه')}"
         )
 
     if not parts:
@@ -990,7 +1000,7 @@ def format_eta(
         return None
 
     return (
-        " و ".join(
+        _tr(" و ").join(
             parts
         )
     )
@@ -1141,38 +1151,34 @@ def build_progress_text(
     if paused:
 
         lines = [
-            "⏸ <b>دانلود متوقف شده است</b>",
+            _tr("⏸ <b>دانلود متوقف شده است</b>"),
             "",
             (
                 f"🆔 Job ID: "
                 f"<code>{job_id}</code>"
             ),
             (
-                f"🎬 کیفیت: "
-                f"<code>{quality}</code>"
+                f"{_tr('🎬 کیفیت: <code>')}{quality}</code>"
             ),
             (
-                f"📊 پیشرفت: "
-                f"<code>{progress}%</code>"
+                f"{_tr('📊 پیشرفت: <code>')}{progress}%</code>"
             ),
         ]
 
     else:
 
         lines = [
-            "⬇️ <b>در حال دانلود...</b>",
+            _tr("⬇️ <b>در حال دانلود...</b>"),
             "",
             (
                 f"🆔 Job ID: "
                 f"<code>{job_id}</code>"
             ),
             (
-                f"🎬 کیفیت: "
-                f"<code>{quality}</code>"
+                f"{_tr('🎬 کیفیت: <code>')}{quality}</code>"
             ),
             (
-                f"📊 پیشرفت: "
-                f"<code>{progress}%</code>"
+                f"{_tr('📊 پیشرفت: <code>')}{progress}%</code>"
             ),
         ]
 
@@ -1206,10 +1212,7 @@ def build_progress_text(
 
             lines.append(
                 (
-                    "📦 دریافت شده: "
-                    f"<code>"
-                    f"{downloaded_label}"
-                    f"</code>"
+                    f"{_tr('📦 دریافت شده: <code>')}{downloaded_label}</code>"
                 )
             )
 
@@ -1217,11 +1220,7 @@ def build_progress_text(
 
             lines.append(
                 (
-                    "📦 دانلود شده: "
-                    f"<code>"
-                    f"{downloaded_label} از "
-                    f"{total_label}"
-                    f"</code>"
+                    f"{_tr('📦 دانلود شده: <code>')}{downloaded_label}{_tr(' از ')}{total_label}</code>"
                 )
             )
 
@@ -1229,10 +1228,7 @@ def build_progress_text(
 
         lines.append(
             (
-                "📦 دانلود شده: "
-                f"<code>"
-                f"{downloaded_label}"
-                f"</code>"
+                f"{_tr('📦 دانلود شده: <code>')}{downloaded_label}</code>"
             )
         )
 
@@ -1240,10 +1236,7 @@ def build_progress_text(
 
         lines.append(
             (
-                "📦 حجم کل: "
-                f"<code>"
-                f"{total_label}"
-                f"</code>"
+                f"{_tr('📦 حجم کل: <code>')}{total_label}</code>"
             )
         )
 
@@ -1253,10 +1246,7 @@ def build_progress_text(
 
             lines.append(
                 (
-                    "🚀 سرعت: "
-                    f"<code>"
-                    f"{speed_label}"
-                    f"</code>"
+                    f"{_tr('🚀 سرعت: <code>')}{speed_label}</code>"
                 )
             )
 
@@ -1264,10 +1254,7 @@ def build_progress_text(
 
             lines.append(
                 (
-                    "⏳ زمان باقی‌مانده: "
-                    f"<code>"
-                    f"{eta_label}"
-                    f"</code>"
+                    f"{_tr('⏳ زمان باقی\u200cمانده: <code>')}{eta_label}</code>"
                 )
             )
 
@@ -1277,13 +1264,13 @@ def build_progress_text(
             [
                 "",
                 (
-                    "🕕 فایل نیمه‌کاره تا "
+                    _tr("🕕 فایل نیمه‌کاره تا "
                     "<b>۶ ساعت</b> "
-                    "نگهداری می‌شود."
+                    "نگهداری می‌شود.")
                 ),
                 (
-                    "پس از آن برای آزادسازی "
-                    "فضای سرور حذف خواهد شد."
+                    _tr("پس از آن برای آزادسازی "
+                    "فضای سرور حذف خواهد شد.")
                 ),
             ]
         )
@@ -2223,16 +2210,7 @@ async def wait_for_download(
                 await safe_edit_message(
                     message,
                     (
-                        "⏳ <b>درخواست در صف دانلود است</b>\n\n"
-
-                        f"🆔 Job ID: "
-                        f"<code>{job_id}</code>\n"
-
-                        f"🎬 کیفیت: "
-                        f"<code>{quality}</code>\n"
-
-                        "📊 وضعیت: "
-                        "<code>pending</code>"
+                        f"{_tr('⏳ <b>درخواست در صف دانلود است</b>\n\n🆔 Job ID: <code>')}{job_id}{_tr('</code>\n🎬 کیفیت: <code>')}{quality}{_tr('</code>\n📊 وضعیت: <code>pending</code>')}"
                     ),
                     reply_markup=(
                         build_active_download_keyboard(
@@ -2328,25 +2306,13 @@ async def wait_for_download(
             if downloaded_label:
 
                 extra = (
-                    "\n📦 دانلود شده تا زمان لغو: "
-                    f"<code>"
-                    f"{downloaded_label}"
-                    f"</code>"
+                    f"{_tr('\n📦 دانلود شده تا زمان لغو: <code>')}{downloaded_label}</code>"
                 )
 
             await safe_edit_message(
                 message,
                 (
-                    "❌ <b>دانلود لغو شد</b>\n\n"
-
-                    f"🆔 Job ID: "
-                    f"<code>{job_id}</code>\n"
-
-                    f"📊 پیشرفت هنگام لغو: "
-                    f"<code>{progress}%</code>"
-                    f"{extra}\n\n"
-
-                    "🗑 فایل‌های موقت از سرور حذف شدند."
+                    f"{_tr('❌ <b>دانلود لغو شد</b>\n\n🆔 Job ID: <code>')}{job_id}{_tr('</code>\n📊 پیشرفت هنگام لغو: <code>')}{progress}%</code>{extra}{_tr('\n\n🗑 فایل\u200cهای موقت از سرور حذف شدند.')}"
                 ),
                 reply_markup=None,
             )
@@ -2361,15 +2327,7 @@ async def wait_for_download(
             await safe_edit_message(
                 message,
                 (
-                    "⌛ <b>دانلود منقضی شد</b>\n\n"
-
-                    f"🆔 Job ID: "
-                    f"<code>{job_id}</code>\n\n"
-
-                    "بیش از ۶ ساعت از توقف دانلود گذشته بود.\n"
-
-                    "🗑 فایل موقت برای آزادسازی "
-                    "فضای سرور حذف شد."
+                    f"{_tr('⌛ <b>دانلود منقضی شد</b>\n\n🆔 Job ID: <code>')}{job_id}{_tr('</code>\n\nبیش از ۶ ساعت از توقف دانلود گذشته بود.\n🗑 فایل موقت برای آزادسازی فضای سرور حذف شد.')}"
                 ),
                 reply_markup=None,
             )
@@ -2386,7 +2344,7 @@ async def wait_for_download(
                     "error_message"
                 )
                 or
-                "خطای نامشخص"
+                _tr("خطای نامشخص")
             )
 
             raise RuntimeError(
@@ -2487,15 +2445,7 @@ async def send_downloaded_file(
     await safe_edit_message(
         status_message,
         (
-            "✅ <b>دانلود کامل شد</b>\n\n"
-
-            f"🆔 Job ID: "
-            f"<code>{job_id}</code>\n"
-
-            f"📦 حجم فایل: "
-            f"<code>{size_label}</code>\n\n"
-
-            "📤 <b>در حال ارسال فایل به تلگرام...</b>"
+            f"{_tr('✅ <b>دانلود کامل شد</b>\n\n🆔 Job ID: <code>')}{job_id}{_tr('</code>\n📦 حجم فایل: <code>')}{size_label}{_tr('</code>\n\n📤 <b>در حال ارسال فایل به تلگرام...</b>')}"
         ),
         reply_markup=None,
     )
@@ -2524,13 +2474,7 @@ async def send_downloaded_file(
             document=document,
             disable_content_type_detection=True,
             caption=(
-                "✅ <b>دانلود با موفقیت انجام شد</b>\n\n"
-
-                f"🆔 Job ID: "
-                f"<code>{job_id}</code>\n"
-
-                f"📦 حجم فایل: "
-                f"<code>{size_label}</code>"
+                f"{_tr('✅ <b>دانلود با موفقیت انجام شد</b>\n\n🆔 Job ID: <code>')}{job_id}{_tr('</code>\n📦 حجم فایل: <code>')}{size_label}</code>"
             ),
             parse_mode="HTML",
         )
@@ -2688,7 +2632,7 @@ async def download_pause_callback(
     ):
 
         await callback.answer(
-            "❌ Job نامعتبر است.",
+            _tr("❌ Job نامعتبر است."),
             show_alert=True,
         )
 
@@ -2703,7 +2647,7 @@ async def download_pause_callback(
         )
 
         await callback.answer(
-            "⏸ دانلود متوقف شد."
+            _tr("⏸ دانلود متوقف شد.")
         )
 
         if isinstance(
@@ -2716,7 +2660,7 @@ async def download_pause_callback(
                     "quality"
                 )
                 or
-                "نامشخص"
+                _tr("نامشخص")
             )
 
             await safe_edit_message(
@@ -2774,7 +2718,7 @@ async def download_resume_callback(
     ):
 
         await callback.answer(
-            "❌ Job نامعتبر است.",
+            _tr("❌ Job نامعتبر است."),
             show_alert=True,
         )
 
@@ -2801,7 +2745,7 @@ async def download_resume_callback(
                 "quality"
             )
             or
-            "نامشخص"
+            _tr("نامشخص")
         )
 
         downloaded_label = (
@@ -2817,14 +2761,11 @@ async def download_resume_callback(
         if downloaded_label:
 
             extra = (
-                "\n📦 دانلود شده: "
-                f"<code>"
-                f"{downloaded_label}"
-                f"</code>"
+                f"{_tr('\n📦 دانلود شده: <code>')}{downloaded_label}</code>"
             )
 
         await callback.answer(
-            "▶️ دانلود ادامه پیدا کرد."
+            _tr("▶️ دانلود ادامه پیدا کرد.")
         )
 
         if isinstance(
@@ -2835,17 +2776,7 @@ async def download_resume_callback(
             await safe_edit_message(
                 callback.message,
                 (
-                    "▶️ <b>دانلود ادامه پیدا کرد</b>\n\n"
-
-                    f"🆔 Job ID: "
-                    f"<code>{job_id}</code>\n"
-
-                    f"🎬 کیفیت: "
-                    f"<code>{quality}</code>\n"
-
-                    f"📊 ادامه از حدود: "
-                    f"<code>{progress}%</code>"
-                    f"{extra}"
+                    f"{_tr('▶️ <b>دانلود ادامه پیدا کرد</b>\n\n🆔 Job ID: <code>')}{job_id}{_tr('</code>\n🎬 کیفیت: <code>')}{quality}{_tr('</code>\n📊 ادامه از حدود: <code>')}{progress}%</code>{extra}"
                 ),
                 reply_markup=(
                     build_active_download_keyboard(
@@ -2894,7 +2825,7 @@ async def download_cancel_callback(
     ):
 
         await callback.answer(
-            "❌ Job نامعتبر است.",
+            _tr("❌ Job نامعتبر است."),
             show_alert=True,
         )
 
@@ -2929,14 +2860,11 @@ async def download_cancel_callback(
         if downloaded_label:
 
             extra = (
-                "\n📦 دانلود شده تا زمان لغو: "
-                f"<code>"
-                f"{downloaded_label}"
-                f"</code>"
+                f"{_tr('\n📦 دانلود شده تا زمان لغو: <code>')}{downloaded_label}</code>"
             )
 
         await callback.answer(
-            "❌ دانلود لغو شد."
+            _tr("❌ دانلود لغو شد.")
         )
 
         if isinstance(
@@ -2947,16 +2875,7 @@ async def download_cancel_callback(
             await safe_edit_message(
                 callback.message,
                 (
-                    "❌ <b>دانلود لغو شد</b>\n\n"
-
-                    f"🆔 Job ID: "
-                    f"<code>{job_id}</code>\n"
-
-                    f"📊 پیشرفت هنگام لغو: "
-                    f"<code>{progress}%</code>"
-                    f"{extra}\n\n"
-
-                    "🗑 فایل موقت از سرور حذف می‌شود."
+                    f"{_tr('❌ <b>دانلود لغو شد</b>\n\n🆔 Job ID: <code>')}{job_id}{_tr('</code>\n📊 پیشرفت هنگام لغو: <code>')}{progress}%</code>{extra}{_tr('\n\n🗑 فایل موقت از سرور حذف می\u200cشود.')}"
                 ),
                 reply_markup=None,
             )
@@ -3011,7 +2930,7 @@ async def media_page_callback(
     ):
 
         await callback.answer(
-            "❌ درخواست نامعتبر است.",
+            _tr("❌ درخواست نامعتبر است."),
             show_alert=True,
         )
 
@@ -3033,8 +2952,8 @@ async def media_page_callback(
 
         await callback.answer(
             (
-                "⌛ این انتخاب منقضی شده است. "
-                "لینک را دوباره ارسال کنید."
+                _tr("⌛ این انتخاب منقضی شده است. "
+                "لینک را دوباره ارسال کنید.")
             ),
             show_alert=True,
         )
@@ -3053,7 +2972,7 @@ async def media_page_callback(
     ):
 
         await callback.answer(
-            "❌ شماره صفحه نامعتبر است.",
+            _tr("❌ شماره صفحه نامعتبر است."),
             show_alert=True,
         )
 
@@ -3084,7 +3003,7 @@ async def media_page_callback(
     ):
 
         await callback.answer(
-            "❌ این صفحه وجود ندارد.",
+            _tr("❌ این صفحه وجود ندارد."),
             show_alert=True,
         )
 
@@ -3111,10 +3030,7 @@ async def media_page_callback(
 
     await callback.answer(
         (
-            f"صفحه "
-            f"{page + 1}"
-            f" از "
-            f"{total_pages}"
+            f"{_tr('صفحه ')}{page + 1}{_tr(' از ')}{total_pages}"
         )
     )
 
@@ -3178,7 +3094,7 @@ async def media_entry_callback(
     ):
 
         await callback.answer(
-            "❌ درخواست نامعتبر است.",
+            _tr("❌ درخواست نامعتبر است."),
             show_alert=True,
         )
 
@@ -3200,8 +3116,8 @@ async def media_entry_callback(
 
         await callback.answer(
             (
-                "⌛ این انتخاب منقضی شده است. "
-                "لینک را دوباره ارسال کنید."
+                _tr("⌛ این انتخاب منقضی شده است. "
+                "لینک را دوباره ارسال کنید.")
             ),
             show_alert=True,
         )
@@ -3220,7 +3136,7 @@ async def media_entry_callback(
     ):
 
         await callback.answer(
-            "❌ شماره رسانه نامعتبر است.",
+            _tr("❌ شماره رسانه نامعتبر است."),
             show_alert=True,
         )
 
@@ -3242,7 +3158,7 @@ async def media_entry_callback(
     if not source_url:
 
         await callback.answer(
-            "❌ لینک رسانه پیدا نشد.",
+            _tr("❌ لینک رسانه پیدا نشد."),
             show_alert=True,
         )
 
@@ -3273,7 +3189,7 @@ async def media_entry_callback(
     if selected_entry is None:
 
         await callback.answer(
-            "❌ رسانه انتخاب‌شده پیدا نشد.",
+            _tr("❌ رسانه انتخاب‌شده پیدا نشد."),
             show_alert=True,
         )
 
@@ -3314,7 +3230,7 @@ async def media_entry_callback(
     if media_type == "image":
 
         await callback.answer(
-            f"📷 عکس {index} انتخاب شد."
+            f"{_tr('📷 عکس ')}{index}{_tr(' انتخاب شد.')}"
         )
 
         try:
@@ -3322,11 +3238,7 @@ async def media_entry_callback(
             await safe_edit_message(
                 message,
                 (
-                    "⏳ <b>در حال ایجاد درخواست دانلود عکس...</b>\n\n"
-                    f"📷 شماره عکس: "
-                    f"<code>{index}</code>\n"
-                    "🖼 کیفیت: "
-                    "<code>اصلی</code>"
+                    f"{_tr('⏳ <b>در حال ایجاد درخواست دانلود عکس...</b>\n\n📷 شماره عکس: <code>')}{index}{_tr('</code>\n🖼 کیفیت: <code>اصلی</code>')}"
                 ),
             )
 
@@ -3349,15 +3261,7 @@ async def media_entry_callback(
             await safe_edit_message(
                 message,
                 (
-                    "✅ <b>درخواست دانلود عکس ایجاد شد</b>\n\n"
-                    f"🆔 Job ID: "
-                    f"<code>{job_id}</code>\n"
-                    f"📷 عکس: "
-                    f"<code>{index}</code>\n"
-                    "🖼 کیفیت: "
-                    "<code>اصلی</code>\n"
-                    "📊 وضعیت: "
-                    "<code>pending</code>"
+                    f"{_tr('✅ <b>درخواست دانلود عکس ایجاد شد</b>\n\n🆔 Job ID: <code>')}{job_id}{_tr('</code>\n📷 عکس: <code>')}{index}{_tr('</code>\n🖼 کیفیت: <code>اصلی</code>\n📊 وضعیت: <code>pending</code>')}"
                 ),
                 reply_markup=(
                     build_active_download_keyboard(
@@ -3370,7 +3274,7 @@ async def media_entry_callback(
                 await wait_for_download(
                     job_id,
                     message,
-                    "تصویر اصلی",
+                    _tr("تصویر اصلی"),
                 )
             )
 
@@ -3401,11 +3305,7 @@ async def media_entry_callback(
             await safe_edit_message(
                 message,
                 (
-                    "❌ <b>دانلود عکس با خطا مواجه شد</b>\n\n"
-                    "⚠️ خطا:\n"
-                    f"<code>"
-                    f"{html.escape(download_error_text(exc))}"
-                    f"</code>"
+                    f"{_tr('❌ <b>دانلود عکس با خطا مواجه شد</b>\n\n⚠️ خطا:\n<code>')}{html.escape(download_error_text(exc))}</code>"
                 ),
                 reply_markup=download_error_markup(exc),
             )
@@ -3421,7 +3321,7 @@ async def media_entry_callback(
     # ========================================================
 
     await callback.answer(
-        f"🎬 ویدئو {index} انتخاب شد."
+        f"{_tr('🎬 ویدئو ')}{index}{_tr(' انتخاب شد.')}"
     )
 
     try:
@@ -3448,8 +3348,8 @@ async def media_entry_callback(
         if not quality_options:
 
             raise RuntimeError(
-                "هیچ کیفیت ویدئویی "
-                "قابل دانلودی پیدا نشد."
+                _tr("هیچ کیفیت ویدئویی "
+                "قابل دانلودی پیدا نشد.")
             )
 
         token = (
@@ -3491,11 +3391,7 @@ async def media_entry_callback(
         await safe_edit_message(
             message,
             (
-                f"🎬 <b>ویدئو {index} آماده دانلود است</b>\n\n"
-                f"📌 <b>عنوان:</b> "
-                f"{safe_title}\n\n"
-                "🎯 <b>کیفیت موردنظر را انتخاب کنید:</b>\n"
-                "📦 حجم‌ها تقریبی هستند."
+                f"{_tr('🎬 <b>ویدئو ')}{index}{_tr(' آماده دانلود است</b>\n\n📌 <b>عنوان:</b> ')}{safe_title}{_tr('\n\n🎯 <b>کیفیت موردنظر را انتخاب کنید:</b>\n📦 حجم\u200cها تقریبی هستند.')}"
             ),
             reply_markup=keyboard,
         )
@@ -3511,11 +3407,7 @@ async def media_entry_callback(
         await safe_edit_message(
             message,
             (
-                "❌ <b>دریافت اطلاعات رسانه ناموفق بود</b>\n\n"
-                "⚠️ خطا:\n"
-                f"<code>"
-                f"{html.escape(str(exc)[:1000])}"
-                f"</code>"
+                f"{_tr('❌ <b>دریافت اطلاعات رسانه ناموفق بود</b>\n\n⚠️ خطا:\n<code>')}{html.escape(str(exc)[:1000])}</code>"
             ),
             reply_markup=download_error_markup(exc),
         )
@@ -3537,7 +3429,7 @@ async def quality_callback(
     if not callback.data:
 
         await callback.answer(
-            "❌ درخواست نامعتبر است.",
+            _tr("❌ درخواست نامعتبر است."),
             show_alert=True,
         )
 
@@ -3558,7 +3450,7 @@ async def quality_callback(
     ):
 
         await callback.answer(
-            "❌ درخواست نامعتبر است.",
+            _tr("❌ درخواست نامعتبر است."),
             show_alert=True,
         )
 
@@ -3580,8 +3472,8 @@ async def quality_callback(
 
         await callback.answer(
             (
-                "⏰ این درخواست منقضی شده است. "
-                "لطفاً لینک را دوباره ارسال کنید."
+                _tr("⏰ این درخواست منقضی شده است. "
+                "لطفاً لینک را دوباره ارسال کنید.")
             ),
             show_alert=True,
         )
@@ -3610,7 +3502,7 @@ async def quality_callback(
     if not source_url:
 
         await callback.answer(
-            "❌ لینک دانلود پیدا نشد.",
+            _tr("❌ لینک دانلود پیدا نشد."),
             show_alert=True,
         )
 
@@ -3625,7 +3517,7 @@ async def quality_callback(
     except ValueError:
 
         await callback.answer(
-            "❌ کیفیت نامعتبر است.",
+            _tr("❌ کیفیت نامعتبر است."),
             show_alert=True,
         )
 
@@ -3654,13 +3546,13 @@ async def quality_callback(
                 estimated_size
             )
             or
-            "نامشخص"
+            _tr("نامشخص")
         )
 
         await callback.answer(
             (
-                "حجم این کیفیت "
-                "بیش از حد مجاز است."
+                _tr("حجم این کیفیت "
+                "بیش از حد مجاز است.")
             ),
             show_alert=True,
         )
@@ -3688,27 +3580,21 @@ async def quality_callback(
         )
 
         text = (
-            "⚠️ <b>حجم این کیفیت بیش از حد مجاز است</b>\n\n"
-
-            f"🎬 کیفیت انتخاب‌شده: "
-            f"<code>{quality}</code>\n"
-
-            f"📦 حجم تقریبی: "
-            f"<code>{size_label}</code>\n\n"
+            f"{_tr('⚠️ <b>حجم این کیفیت بیش از حد مجاز است</b>\n\n🎬 کیفیت انتخاب\u200cشده: <code>')}{quality}{_tr('</code>\n📦 حجم تقریبی: <code>')}{size_label}</code>\n\n"
         )
 
         if smaller_keyboard:
 
             text += (
-                "👇 لطفاً یکی از کیفیت‌های "
-                "پایین‌تر را انتخاب کنید."
+                _tr("👇 لطفاً یکی از کیفیت‌های "
+                "پایین‌تر را انتخاب کنید.")
             )
 
         else:
 
             text += (
-                "❌ کیفیت پایین‌تری در "
-                "محدوده مجاز پیدا نشد."
+                _tr("❌ کیفیت پایین‌تری در "
+                "محدوده مجاز پیدا نشد.")
             )
 
         await safe_edit_message(
@@ -3728,9 +3614,7 @@ async def quality_callback(
 
     await callback.answer(
         (
-            f"کیفیت "
-            f"{quality} "
-            "انتخاب شد."
+            f"{_tr('کیفیت ')}{quality}{_tr(' انتخاب شد.')}"
         )
     )
 
@@ -3769,20 +3653,13 @@ async def quality_callback(
             if estimated_label:
 
                 estimated_text = (
-                    "\n📦 حجم تقریبی: "
-                    f"<code>"
-                    f"{estimated_label}"
-                    f"</code>"
+                    f"{_tr('\n📦 حجم تقریبی: <code>')}{estimated_label}</code>"
                 )
 
         await safe_edit_message(
             status_message,
             (
-                "⏳ <b>در حال ایجاد درخواست دانلود...</b>\n\n"
-
-                f"🎬 کیفیت: "
-                f"<code>{quality}</code>"
-                f"{estimated_text}"
+                f"{_tr('⏳ <b>در حال ایجاد درخواست دانلود...</b>\n\n🎬 کیفیت: <code>')}{quality}</code>{estimated_text}"
             ),
         )
 
@@ -3807,16 +3684,7 @@ async def quality_callback(
         await safe_edit_message(
             status_message,
             (
-                "✅ <b>درخواست دانلود ایجاد شد</b>\n\n"
-
-                f"🆔 Job ID: "
-                f"<code>{job_id}</code>\n"
-
-                f"🎬 کیفیت: "
-                f"<code>{quality}</code>\n"
-
-                "📊 وضعیت: "
-                "<code>pending</code>"
+                f"{_tr('✅ <b>درخواست دانلود ایجاد شد</b>\n\n🆔 Job ID: <code>')}{job_id}{_tr('</code>\n🎬 کیفیت: <code>')}{quality}{_tr('</code>\n📊 وضعیت: <code>pending</code>')}"
             ),
             reply_markup=(
                 build_active_download_keyboard(
@@ -3871,9 +3739,9 @@ async def quality_callback(
         await safe_edit_message(
             status_message,
             (
-                "⌛ <b>زمان انتظار ربات به پایان رسید</b>\n\n"
+                _tr("⌛ <b>زمان انتظار ربات به پایان رسید</b>\n\n"
 
-                "وضعیت Job را دوباره بررسی کنید."
+                "وضعیت Job را دوباره بررسی کنید.")
             ),
             reply_markup=download_error_markup(exc),
         )
@@ -3925,7 +3793,7 @@ async def quality_callback(
                         [
                             InlineKeyboardButton(
                                 text=(
-                                    "🎬 دانلود با 360p"
+                                    _tr("🎬 دانلود با 360p")
                                 ),
                                 callback_data=(
                                     f"quality:"
@@ -3941,14 +3809,7 @@ async def quality_callback(
             await safe_edit_message(
                 status_message,
                 (
-                    f"❌ <b>کیفیت "
-                    f"{quality} "
-                    "فعلاً از YouTube "
-                    "قابل دریافت نیست</b>\n\n"
-
-                    "✅ کیفیت "
-                    "<code>360p</code> "
-                    "در دسترس است."
+                    f"{_tr('❌ <b>کیفیت ')}{quality}{_tr(' فعلاً از YouTube قابل دریافت نیست</b>\n\n✅ کیفیت <code>360p</code> در دسترس است.')}"
                 ),
                 reply_markup=(
                     fallback_keyboard
@@ -3966,13 +3827,7 @@ async def quality_callback(
         await safe_edit_message(
             status_message,
             (
-                "❌ <b>دانلود انجام نشد</b>\n\n"
-
-                "⚠️ خطا:\n"
-
-                f"<code>"
-                f"{safe_error}"
-                f"</code>"
+                f"{_tr('❌ <b>دانلود انجام نشد</b>\n\n⚠️ خطا:\n<code>')}{safe_error}</code>"
             ),
             reply_markup=None,
         )
@@ -4013,7 +3868,7 @@ async def download_handler(
             f"{type(exc).__name__}: {exc}"
         )
         await message.answer(
-            "❌ ثبت حساب کاربری انجام نشد؛ چند لحظه بعد دوباره تلاش کنید."
+            _tr("❌ ثبت حساب کاربری انجام نشد؛ چند لحظه بعد دوباره تلاش کنید.")
         )
         return
 
@@ -4035,9 +3890,9 @@ async def download_handler(
     status_message = (
         await message.answer(
             (
-                "🔎 <b>لینک دریافت شد</b>\n"
+                _tr("🔎 <b>لینک دریافت شد</b>\n"
 
-                "در حال بررسی کیفیت‌های موجود..."
+                "در حال بررسی کیفیت‌های موجود...")
             ),
             parse_mode="HTML",
         )
@@ -4141,13 +3996,7 @@ async def download_handler(
 
             await status_message.edit_text(
                 (
-                    "📚 <b>این پست شامل "
-                    f"{len(entries)} رسانه است</b>\n\n"
-
-                    f"📌 <b>عنوان:</b> "
-                    f"{safe_title}\n\n"
-
-                    "👇 <b>رسانه موردنظر را انتخاب کنید:</b>"
+                    f"{_tr('📚 <b>این پست شامل ')}{len(entries)}{_tr(' رسانه است</b>\n\n📌 <b>عنوان:</b> ')}{safe_title}{_tr('\n\n👇 <b>رسانه موردنظر را انتخاب کنید:</b>')}"
                 ),
                 reply_markup=keyboard,
                 parse_mode="HTML",
@@ -4184,12 +4033,7 @@ async def download_handler(
             await safe_edit_message(
                 status_message,
                 (
-                    "📷 <b>تصویر آماده دانلود است</b>\n\n"
-                    f"📌 <b>عنوان:</b> "
-                    f"{safe_title}\n"
-                    "🖼 <b>کیفیت:</b> "
-                    "<code>اصلی</code>\n\n"
-                    "⏳ در حال ایجاد درخواست دانلود..."
+                    f"{_tr('📷 <b>تصویر آماده دانلود است</b>\n\n📌 <b>عنوان:</b> ')}{safe_title}{_tr('\n🖼 <b>کیفیت:</b> <code>اصلی</code>\n\n⏳ در حال ایجاد درخواست دانلود...')}"
                 ),
             )
 
@@ -4214,13 +4058,7 @@ async def download_handler(
             await safe_edit_message(
                 status_message,
                 (
-                    "✅ <b>درخواست دانلود تصویر ایجاد شد</b>\n\n"
-                    f"🆔 Job ID: "
-                    f"<code>{job_id}</code>\n"
-                    "🖼 کیفیت: "
-                    "<code>اصلی</code>\n"
-                    "📊 وضعیت: "
-                    "<code>pending</code>"
+                    f"{_tr('✅ <b>درخواست دانلود تصویر ایجاد شد</b>\n\n🆔 Job ID: <code>')}{job_id}{_tr('</code>\n🖼 کیفیت: <code>اصلی</code>\n📊 وضعیت: <code>pending</code>')}"
                 ),
                 reply_markup=(
                     build_active_download_keyboard(
@@ -4233,7 +4071,7 @@ async def download_handler(
                 await wait_for_download(
                     job_id,
                     status_message,
-                    "تصویر اصلی",
+                    _tr("تصویر اصلی"),
                 )
             )
 
@@ -4269,8 +4107,8 @@ async def download_handler(
         if not quality_options:
 
             raise RuntimeError(
-                "هیچ کیفیت ویدئویی "
-                "قابل دانلودی پیدا نشد."
+                _tr("هیچ کیفیت ویدئویی "
+                "قابل دانلودی پیدا نشد.")
             )
 
         token = (
@@ -4301,10 +4139,7 @@ async def download_handler(
         )
 
         text = (
-            "🎬 <b>ویدئو آماده دانلود است</b>\n\n"
-
-            f"📌 <b>عنوان:</b> "
-            f"{safe_title}\n"
+            f"{_tr('🎬 <b>ویدئو آماده دانلود است</b>\n\n📌 <b>عنوان:</b> ')}{safe_title}\n"
         )
 
         if duration:
@@ -4363,15 +4198,12 @@ async def download_handler(
                     )
 
                 text += (
-                    f"⏱ <b>مدت:</b> "
-                    f"<code>"
-                    f"{duration_text}"
-                    f"</code>\n"
+                    f"{_tr('⏱ <b>مدت:</b> <code>')}{duration_text}</code>\n"
                 )
 
         text += (
-            "\n🎯 <b>کیفیت موردنظر را انتخاب کنید:</b>\n"
-            "📦 حجم‌ها تقریبی هستند."
+            _tr("\n🎯 <b>کیفیت موردنظر را انتخاب کنید:</b>\n"
+            "📦 حجم‌ها تقریبی هستند.")
         )
 
         await status_message.edit_text(
@@ -4397,13 +4229,7 @@ async def download_handler(
         await safe_edit_message(
             status_message,
             (
-                "❌ <b>نتوانستم اطلاعات ویدئو را دریافت کنم</b>\n\n"
-
-                "⚠️ خطا:\n"
-
-                f"<code>"
-                f"{safe_error}"
-                f"</code>"
+                f"{_tr('❌ <b>نتوانستم اطلاعات ویدئو را دریافت کنم</b>\n\n⚠️ خطا:\n<code>')}{safe_error}</code>"
             ),
             reply_markup=download_error_markup(exc),
         )
@@ -4434,6 +4260,9 @@ async def main():
             timeout=3600,
         )
     )
+
+    session.middleware(PollHeartbeatMiddleware(dp.storage.redis))
+    session.middleware(InterfaceRequests(dp.storage.redis))
 
     bot = (
         Bot(

@@ -36,7 +36,7 @@ MESSAGES: dict[str, dict[str, str]] = {
         ),
         "home.buy": "💎 Buy subscription",
         "home.subscription": "👤 My subscription",
-        "home.language": "🌐 Language | تغییر زبان",
+        "home.language": "🌐 Language",
         "home.support": "🛟 Support",
         "home.tutorial": "📘 How to use",
         "home.faq": "❓ FAQ",
@@ -86,6 +86,9 @@ HOME_BUTTON_ACTIONS: dict[str, str] = {
 # replaces them with the new persistent menu on the user's next interaction.
 HOME_BUTTON_ACTIONS.update(
     {
+        "🌐 Language | تغییر زبان": "language",
+        "🧩 More options": "more",
+        "🧩 گزینه‌های بیشتر": "more",
         "🌐 تغییر زبان": "language",
         "🌐 Change language": "language",
     }

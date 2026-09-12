@@ -1,3 +1,4 @@
+import re
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
@@ -6,6 +7,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
+from app.core.language import effective_language
 from app.models.payment import Payment, PaymentStatus
 from app.models.download_job import DownloadJob, DownloadJobStatus
 from app.models.plan import Plan
@@ -21,6 +23,7 @@ from app.services.managed_settings import (
 )
 from app.services.payment_management import PaymentManagementService
 from app.services.download_access import quota_day_start_utc
+from app.services.audit import AuditService
 
 
 ALLOWED_RECEIPT_DOCUMENT_MIME_TYPES = {
@@ -46,6 +49,10 @@ class PendingPaymentExists(PaymentConflict):
 
 
 class DuplicateReceipt(PaymentConflict):
+    pass
+
+
+class DuplicateTxID(PaymentConflict):
     pass
 
 
@@ -96,6 +103,52 @@ def payment_daily_download_limit(payment: Payment, plan: Plan) -> int | None:
     return parsed if parsed > 0 else plan.daily_download_limit
 
 
+def canonical_network(value):
+    code = str(value or "").strip().upper()
+    aliases = {"TRC20": "TRON", "ERC20": "ETHEREUM", "ETH": "ETHEREUM",
+               "BEP20": "BSC", "BEP-20": "BSC", "SOL": "SOLANA"}
+    return aliases.get(code, code)
+
+
+def normalize_transaction_id(value):
+    value = str(value or "").strip()
+    if re.fullmatch(r"(?:0[xX])?[a-fA-F0-9]{64}", value):
+        return value[-64:].lower()
+    # Base58 ids (for example Solana) are case-sensitive.
+    return value
+
+
+def _benefit(value: int | None) -> float:
+    return float("inf") if value is None else float(value)
+
+
+def classify_plan_change(current: Plan, purchased: Plan) -> str:
+    """Classify custom plans without relying on names or fixed tiers."""
+    current_values = (
+        _benefit(current.daily_download_limit),
+        _benefit(current.max_file_size_mb),
+        _benefit(current.max_quality),
+        float(current.max_concurrent_downloads),
+        float(bool(current.priority_processing)),
+        float(not bool(current.forced_join_required)),
+    )
+    purchased_values = (
+        _benefit(purchased.daily_download_limit),
+        _benefit(purchased.max_file_size_mb),
+        _benefit(purchased.max_quality),
+        float(purchased.max_concurrent_downloads),
+        float(bool(purchased.priority_processing)),
+        float(not bool(purchased.forced_join_required)),
+    )
+    if all(new >= old for old, new in zip(current_values, purchased_values)) and any(
+        new > old for old, new in zip(current_values, purchased_values)
+    ):
+        return "upgrade"
+    if all(new <= old for old, new in zip(current_values, purchased_values)):
+        return "downgrade"
+    return "switch"
+
+
 class PaymentService:
     def __init__(self, session: AsyncSession):
         self.session = session
@@ -143,24 +196,6 @@ class PaymentService:
             data,
             await get_receipt_max_size_mb(self.session),
         )
-        offer = await get_payment_offer(
-            self.session,
-            data.offer_code,
-            currency=data.currency,
-        )
-        management = PaymentManagementService(self.session)
-        if data.currency == "USDT":
-            payment_card_id = None
-            destination_snapshot = await management.usdt_destination_for_submission(
-                data.usdt_destination_id
-            )
-            payment_method = "usdt"
-        else:
-            payment_card_id, destination_snapshot = (
-                await management.payment_card_for_submission(data.payment_card_id)
-            )
-            payment_method = "card"
-
         result = await self.session.execute(
             select(User)
             .where(User.telegram_id == data.telegram_id)
@@ -173,6 +208,40 @@ class PaymentService:
 
         if user.status != UserStatus.ACTIVE:
             raise PermissionError("User account is not active")
+
+        language = effective_language(
+            preferred_language=user.preferred_language,
+            telegram_language_code=user.language_code,
+        )
+        expected_currency = "USDT" if language == "en" else "IRT"
+        if data.currency != expected_currency:
+            raise PermissionError(
+                f"{data.currency} payments are not available in the active language"
+            )
+
+        offer = await get_payment_offer(
+            self.session,
+            data.offer_code,
+            currency=data.currency,
+        )
+        management = PaymentManagementService(self.session)
+        if data.currency == "USDT":
+            payment_card_id = None
+            destination_snapshot = await management.usdt_destination_for_submission(
+                data.usdt_destination_id
+            )
+            payment_method = "usdt"
+            network_code = canonical_network(destination_snapshot.get("network_code"))
+            txid = str(data.txid or "").strip()
+            txid_normalized = normalize_transaction_id(txid)
+        else:
+            payment_card_id, destination_snapshot = (
+                await management.payment_card_for_submission(data.payment_card_id)
+            )
+            payment_method = "card"
+            network_code = None
+            txid = None
+            txid_normalized = None
 
         result = await self.session.execute(
             select(Payment)
@@ -203,6 +272,20 @@ class PaymentService:
                     "This Telegram receipt file was already submitted"
                 )
 
+        if txid_normalized is not None:
+            result = await self.session.execute(
+                select(Payment.id)
+                .where(
+                    Payment.usdt_network_code == network_code,
+                    Payment.txid_normalized == txid_normalized,
+                )
+                .limit(1)
+            )
+            if result.scalar_one_or_none() is not None:
+                raise DuplicateTxID(
+                    "This TxID was already submitted for the selected network"
+                )
+
         payment = Payment(
             user_id=user.id,
             plan_id=offer.plan_id,
@@ -223,6 +306,9 @@ class PaymentService:
             payment_method=payment_method,
             payment_card_id=payment_card_id,
             payment_destination_snapshot=destination_snapshot,
+            txid=txid,
+            txid_normalized=txid_normalized,
+            usdt_network_code=network_code,
         )
         self.session.add(payment)
 
@@ -230,9 +316,13 @@ class PaymentService:
             await self.session.commit()
         except IntegrityError as exc:
             await self.session.rollback()
-            raise DuplicateReceipt(
-                "This Telegram receipt file was already submitted"
-            ) from exc
+            if "uq_payments_usdt_network_txid" in str(exc.orig):
+                raise DuplicateTxID(
+                    "This TxID was already submitted for the selected network"
+                ) from exc
+            if "uq_payments_receipt_file_unique_id" in str(exc.orig):
+                raise DuplicateReceipt("This Telegram receipt file was already submitted") from exc
+            raise
 
         await self.session.refresh(payment)
 
@@ -268,13 +358,9 @@ class PaymentService:
         payment = await self._get_payment_for_update(payment_id)
         user = await self._get_user(payment.user_id)
 
-        if payment.status == PaymentStatus.PENDING:
-            payment.status = PaymentStatus.REJECTED
-            payment.rejection_reason = "admin_delivery_failed"
-            payment.receipt_file_unique_id = None
-            payment.reviewed_at = datetime.now(timezone.utc)
-            await self.session.commit()
-            await self.session.refresh(payment)
+        # Delivery is independent of financial review. Keep the payment and
+        # its duplicate protection pending in the finance panel for recovery.
+        # A Telegram outage must never reject money the customer already sent.
 
         return PaymentActionResult(
             payment=payment,
@@ -323,32 +409,43 @@ class PaymentService:
         )
 
         result = await self.session.execute(
-            select(Subscription)
+            select(Subscription, Plan)
+            .join(Plan, Plan.id == Subscription.plan_id)
             .where(
                 Subscription.user_id == user.id,
-                Subscription.plan_id == payment.plan_id,
-                Subscription.status == SubscriptionStatus.ACTIVE,
+                Subscription.status.in_(
+                    (SubscriptionStatus.ACTIVE, SubscriptionStatus.SCHEDULED)
+                ),
                 Subscription.started_at <= now,
                 Subscription.expires_at > now,
             )
-            .order_by(
-                Subscription.expires_at.desc(),
-                Subscription.id.desc(),
-            )
+            .order_by(Subscription.expires_at.desc(), Subscription.id.desc())
             .limit(1)
             .with_for_update()
         )
-        subscription = result.scalar_one_or_none()
+        current_row = result.first()
+        current_subscription = current_row[0] if current_row else None
+        current_plan = current_row[1] if current_row else None
 
-        if subscription is None:
+        if current_subscription is None:
             purchased_daily_limit = payment_daily_download_limit(payment, plan)
+            future_end = (await self.session.execute(
+                select(func.max(Subscription.expires_at)).where(
+                    Subscription.user_id == user.id,
+                    Subscription.status == SubscriptionStatus.SCHEDULED,
+                    Subscription.started_at > now,
+                    Subscription.expires_at > now,
+                )
+            )).scalar_one()
+            starts_scheduled = future_end is not None
+            started_at = future_end if starts_scheduled else now
             subscription = Subscription(
                 user_id=user.id,
                 plan_id=payment.plan_id,
-                status=SubscriptionStatus.ACTIVE,
-                started_at=now,
+                status=(SubscriptionStatus.SCHEDULED if starts_scheduled else SubscriptionStatus.ACTIVE),
+                started_at=started_at,
                 expires_at=add_duration_days(
-                    now,
+                    started_at,
                     payment.duration_days,
                 ),
                 daily_download_limit=purchased_daily_limit,
@@ -356,15 +453,59 @@ class PaymentService:
             )
             self.session.add(subscription)
             await self.session.flush()
-        else:
-            subscription.expires_at = add_duration_days(
-                subscription.expires_at,
-                payment.duration_days,
-            )
+            payment.subscription_change_type = "scheduled" if starts_scheduled else "new"
+        elif current_subscription.plan_id == payment.plan_id:
+            subscription = current_subscription
+            subscription.status = SubscriptionStatus.ACTIVE
+            await self._shift_future_subscriptions(user.id, now, timedelta(days=payment.duration_days))
+            subscription.expires_at = add_duration_days(subscription.expires_at, payment.duration_days)
             subscription.daily_download_limit = combine_daily_download_limits(
                 subscription.daily_download_limit,
                 payment_daily_download_limit(payment, plan),
             )
+            payment.subscription_change_type = "renewal"
+        else:
+            change_type = classify_plan_change(current_plan, plan)
+            if change_type == "upgrade":
+                # Preserve the exact remaining time, including partial days.
+                remaining_time = max(timedelta(0), current_subscription.expires_at - now)
+                await self._shift_future_subscriptions(user.id, now, timedelta(days=payment.duration_days))
+                current_subscription.status = SubscriptionStatus.CANCELLED
+                subscription = Subscription(
+                    user_id=user.id,
+                    plan_id=payment.plan_id,
+                    status=SubscriptionStatus.ACTIVE,
+                    started_at=now,
+                    expires_at=add_duration_days(now, payment.duration_days) + remaining_time,
+                    daily_download_limit=payment_daily_download_limit(payment, plan),
+                    auto_renew=False,
+                )
+                self.session.add(subscription)
+                await self.session.flush()
+                payment.subscription_change_type = "upgrade"
+            else:
+                # Downgrades and mixed plan switches are scheduled so already
+                # paid entitlements are never removed early.
+                latest_end = (await self.session.execute(
+                    select(func.max(Subscription.expires_at)).where(
+                        Subscription.user_id == user.id,
+                        Subscription.status.in_((SubscriptionStatus.ACTIVE, SubscriptionStatus.SCHEDULED)),
+                        Subscription.expires_at > now,
+                    )
+                )).scalar_one()
+                start_at = latest_end or current_subscription.expires_at
+                subscription = Subscription(
+                    user_id=user.id,
+                    plan_id=payment.plan_id,
+                    status=SubscriptionStatus.SCHEDULED,
+                    started_at=start_at,
+                    expires_at=add_duration_days(start_at, payment.duration_days),
+                    daily_download_limit=payment_daily_download_limit(payment, plan),
+                    auto_renew=False,
+                )
+                self.session.add(subscription)
+                await self.session.flush()
+                payment.subscription_change_type = change_type
 
         payment.status = PaymentStatus.APPROVED
         payment.reviewed_by_telegram_id = admin_telegram_id
@@ -372,6 +513,9 @@ class PaymentService:
         payment.rejection_reason = None
         payment.subscription_id = subscription.id
 
+        AuditService(self.session).record(action="payment.approved", actor_telegram_id=admin_telegram_id,
+            target_type="payment", target_id=payment.id,
+            details={"subscription_id": subscription.id, "change_type": payment.subscription_change_type})
         await self.session.commit()
         await self.session.refresh(payment)
         await self.session.refresh(subscription)
@@ -381,6 +525,15 @@ class PaymentService:
             user=user,
             subscription=subscription,
         )
+
+    async def _shift_future_subscriptions(self, user_id, now, delta):
+        rows = (await self.session.execute(select(Subscription).where(
+            Subscription.user_id == user_id, Subscription.status == SubscriptionStatus.SCHEDULED,
+            Subscription.started_at > now,
+        ).with_for_update())).scalars()
+        for future in rows:
+            future.started_at += delta
+            future.expires_at += delta
 
     async def reject(
         self,
@@ -407,6 +560,8 @@ class PaymentService:
         payment.reviewed_by_telegram_id = admin_telegram_id
         payment.reviewed_at = datetime.now(timezone.utc)
         payment.rejection_reason = reason.strip()
+        AuditService(self.session).record(action="payment.rejected", actor_telegram_id=admin_telegram_id,
+            target_type="payment", target_id=payment.id, details={"reason": reason.strip()})
 
         await self.session.commit()
         await self.session.refresh(payment)
@@ -425,7 +580,9 @@ class PaymentService:
             .join(User, User.id == Subscription.user_id)
             .where(
                 User.telegram_id == telegram_id,
-                Subscription.status == SubscriptionStatus.ACTIVE,
+                Subscription.status.in_(
+                    (SubscriptionStatus.ACTIVE, SubscriptionStatus.SCHEDULED)
+                ),
                 Subscription.started_at <= now,
                 Subscription.expires_at > now,
             )
@@ -439,13 +596,25 @@ class PaymentService:
 
     async def get_subscription_details(self, *, telegram_id: int) -> dict | None:
         now = datetime.now(timezone.utc)
+        queued_rows = (await self.session.execute(
+            select(Subscription, Plan).join(Plan, Plan.id == Subscription.plan_id)
+            .join(User, User.id == Subscription.user_id).where(
+                User.telegram_id == telegram_id, Subscription.status == SubscriptionStatus.SCHEDULED,
+                Subscription.started_at > now,
+            ).order_by(Subscription.started_at, Subscription.id)
+        )).all()
+        scheduled = [{"id": item.id, "plan_name": catalog.name,
+            "plan_name_en": catalog.name_en if catalog.name_en and not re.search(r"[\u0600-\u06ff]", catalog.name_en) else f"Plan {catalog.id}",
+            "started_at": item.started_at, "expires_at": item.expires_at} for item, catalog in queued_rows]
         result = await self.session.execute(
             select(Subscription, Plan, User)
             .join(Plan, Plan.id == Subscription.plan_id)
             .join(User, User.id == Subscription.user_id)
             .where(
                 User.telegram_id == telegram_id,
-                Subscription.status == SubscriptionStatus.ACTIVE,
+                Subscription.status.in_(
+                    (SubscriptionStatus.ACTIVE, SubscriptionStatus.SCHEDULED)
+                ),
                 Subscription.started_at <= now,
                 Subscription.expires_at > now,
             )
@@ -454,7 +623,7 @@ class PaymentService:
         )
         row = result.first()
         if row is None:
-            return None
+            return {"is_active": False, "scheduled": scheduled}
         subscription, plan, user = row
         count_result = await self.session.execute(
             select(func.count(DownloadJob.id)).where(
@@ -491,9 +660,10 @@ class PaymentService:
         used_today = int(daily_result.scalar() or 0)
         return {
             "is_active": True,
+            "scheduled": scheduled,
             "plan_slug": plan.slug,
             "plan_name": plan.name,
-            "plan_name_en": plan.name_en or plan.name,
+            "plan_name_en": plan.name_en if plan.name_en and not re.search(r"[\u0600-\u06ff]", plan.name_en) else f"Plan {plan.id}",
             "started_at": subscription.started_at,
             "expires_at": subscription.expires_at,
             "duration_days": plan.duration_days,

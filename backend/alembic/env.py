@@ -22,6 +22,7 @@ from app.models import (  # noqa: F401
     PaymentCard,
     Plan,
     Subscription,
+    SupportTicketEvent,
     User,
     UsdtDestination,
     Wallet,

@@ -264,6 +264,11 @@ async def update_application_setting(
         if context.user_id is None:
             raise AdminAccessDenied("Administrator user is not registered")
 
+        if key.startswith("notifications.") and not context.is_superadmin:
+            raise AdminAccessDenied("Only a superadmin can change notification destinations")
+        if key.startswith("monitor."):
+            await AdminAccessService(db).require_permission(data.actor_telegram_id, "monitoring.manage")
+
         setting = await ApplicationSettingsService(db).set_value(
             key=key,
             category=data.category,
@@ -272,7 +277,6 @@ async def update_application_setting(
             actor_user_id=context.user_id,
             actor_telegram_id=data.actor_telegram_id,
             description=data.description,
-            description_en=data.description_en,
             expected_version=data.expected_version,
         )
         await db.commit()
@@ -356,6 +360,7 @@ async def create_plan(
             name=data.name,
             name_en=data.name_en,
             description=data.description,
+            description_en=data.description_en,
             duration_days=data.duration_days,
             price=data.price,
             price_usdt=data.price_usdt,

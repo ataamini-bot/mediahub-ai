@@ -2,6 +2,8 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
+from app.api.reporting import router as reporting_router
+from app.api.operations import router as operations_router
 from app.api.admin import router as admin_router
 from app.api.admin_finance import router as admin_finance_router
 from app.api.admin_statistics import router as admin_statistics_router
@@ -43,6 +45,8 @@ app.include_router(admin_router)
 app.include_router(admin_finance_router)
 app.include_router(admin_statistics_router)
 app.include_router(experience_router)
+app.include_router(operations_router)
+app.include_router(reporting_router)
 
 
 @app.get("/")

@@ -1,3 +1,4 @@
+from app.localization import tr as _tr, localized_collection as _localized_collection
 ROLE_LABELS_FA: dict[str, str] = {
     "payment_finance": "مدیر پرداخت و امور مالی",
     "user_subscription": "مدیر کاربران و اشتراک‌ها",
@@ -51,7 +52,7 @@ PERMISSION_LABELS_FA: dict[str, str] = {
 def role_label_fa(code: str, fallback: str | None = None) -> str:
     normalized = str(code or "").strip()
     return ROLE_LABELS_FA.get(normalized) or str(
-        fallback or normalized or "بدون نقش"
+        fallback or normalized or _tr("بدون نقش")
     )
 
 
@@ -66,3 +67,9 @@ def role_description_fa(
 def permission_label_fa(code: str) -> str:
     normalized = str(code or "").strip()
     return PERMISSION_LABELS_FA.get(normalized) or normalized
+
+
+# Resolve static labels using the language of the current update.
+ROLE_LABELS_FA = _localized_collection(ROLE_LABELS_FA)
+ROLE_DESCRIPTIONS_FA = _localized_collection(ROLE_DESCRIPTIONS_FA)
+PERMISSION_LABELS_FA = _localized_collection(PERMISSION_LABELS_FA)

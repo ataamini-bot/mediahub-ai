@@ -98,11 +98,11 @@ class SupportTicket(Base, TimestampMixin):
     __tablename__ = "support_tickets"
     __table_args__ = (
         CheckConstraint(
-            "category IN ('financial', 'technical', 'account', 'general')",
+            "category IN ('download', 'payment', 'subscription', 'account', 'other')",
             name="ck_support_tickets_category",
         ),
         CheckConstraint(
-            "status IN ('open', 'answered', 'closed')",
+            "status IN ('new', 'in_progress', 'waiting_user', 'answered', 'closed')",
             name="ck_support_tickets_status",
         ),
         Index("ix_support_tickets_status_updated", "status", "updated_at", "id"),
@@ -114,7 +114,7 @@ class SupportTicket(Base, TimestampMixin):
     )
     category: Mapped[str] = mapped_column(String(24), nullable=False)
     status: Mapped[str] = mapped_column(
-        String(16), default="open", server_default="open", nullable=False
+        String(24), default="new", server_default="new", nullable=False
     )
     assigned_admin_user_id: Mapped[int | None] = mapped_column(
         ForeignKey("users.id", ondelete="SET NULL"), nullable=True
@@ -122,6 +122,15 @@ class SupportTicket(Base, TimestampMixin):
     closed_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    assigned_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    reopened_count: Mapped[int] = mapped_column(
+        Integer, default=0, server_default="0", nullable=False
+    )
+    admin_chat_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    admin_message_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    admin_message_thread_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
 
 
 class SupportMessage(Base):
@@ -156,3 +165,29 @@ class SupportMessage(Base):
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
 
+
+class SupportTicketEvent(Base):
+    """Append-only ticket lifecycle history."""
+
+    __tablename__ = "support_ticket_events"
+    __table_args__ = (
+        Index("ix_support_ticket_events_ticket_created", "ticket_id", "created_at", "id"),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, Identity(), primary_key=True)
+    ticket_id: Mapped[int] = mapped_column(
+        ForeignKey("support_tickets.id", ondelete="CASCADE"),
+        index=True,
+        nullable=False,
+    )
+    event_type: Mapped[str] = mapped_column(String(40), nullable=False)
+    from_status: Mapped[str | None] = mapped_column(String(24), nullable=True)
+    to_status: Mapped[str | None] = mapped_column(String(24), nullable=True)
+    actor_user_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    actor_telegram_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    details: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )

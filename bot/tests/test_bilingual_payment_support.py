@@ -43,6 +43,14 @@ def test_english_payment_errors_and_offer_details_are_english():
     }, "en")
     assert "Duration" in text and "توضیح" not in text
 
+    fa_text = _offer_details_text({
+        "label": "حرفه‌ای", "duration_days": 30, "price": "10000", "currency": "IRT",
+        "description": "دانلود سریع", "daily_download_limit": 10,
+        "max_file_size_mb": 1000, "max_quality": 1080, "max_concurrent_downloads": 2,
+        "priority_processing": True, "forced_join_required": False,
+    }, "fa")
+    assert "مدت" in fa_text and "Duration" not in fa_text
+
 
 def test_persian_runtime_copy_cannot_leak_into_english():
     configuration = fallback_configuration("en")
@@ -233,7 +241,7 @@ def test_selected_usdt_network_is_revalidated_before_showing_its_qr(
         await state.update_data(offer_code="global")
         await select_usdt_destination(callback, state)
 
-        assert await state.get_state() == PaymentStates.waiting_for_receipt.state
+        assert await state.get_state() == PaymentStates.waiting_for_txid.state
         assert (await state.get_data())["usdt_destination_id"] == 12
 
     asyncio.run(exercise())

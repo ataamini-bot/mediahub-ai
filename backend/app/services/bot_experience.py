@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from typing import Any
 from urllib.parse import urlparse
 
-from sqlalchemy import distinct, select
+from sqlalchemy import distinct, func, select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -22,10 +22,15 @@ from app.models.bot_experience import (
     RequiredChannel,
     SupportMessage,
     SupportTicket,
+    SupportTicketEvent,
 )
-from app.models.user import User
+from app.models.plan import Plan
+from app.models.subscription import Subscription, SubscriptionStatus
+from app.models.user import User, UserStatus
 from app.services.application_settings import ApplicationSettingsService
 from app.services.audit import AuditService
+from app.services.admin_access import AdminAccessService
+from app.core.language import effective_language
 
 
 SUPPORTED_LANGUAGES = {"fa", "en"}
@@ -39,8 +44,10 @@ HOME_BUTTON_ACTIONS = {
     "faq",
 }
 BUTTON_STYLES = {"default", "primary", "success", "danger"}
-SUPPORT_CATEGORIES = {"financial", "technical", "account", "general"}
+SUPPORT_CATEGORIES = {"download", "payment", "subscription", "account", "other"}
 SUPPORT_FILE_TYPES = {"photo", "document", "video", "voice"}
+SUPPORT_STATUSES = {"new", "in_progress", "waiting_user", "answered", "closed"}
+OPEN_SUPPORT_STATUSES = SUPPORT_STATUSES - {"closed"}
 
 
 DEFAULT_CONTENT: dict[str, dict[str, str]] = {
@@ -151,6 +158,16 @@ class SupportTicketRecord:
     ticket: SupportTicket
     user: User
     messages: list[SupportMessage]
+    events: list[SupportTicketEvent]
+    plan_name: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class SupportTicketPage:
+    items: tuple[SupportTicketRecord, ...]
+    total: int
+    page: int
+    page_size: int
 
 
 def _clean_text(value: Any, *, field: str, maximum: int) -> str:
@@ -477,11 +494,31 @@ class BotExperienceService:
             raise BotExperienceError("Support message cannot be empty")
 
         user = (
-            await self.session.execute(select(User).where(User.telegram_id == telegram_id))
+            await self.session.execute(
+                select(User)
+                .where(User.telegram_id == telegram_id)
+                .with_for_update()
+            )
         ).scalar_one_or_none()
         if user is None:
             raise BotExperienceNotFound("Telegram user is not registered")
-        ticket = SupportTicket(user_id=user.id, category=normalized_category, status="open")
+        open_count = int(
+            (
+                await self.session.execute(
+                    select(func.count(SupportTicket.id)).where(
+                        SupportTicket.user_id == user.id,
+                        SupportTicket.status.in_(OPEN_SUPPORT_STATUSES),
+                    )
+                )
+            ).scalar_one()
+        )
+        if open_count >= 3:
+            raise BotExperienceConflict(
+                "A user can have at most three open support tickets"
+            )
+        if user.status != UserStatus.ACTIVE:
+            raise BotExperienceConflict("User account is not active")
+        ticket = SupportTicket(user_id=user.id, category=normalized_category, status="new")
         self.session.add(ticket)
         await self.session.flush()
         message = SupportMessage(
@@ -494,6 +531,13 @@ class BotExperienceService:
             file_type=normalized_file_type,
         )
         self.session.add(message)
+        event = self._ticket_event(
+            ticket,
+            event_type="created",
+            actor_user_id=user.id,
+            actor_telegram_id=telegram_id,
+            to_status="new",
+        )
         await self.session.flush()
         AuditService(self.session).record(
             action="support.ticket_created",
@@ -503,46 +547,76 @@ class BotExperienceService:
             target_id=ticket.id,
             details={"category": normalized_category, "file_type": normalized_file_type},
         )
-        return SupportTicketRecord(ticket=ticket, user=user, messages=[message])
+        return SupportTicketRecord(
+            ticket=ticket,
+            user=user,
+            messages=[message],
+            events=[event],
+            plan_name=await self._ticket_plan_name(user.id, effective_language(preferred_language=user.preferred_language, telegram_language_code=user.language_code)),
+        )
 
     async def list_tickets(
         self,
         *,
         status: str | None = None,
-        limit: int = 30,
-    ) -> list[SupportTicketRecord]:
+        page: int = 1,
+        page_size: int = 8,
+        user_telegram_id: int | None = None,
+    ) -> SupportTicketPage:
+        filters = []
+        if status is not None:
+            if status not in SUPPORT_STATUSES:
+                raise BotExperienceError("Unknown support ticket status")
+            filters.append(SupportTicket.status == status)
+        if user_telegram_id is not None:
+            filters.append(User.telegram_id == user_telegram_id)
+        total_statement = select(func.count(SupportTicket.id)).join(
+            User, User.id == SupportTicket.user_id
+        )
+        if filters:
+            total_statement = total_statement.where(*filters)
+        total = int((await self.session.execute(total_statement)).scalar_one())
         statement = (
             select(SupportTicket, User)
             .join(User, User.id == SupportTicket.user_id)
             .order_by(SupportTicket.updated_at.desc(), SupportTicket.id.desc())
-            .limit(max(1, min(limit, 100)))
+            .offset((max(1, page) - 1) * max(1, min(page_size, 30)))
+            .limit(max(1, min(page_size, 30)))
         )
-        if status in {"open", "answered", "closed"}:
-            statement = statement.where(SupportTicket.status == status)
+        if filters:
+            statement = statement.where(*filters)
         pairs = list((await self.session.execute(statement)).all())
         records: list[SupportTicketRecord] = []
         for ticket, user in pairs:
-            messages = await self._ticket_messages(ticket.id)
-            records.append(SupportTicketRecord(ticket=ticket, user=user, messages=messages))
-        return records
+            records.append(await self._ticket_record(ticket, user))
+        return SupportTicketPage(
+            items=tuple(records),
+            total=total,
+            page=max(1, page),
+            page_size=max(1, min(page_size, 30)),
+        )
 
-    async def get_ticket(self, ticket_id: int, *, lock: bool = False) -> SupportTicketRecord:
+    async def get_ticket(
+        self,
+        ticket_id: int,
+        *,
+        lock: bool = False,
+        user_telegram_id: int | None = None,
+    ) -> SupportTicketRecord:
         statement = (
             select(SupportTicket, User)
             .join(User, User.id == SupportTicket.user_id)
             .where(SupportTicket.id == ticket_id)
         )
+        if user_telegram_id is not None:
+            statement = statement.where(User.telegram_id == user_telegram_id)
         if lock:
-            statement = statement.with_for_update()
+            statement = statement.with_for_update(of=SupportTicket)
         pair = (await self.session.execute(statement)).first()
         if pair is None:
             raise BotExperienceNotFound("Support ticket not found")
         ticket, user = pair
-        return SupportTicketRecord(
-            ticket=ticket,
-            user=user,
-            messages=await self._ticket_messages(ticket.id),
-        )
+        return await self._ticket_record(ticket, user)
 
     async def reply_ticket(
         self,
@@ -564,12 +638,176 @@ class BotExperienceService:
             body=normalized,
         )
         self.session.add(message)
-        record.ticket.status = "answered"
+        old_status = record.ticket.status
+        record.ticket.status = "waiting_user"
         record.ticket.assigned_admin_user_id = actor_user_id
+        record.ticket.assigned_at = record.ticket.assigned_at or datetime.now(timezone.utc)
         record.ticket.updated_at = datetime.now(timezone.utc)
+        event = self._ticket_event(
+            record.ticket,
+            event_type="admin_reply",
+            actor_user_id=actor_user_id,
+            actor_telegram_id=actor_telegram_id,
+            from_status=old_status,
+            to_status="waiting_user",
+        )
         await self.session.flush()
         self._audit("support.ticket_replied", actor_user_id, actor_telegram_id, record.ticket)
         record.messages.append(message)
+        record.events.append(event)
+        return record
+
+    async def user_reply_ticket(
+        self,
+        *,
+        ticket_id: int,
+        telegram_id: int,
+        body: str | None,
+        telegram_file_id: str | None,
+        file_type: str | None,
+    ) -> SupportTicketRecord:
+        record = await self.get_ticket(
+            ticket_id,
+            lock=True,
+            user_telegram_id=telegram_id,
+        )
+        if record.user.status != UserStatus.ACTIVE:
+            raise BotExperienceError("User account is inactive")
+        if record.ticket.status == "closed":
+            raise BotExperienceConflict("Closed tickets must be reopened by an administrator")
+        normalized_body = str(body or "").strip()[:3900] or None
+        normalized_file_id = str(telegram_file_id or "").strip()[:512] or None
+        normalized_file_type = str(file_type or "").strip().lower() or None
+        if normalized_file_type not in SUPPORT_FILE_TYPES | {None}:
+            raise BotExperienceError("Unsupported support attachment")
+        if bool(normalized_file_type) != bool(normalized_file_id):
+            raise BotExperienceError("Attachment type and id must be provided together")
+        if not normalized_body and not normalized_file_id:
+            raise BotExperienceError("Support reply cannot be empty")
+        message = SupportMessage(
+            ticket_id=record.ticket.id,
+            sender_user_id=record.user.id,
+            sender_telegram_id=telegram_id,
+            sender_kind="user",
+            body=normalized_body,
+            telegram_file_id=normalized_file_id,
+            file_type=normalized_file_type,
+        )
+        self.session.add(message)
+        old_status = record.ticket.status
+        record.ticket.status = "in_progress"
+        record.ticket.updated_at = datetime.now(timezone.utc)
+        event = self._ticket_event(
+            record.ticket,
+            event_type="user_reply",
+            actor_user_id=record.user.id,
+            actor_telegram_id=telegram_id,
+            from_status=old_status,
+            to_status="in_progress",
+        )
+        await self.session.flush()
+        record.messages.append(message)
+        record.events.append(event)
+        return record
+
+    async def set_ticket_status(
+        self,
+        *,
+        ticket_id: int,
+        actor_user_id: int,
+        actor_telegram_id: int,
+        status: str,
+    ) -> SupportTicketRecord:
+        if status not in SUPPORT_STATUSES:
+            raise BotExperienceError("Unknown support ticket status")
+        record = await self.get_ticket(ticket_id, lock=True)
+        if record.ticket.status == "closed" and status != "closed":
+            raise BotExperienceConflict("Use reopen for a closed support ticket")
+        old_status = record.ticket.status
+        if old_status == status:
+            return record
+        record.ticket.status = status
+        record.ticket.updated_at = datetime.now(timezone.utc)
+        if status == "closed":
+            record.ticket.closed_at = record.ticket.updated_at
+        event = self._ticket_event(
+            record.ticket,
+            event_type="status_changed",
+            actor_user_id=actor_user_id,
+            actor_telegram_id=actor_telegram_id,
+            from_status=old_status,
+            to_status=status,
+        )
+        await self.session.flush()
+        record.events.append(event)
+        self._audit("support.ticket_status_changed", actor_user_id, actor_telegram_id, record.ticket)
+        return record
+
+    async def assign_ticket(
+        self,
+        *,
+        ticket_id: int,
+        actor_user_id: int,
+        actor_telegram_id: int,
+        assignee_telegram_id: int,
+    ) -> SupportTicketRecord:
+        assignee = await AdminAccessService(self.session).require_permission(
+            assignee_telegram_id, "tickets.view"
+        )
+        if assignee.user_id is None:
+            raise BotExperienceNotFound("Assigned administrator is not registered")
+        record = await self.get_ticket(ticket_id, lock=True)
+        record.ticket.assigned_admin_user_id = assignee.user_id
+        record.ticket.assigned_at = datetime.now(timezone.utc)
+        if record.ticket.status == "new":
+            record.ticket.status = "in_progress"
+        event = self._ticket_event(
+            record.ticket,
+            event_type="assigned",
+            actor_user_id=actor_user_id,
+            actor_telegram_id=actor_telegram_id,
+            details=str(assignee_telegram_id),
+        )
+        await self.session.flush()
+        record.events.append(event)
+        self._audit("support.ticket_assigned", actor_user_id, actor_telegram_id, record.ticket)
+        return record
+
+    async def reopen_ticket(
+        self,
+        *,
+        ticket_id: int,
+        actor_user_id: int,
+        actor_telegram_id: int,
+    ) -> SupportTicketRecord:
+        # Lock the owner before the ticket, matching creation's lock order.
+        owner_id = (await self.session.execute(select(SupportTicket.user_id).where(SupportTicket.id == ticket_id))).scalar_one_or_none()
+        if owner_id is None:
+            raise BotExperienceNotFound("Support ticket not found")
+        await self.session.execute(select(User.id).where(User.id == owner_id).with_for_update())
+        record = await self.get_ticket(ticket_id, lock=True)
+        open_count = (await self.session.execute(select(func.count(SupportTicket.id)).where(
+            SupportTicket.user_id == owner_id, SupportTicket.status.in_(OPEN_SUPPORT_STATUSES)
+        ))).scalar_one()
+        if open_count >= 3:
+            raise BotExperienceConflict("A user can have at most three open support tickets")
+        if record.ticket.status != "closed":
+            raise BotExperienceConflict("Only a closed ticket can be reopened")
+        record.ticket.status = "in_progress"
+        record.ticket.closed_at = None
+        record.ticket.reopened_count += 1
+        record.ticket.updated_at = datetime.now(timezone.utc)
+        event = self._ticket_event(
+            record.ticket,
+            event_type="reopened",
+            actor_user_id=actor_user_id,
+            actor_telegram_id=actor_telegram_id,
+            from_status="closed",
+            to_status="in_progress",
+        )
+        await self.session.flush()
+        record.events.append(event)
+        self._audit("support.ticket_reopened", actor_user_id, actor_telegram_id, record.ticket)
         return record
 
     async def close_ticket(
@@ -580,12 +818,40 @@ class BotExperienceService:
         actor_telegram_id: int,
     ) -> SupportTicketRecord:
         record = await self.get_ticket(ticket_id, lock=True)
+        if record.ticket.status == "closed":
+            return record
+        old_status = record.ticket.status
         record.ticket.status = "closed"
         record.ticket.closed_at = datetime.now(timezone.utc)
         record.ticket.updated_at = record.ticket.closed_at
         record.ticket.assigned_admin_user_id = actor_user_id
+        record.ticket.assigned_at = record.ticket.assigned_at or record.ticket.closed_at
+        event = self._ticket_event(
+            record.ticket,
+            event_type="closed",
+            actor_user_id=actor_user_id,
+            actor_telegram_id=actor_telegram_id,
+            from_status=old_status,
+            to_status="closed",
+        )
         await self.session.flush()
         self._audit("support.ticket_closed", actor_user_id, actor_telegram_id, record.ticket)
+        record.events.append(event)
+        return record
+
+    async def set_ticket_admin_message(
+        self,
+        *,
+        ticket_id: int,
+        admin_chat_id: int,
+        admin_message_id: int,
+        admin_message_thread_id: int | None,
+    ) -> SupportTicketRecord:
+        record = await self.get_ticket(ticket_id, lock=True)
+        record.ticket.admin_chat_id = admin_chat_id
+        record.ticket.admin_message_id = admin_message_id
+        record.ticket.admin_message_thread_id = admin_message_thread_id
+        await self.session.flush()
         return record
 
     async def support_recipient_telegram_ids(self) -> list[int]:
@@ -616,6 +882,73 @@ class BotExperienceService:
             .order_by(SupportMessage.created_at, SupportMessage.id)
         )
         return list(result.scalars())
+
+    async def _ticket_events(self, ticket_id: int) -> list[SupportTicketEvent]:
+        result = await self.session.execute(
+            select(SupportTicketEvent)
+            .where(SupportTicketEvent.ticket_id == ticket_id)
+            .order_by(SupportTicketEvent.created_at, SupportTicketEvent.id)
+        )
+        return list(result.scalars())
+
+    async def _ticket_plan_name(self, user_id: int, language: str = "fa") -> str | None:
+        now = datetime.now(timezone.utc)
+        result = await self.session.execute(
+            select(Plan.name, Plan.name_en, Plan.id)
+            .join(Subscription, Subscription.plan_id == Plan.id)
+            .where(
+                Subscription.user_id == user_id,
+                Subscription.status.in_(
+                    (SubscriptionStatus.ACTIVE, SubscriptionStatus.SCHEDULED)
+                ),
+                Subscription.started_at <= now,
+                Subscription.expires_at > now,
+            )
+            .order_by(Subscription.expires_at.desc(), Subscription.id.desc())
+            .limit(1)
+        )
+        row = result.first()
+        if row is None:
+            return None
+        if language == "en":
+            return row[1] if row[1] and not re.search(r"[\u0600-\u06ff]", row[1]) else f"Plan {row[2]}"
+        return row[0]
+
+    async def _ticket_record(
+        self,
+        ticket: SupportTicket,
+        user: User,
+    ) -> SupportTicketRecord:
+        return SupportTicketRecord(
+            ticket=ticket,
+            user=user,
+            messages=await self._ticket_messages(ticket.id),
+            events=await self._ticket_events(ticket.id),
+            plan_name=await self._ticket_plan_name(user.id, effective_language(preferred_language=user.preferred_language, telegram_language_code=user.language_code)),
+        )
+
+    def _ticket_event(
+        self,
+        ticket: SupportTicket,
+        *,
+        event_type: str,
+        actor_user_id: int | None,
+        actor_telegram_id: int | None,
+        from_status: str | None = None,
+        to_status: str | None = None,
+        details: str | None = None,
+    ) -> SupportTicketEvent:
+        event = SupportTicketEvent(
+            ticket_id=ticket.id,
+            event_type=event_type,
+            from_status=from_status,
+            to_status=to_status,
+            actor_user_id=actor_user_id,
+            actor_telegram_id=actor_telegram_id,
+            details=details,
+        )
+        self.session.add(event)
+        return event
 
     def _audit(
         self,

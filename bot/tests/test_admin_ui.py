@@ -30,6 +30,8 @@ def test_superadmin_sees_all_foundation_menu_entries():
         "admin:payments",
         "admin:statistics",
         "admin:support",
+        "ops:open",
+        "reports:audit",
         "admin:close",
     ]
 

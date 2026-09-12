@@ -259,14 +259,54 @@ async def list_support_tickets(
     actor_telegram_id: int,
     *,
     status: str | None = None,
-) -> list[dict]:
+    page: int = 1,
+    page_size: int = 8,
+) -> dict:
     status_query = f"&status={status}" if status else ""
-    result = await _payment_request(
+    return await _payment_request(
         "GET",
         f"/admin/support/tickets?actor_telegram_id={actor_telegram_id}"
-        f"{status_query}",
+        f"&page={page}&page_size={page_size}{status_query}",
     )
-    return list(result)
+
+
+async def list_user_support_tickets(
+    telegram_id: int,
+    *,
+    page: int = 1,
+    page_size: int = 8,
+) -> dict:
+    return await _payment_request(
+        "GET",
+        f"/support/tickets?telegram_id={telegram_id}&page={page}&page_size={page_size}",
+    )
+
+
+async def get_user_support_ticket(*, telegram_id: int, ticket_id: int) -> dict:
+    return await _payment_request(
+        "GET",
+        f"/support/tickets/{ticket_id}?telegram_id={telegram_id}",
+    )
+
+
+async def user_reply_support_ticket(
+    *,
+    telegram_id: int,
+    ticket_id: int,
+    body: str | None,
+    telegram_file_id: str | None,
+    file_type: str | None,
+) -> dict:
+    return await _payment_request(
+        "POST",
+        f"/support/tickets/{ticket_id}/reply",
+        payload={
+            "telegram_id": telegram_id,
+            "body": body,
+            "telegram_file_id": telegram_file_id,
+            "file_type": file_type,
+        },
+    )
 
 
 async def get_support_ticket(*, actor_telegram_id: int, ticket_id: int) -> dict:
@@ -298,6 +338,55 @@ async def close_support_ticket(*, actor_telegram_id: int, ticket_id: int) -> dic
     )
 
 
+async def update_support_ticket_status(
+    *, actor_telegram_id: int, ticket_id: int, status: str
+) -> dict:
+    return await _payment_request(
+        "POST",
+        f"/admin/support/tickets/{ticket_id}/status",
+        payload={"actor_telegram_id": actor_telegram_id, "status": status},
+    )
+
+
+async def assign_support_ticket(
+    *, actor_telegram_id: int, ticket_id: int, assignee_telegram_id: int
+) -> dict:
+    return await _payment_request(
+        "POST",
+        f"/admin/support/tickets/{ticket_id}/assign",
+        payload={
+            "actor_telegram_id": actor_telegram_id,
+            "assignee_telegram_id": assignee_telegram_id,
+        },
+    )
+
+
+async def reopen_support_ticket(*, actor_telegram_id: int, ticket_id: int) -> dict:
+    return await _payment_request(
+        "POST",
+        f"/admin/support/tickets/{ticket_id}/reopen"
+        f"?actor_telegram_id={actor_telegram_id}",
+    )
+
+
+async def set_support_ticket_admin_message(
+    *,
+    ticket_id: int,
+    admin_chat_id: int,
+    admin_message_id: int,
+    admin_message_thread_id: int | None,
+) -> dict:
+    return await _payment_request(
+        "PATCH",
+        f"/admin/support/tickets/{ticket_id}/admin-message",
+        payload={
+            "admin_chat_id": admin_chat_id,
+            "admin_message_id": admin_message_id,
+            "admin_message_thread_id": admin_message_thread_id,
+        },
+    )
+
+
 async def get_download_entitlement(telegram_id: int) -> dict:
     return await _payment_request(
         "GET",
@@ -316,14 +405,15 @@ async def get_admin_statistics(
     actor_telegram_id: int,
     *,
     section: str = "overview",
-    period: str = "30d",
-    chart_range: str = "30d",
+    period: str = "1mo",
+    chart_range: str = "1mo",
     metric: str = "users",
+    page: int = 1,
 ) -> dict:
     return await _payment_request(
         "GET",
         f"/admin/statistics?actor_telegram_id={actor_telegram_id}"
-        f"&section={section}&period={period}&chart_range={chart_range}&metric={metric}",
+        f"&section={section}&period={period}&chart_range={chart_range}&metric={metric}&page={page}",
     )
 
 
@@ -531,11 +621,12 @@ async def update_admin_plan(
 async def list_admin_accounts(
     actor_telegram_id: int,
 ) -> list[dict]:
-    result = await _payment_request(
-        "GET",
-        f"/admin/accounts?actor_telegram_id={actor_telegram_id}",
-    )
-    return list(result)
+    records = []
+    while True:
+        batch = await _payment_request("GET", f"/admin/accounts?actor_telegram_id={actor_telegram_id}&offset={len(records)}&limit=100")
+        records.extend(batch)
+        if len(batch) < 100:
+            return records
 
 
 async def get_admin_account(
@@ -1001,16 +1092,17 @@ async def create_manual_payment(
     *,
     telegram_id: int,
     offer_code: str,
-    receipt_file_id: str,
-    receipt_file_unique_id: str | None,
-    receipt_file_type: str,
-    receipt_file_size: int | None,
-    receipt_mime_type: str | None,
-    receipt_file_name: str | None,
-    user_receipt_message_id: int,
-    payment_card_id: int | None,
+    receipt_file_id: str | None = None,
+    receipt_file_unique_id: str | None = None,
+    receipt_file_type: str | None = None,
+    receipt_file_size: int | None = None,
+    receipt_mime_type: str | None = None,
+    receipt_file_name: str | None = None,
+    user_receipt_message_id: int | None = None,
+    payment_card_id: int | None = None,
     currency: str = "IRT",
     usdt_destination_id: int | None = None,
+    txid: str | None = None,
 ) -> dict:
     return await _payment_request(
         "POST",
@@ -1028,6 +1120,7 @@ async def create_manual_payment(
             "payment_card_id": payment_card_id,
             "currency": "USDT" if currency == "USDT" else "IRT",
             "usdt_destination_id": usdt_destination_id,
+            "txid": txid,
         },
     )
 

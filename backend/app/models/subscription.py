@@ -9,6 +9,7 @@ from app.db.base import Base, TimestampMixin
 
 class SubscriptionStatus(str, enum.Enum):
     ACTIVE = "active"
+    SCHEDULED = "scheduled"
     EXPIRED = "expired"
     CANCELLED = "cancelled"
 

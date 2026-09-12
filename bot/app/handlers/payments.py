@@ -1,22 +1,28 @@
+from app.localization import tr as _tr, localized_collection as _localized_collection
 import html
 import logging
 import os
-from datetime import datetime
+import re
+from urllib.parse import quote
+from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 
 from aiogram import F, Router
 from aiogram.exceptions import TelegramBadRequest
+from app.services.topic_delivery import notification_routes
 from aiogram.fsm.context import FSMContext
-from aiogram.types import BufferedInputFile, CallbackQuery, ForceReply, Message
+from aiogram.types import BufferedInputFile, CallbackQuery, ForceReply, Message, InlineKeyboardButton, InlineKeyboardMarkup
 
 from app.keyboards.payment import (
     build_admin_payment_keyboard,
+    build_payment_approval_confirmation_keyboard,
     build_home_keyboard,
     build_home_reply_keyboard,
     build_payment_offer_detail_keyboard,
     build_payment_offers_keyboard,
     build_receipt_cancel_keyboard,
     build_usdt_destination_keyboard,
+    build_usdt_screenshot_keyboard,
     format_toman,
     format_usdt,
     format_usdt_network,
@@ -133,7 +139,7 @@ def _find_offer(configuration: dict, code: str) -> dict | None:
 
 def _format_datetime(value: str | None, language: str = "fa") -> str:
     if not value:
-        return "نامشخص" if language != "en" else "Unknown"
+        return _tr("نامشخص") if language != "en" else "Unknown"
 
     try:
         parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
@@ -155,6 +161,8 @@ def _payment_error_message(exc: BackendAPIError, language: str = "fa") -> str:
             )
         if code == "duplicate_receipt":
             return "❌ This receipt has already been submitted.\n\nPlease send a new receipt."
+        if code == "duplicate_txid":
+            return "❌ This TxID has already been submitted on this network."
         if code == "maintenance_mode":
             return "🛠 The bot is temporarily under maintenance.\n\nPlease try again later."
         if code == "payments_disabled":
@@ -173,44 +181,41 @@ def _payment_error_message(exc: BackendAPIError, language: str = "fa") -> str:
         if code == "pending_payment_exists":
             payment_id = detail.get("payment_id", "?")
             return (
-                "⏳ یک رسید در حال بررسی دارید.\n\n"
-                f"شناسه پرداخت: <code>{payment_id}</code>\n"
-                "پس از بررسی مدیر می‌توانید درخواست جدید ثبت کنید."
+                f"{_tr('⏳ یک رسید در حال بررسی دارید.\n\nشناسه پرداخت: <code>')}{payment_id}{_tr('</code>\nپس از بررسی مدیر می\u200cتوانید درخواست جدید ثبت کنید.')}"
             )
 
         if code == "duplicate_receipt":
             return (
-                "❌ این فایل رسید قبلاً ثبت شده است.\n\n"
-                "لطفاً تصویر یا فایل رسید جدید را ارسال کنید."
+                _tr("❌ این فایل رسید قبلاً ثبت شده است.\n\n"
+                "لطفاً تصویر یا فایل رسید جدید را ارسال کنید.")
             )
 
         if code == "maintenance_mode":
             return (
-                "🛠 ربات موقتاً در حالت تعمیرات است.\n\n"
-                "لطفاً کمی بعد دوباره تلاش کنید."
+                _tr("🛠 ربات موقتاً در حالت تعمیرات است.\n\n"
+                "لطفاً کمی بعد دوباره تلاش کنید.")
             )
 
         if code == "payments_disabled":
             return (
-                "⏸ خرید اشتراک موقتاً غیرفعال است.\n\n"
-                "لطفاً کمی بعد دوباره تلاش کنید."
+                _tr("⏸ خرید اشتراک موقتاً غیرفعال است.\n\n"
+                "لطفاً کمی بعد دوباره تلاش کنید.")
             )
 
     if exc.status_code == 503:
         return (
-            "⚙️ سیستم پرداخت هنوز به‌طور کامل تنظیم نشده است.\n\n"
-            "لطفاً با پشتیبانی تماس بگیرید."
+            _tr("⚙️ سیستم پرداخت هنوز به‌طور کامل تنظیم نشده است.\n\n"
+            "لطفاً با پشتیبانی تماس بگیرید.")
         )
 
     if exc.status_code in {404, 409}:
         return (
-            "🔄 اطلاعات پلن یا کارت پرداخت تغییر کرده است.\n\n"
-            "لطفاً خرید را لغو کنید و دوباره پلن را انتخاب کنید."
+            _tr("🔄 اطلاعات پلن یا کارت پرداخت تغییر کرده است.\n\n"
+            "لطفاً خرید را لغو کنید و دوباره پلن را انتخاب کنید.")
         )
 
     return (
-        "❌ انجام عملیات پرداخت ممکن نشد.\n\n"
-        f"<code>{html.escape(str(detail)[:500])}</code>"
+        f"{_tr('❌ انجام عملیات پرداخت ممکن نشد.\n\n<code>')}{html.escape(str(detail)[:500])}</code>"
     )
 
 
@@ -234,71 +239,74 @@ def _build_admin_caption(result: dict, offer: dict) -> str:
     destination_text = ""
     if currency == "USDT":
         destination_text = (
-            "\n🌐 شبکه: "
-            f"<code>{html.escape(str(destination.get('network_code') or '—'))}</code>"
-            "\n📬 مقصد: "
-            f"<code>{html.escape(str(destination.get('address') or '—'))}</code>"
+            f"{_tr('\n🌐 شبکه: <code>')}{html.escape(str(destination.get('network_code') or '—'))}{_tr('</code>\n📬 مقصد: <code>')}{html.escape(str(destination.get('address') or '—'))}</code>\n🔗 TxID: <code>{html.escape(str(payment.get('txid') or '—'))}</code>"
         )
 
     return (
-        "🧾 <b>رسید جدید خرید اشتراک</b>\n\n"
-        f"🆔 شناسه پرداخت: <code>{payment['id']}</code>\n"
-        f"👤 نام: {html.escape(full_name)}\n"
-        f"🔗 نام کاربری: {html.escape(username_text)}\n"
-        f"📱 Telegram ID: <code>{user['telegram_id']}</code>\n\n"
-        f"💎 بسته: <b>{html.escape(offer['label'])}</b>\n"
-        f"💰 مبلغ: <b>{amount_text}</b>{destination_text}\n"
-        f"📅 مدت: <code>{payment['duration_days']} روز</code>\n"
-        f"📎 نوع رسید: <code>{payment['receipt_file_type']}</code>\n\n"
-        "⏳ وضعیت: <b>در انتظار بررسی</b>"
+        f"{_tr('🧾 <b>رسید جدید خرید اشتراک</b>\n\n🆔 شناسه پرداخت: <code>')}{payment['id']}{_tr('</code>\n👤 نام: ')}{html.escape(full_name)}{_tr('\n🔗 نام کاربری: ')}{html.escape(username_text)}\n📱 Telegram ID: <code>{user['telegram_id']}{_tr('</code>\n\n💎 بسته: <b>')}{html.escape(offer['label'])}{_tr('</b>\n💰 مبلغ: <b>')}{amount_text}</b>{destination_text}{_tr('\n📅 مدت: <code>')}{payment['duration_days']}{_tr(' روز</code>\n📎 پیوست: <code>')}{payment.get('receipt_file_type') or _tr('بدون اسکرین\u200cشات')}{_tr('</code>\n\n⏳ وضعیت: <b>در انتظار بررسی</b>')}"
     )
+
+
+def _transaction_explorer_url(payment: dict) -> str | None:
+    txid = str(payment.get("txid") or "").strip()
+    if not txid:
+        return None
+    destination = payment.get("payment_destination_snapshot") or {}
+    network = str(destination.get("network_code") or "").upper()
+    configured = str(destination.get("explorer_url") or "").strip()
+    if configured and not configured.lower().startswith(("https://", "http://")):
+        configured = ""
+    if "{txid}" in configured:
+        return configured.replace("{txid}", quote(txid, safe=""))
+    if network in {"TRC20", "TRON"}:
+        return f"https://tronscan.org/#/transaction/{quote(txid, safe='')}"
+    return configured or None
 
 
 def _offer_details_text(offer: dict, language: str) -> str:
     is_fa = language != "en"
     duration = (
-        f"{int(offer.get('duration_days') or 0)} روز"
+        f"{int(offer.get('duration_days') or 0)}{_tr(' روز')}"
         if is_fa else f"{int(offer.get('duration_days') or 0)} days"
     )
     limit = offer.get("daily_download_limit")
     limit_text = (
-        "نامحدود" if is_fa and limit is None else
+        _tr("نامحدود") if is_fa and limit is None else
         "Unlimited" if limit is None else str(limit)
     )
     quality = (
-        "نامحدود" if is_fa and offer.get("max_quality") is None else
+        _tr("نامحدود") if is_fa and offer.get("max_quality") is None else
         "Unlimited" if offer.get("max_quality") is None else
         format_quality_limit(int(offer["max_quality"]))
     )
     max_file = offer.get("max_file_size_mb")
-    max_file_text = "نامحدود" if is_fa and max_file is None else "Unlimited" if max_file is None else f"{max_file} MB"
+    max_file_text = _tr("نامحدود") if is_fa and max_file is None else "Unlimited" if max_file is None else f"{max_file} MB"
     concurrency = int(offer.get("max_concurrent_downloads") or 1)
-    description = html.escape(str(offer.get("description") or ("توضیحی برای این پلن ثبت نشده است." if is_fa else "No description provided.")))
+    description = html.escape(str(offer.get("description") or (_tr("توضیحی برای این پلن ثبت نشده است.") if is_fa else "No description provided.")))
     if is_fa:
-        return (
+        text = (
+            f"💎 <b>{html.escape(str(offer.get('label') or '—'))}</b>\n\n📝 {description}{_tr('\n\n📅 مدت: <code>')}{duration}{_tr('</code>\n📥 سقف دانلود روزانه: <code>')}{limit_text}{_tr('</code>\n📦 حداکثر حجم هر فایل: <code>')}{max_file_text}{_tr('</code>\n🎞 حداکثر کیفیت: <code>')}{quality}{_tr('</code>\n⚙️ دانلود هم\u200cزمان: <code>')}{concurrency}{_tr('</code>\n🚀 پردازش با اولویت: <code>')}{(_tr('بله') if offer.get('priority_processing') else _tr('خیر'))}{_tr('</code>\n📣 عضویت اجباری: <code>')}{(_tr('بله') if offer.get('forced_join_required') else _tr('خیر'))}{_tr('</code>\n\n💰 مبلغ: <b>')}{format_toman(offer.get('price'))}</b>"
+        )
+    else:
+        text = (
             f"💎 <b>{html.escape(str(offer.get('label') or '—'))}</b>\n\n"
             f"📝 {description}\n\n"
-            f"📅 مدت: <code>{duration}</code>\n"
-            f"📥 سقف دانلود روزانه: <code>{limit_text}</code>\n"
-            f"📦 حداکثر حجم هر فایل: <code>{max_file_text}</code>\n"
-            f"🎞 حداکثر کیفیت: <code>{quality}</code>\n"
-            f"⚙️ دانلود هم‌زمان: <code>{concurrency}</code>\n"
-            f"🚀 پردازش با اولویت: <code>{'بله' if offer.get('priority_processing') else 'خیر'}</code>\n"
-            f"📣 عضویت اجباری: <code>{'بله' if offer.get('forced_join_required') else 'خیر'}</code>\n\n"
-            f"💰 مبلغ: <b>{format_toman(offer.get('price'))}</b>"
+            f"📅 Duration: <code>{duration}</code>\n"
+            f"📥 Daily downloads: <code>{limit_text}</code>\n"
+            f"📦 Maximum file size: <code>{max_file_text}</code>\n"
+            f"🎞 Maximum quality: <code>{quality}</code>\n"
+            f"⚙️ Concurrent downloads: <code>{concurrency}</code>\n"
+            f"🚀 Priority processing: <code>{'Yes' if offer.get('priority_processing') else 'No'}</code>\n"
+            f"📣 Required membership: <code>{'Yes' if offer.get('forced_join_required') else 'No'}</code>\n\n"
+            f"💰 Amount: <b>{format_usdt(offer.get('price'))}</b>"
         )
-    return (
-        f"💎 <b>{html.escape(str(offer.get('label') or '—'))}</b>\n\n"
-        f"📝 {description}\n\n"
-        f"📅 Duration: <code>{duration}</code>\n"
-        f"📥 Daily downloads: <code>{limit_text}</code>\n"
-        f"📦 Maximum file size: <code>{max_file_text}</code>\n"
-        f"🎞 Maximum quality: <code>{quality}</code>\n"
-        f"⚙️ Concurrent downloads: <code>{concurrency}</code>\n"
-        f"🚀 Priority processing: <code>{'Yes' if offer.get('priority_processing') else 'No'}</code>\n"
-        f"📣 Required membership: <code>{'Yes' if offer.get('forced_join_required') else 'No'}</code>\n\n"
-        f"💰 Amount: <b>{format_usdt(offer.get('price'))}</b>"
+
+    rules = (
+        "\n\nPlan changes: renewing the same plan adds duration and daily quota. An upgrade starts after approval and preserves your remaining time. A downgrade or mixed change starts after existing paid subscriptions."
+        if language == "en" else
+        "\n\nقوانین تغییر پلن: تمدید همان پلن، مدت و سهمیهٔ روزانه را جمع می‌کند. ارتقا پس از تأیید آغاز می‌شود و زمان باقی‌مانده حفظ می‌شود. تنزل یا تغییر ترکیبی پس از پایان اشتراک‌های خریداری‌شده شروع می‌شود."
     )
+    return text + rules
 
 
 def _payment_destination_text(offer: dict, destination: dict, receipt_rules: dict, language: str) -> str:
@@ -318,31 +326,20 @@ def _payment_destination_text(offer: dict, destination: dict, receipt_rules: dic
             f"<code>{html.escape(str(destination.get('address') or '—'))}</code>\n\n"
             "📷 Scan the QR code or copy the address exactly.\n\n"
             "⚠️ Use only the displayed network; transfers on another network may be lost.\n\n"
-            "📎 Then send a screenshot or PDF receipt here.\n"
-            "Maximum receipt size: "
-            f"<code>{receipt_rules['max_size_mb']} MB</code>"
+            "🔗 Then send the transaction ID (TxID).\n"
+            "A screenshot is optional and may be attached afterward."
         )
     bank_line = ""
     if destination.get("bank_name"):
-        bank_line = f"\n🏦 بانک: <b>{html.escape(str(destination['bank_name']))}</b>"
+        bank_line = f"{_tr('\n🏦 بانک: <b>')}{html.escape(str(destination['bank_name']))}</b>"
     return (
-        f"💎 <b>{html.escape(str(offer['label']))}</b>\n"
-        f"📅 مدت: <code>{int(offer['duration_days'])} روز</code>\n"
-        f"💰 مبلغ: <b>{format_toman(offer['price'])}</b>\n\n"
-        "لطفاً مبلغ را به کارت زیر واریز کنید:\n\n"
-        f"💳 <code>{html.escape(str(destination['card_number']))}</code>\n"
-        "👤 به نام: "
-        f"<b>{html.escape(str(destination['card_holder']))}</b>"
-        f"{bank_line}\n\n"
-        "📎 سپس تصویر رسید یا فایل PDF را همین‌جا ارسال کنید.\n"
-        "حداکثر حجم رسید: "
-        f"<code>{receipt_rules['max_size_mb']} MB</code>"
+        f"💎 <b>{html.escape(str(offer['label']))}{_tr('</b>\n📅 مدت: <code>')}{int(offer['duration_days'])}{_tr(' روز</code>\n💰 مبلغ: <b>')}{format_toman(offer['price'])}{_tr('</b>\n\nلطفاً مبلغ را به کارت زیر واریز کنید:\n\n💳 <code>')}{html.escape(str(destination['card_number']))}{_tr('</code>\n👤 به نام: <b>')}{html.escape(str(destination['card_holder']))}</b>{bank_line}{_tr('\n\n📎 سپس تصویر رسید یا فایل PDF را همین\u200cجا ارسال کنید.\nحداکثر حجم رسید: <code>')}{receipt_rules['max_size_mb']} MB</code>"
     )
 
 
 def _status_caption(original: str | None, status_line: str) -> str:
-    base = (original or "🧾 رسید پرداخت").strip()
-    marker = "\n\n⏳ وضعیت:"
+    base = (original or _tr("🧾 رسید پرداخت")).strip()
+    marker = _tr("\n\n⏳ وضعیت:")
 
     if marker in base:
         base = base.split(marker, 1)[0]
@@ -355,14 +352,22 @@ async def _edit_receipt_status(
     message: Message,
     status_line: str,
 ) -> None:
-    caption = _status_caption(message.caption, status_line)
+    original = message.caption if message.caption is not None else message.text
+    caption = _status_caption(original, status_line)
 
     try:
-        await message.edit_caption(
-            caption=caption,
-            parse_mode="HTML",
-            reply_markup=None,
-        )
+        if message.caption is not None:
+            await message.edit_caption(
+                caption=caption,
+                parse_mode="HTML",
+                reply_markup=None,
+            )
+        else:
+            await message.edit_text(
+                caption,
+                parse_mode="HTML",
+                reply_markup=None,
+            )
     except TelegramBadRequest as exc:
         if "message is not modified" not in str(exc).lower():
             raise
@@ -373,24 +378,38 @@ async def _edit_receipt_status_by_id(
     *,
     chat_id: int,
     message_id: int,
-    original_caption: str | None,
+    original_content: str | None,
+    is_media: bool,
     status_line: str,
 ) -> None:
-    caption = _status_caption(original_caption, status_line)
+    caption = _status_caption(original_content, status_line)
 
     try:
-        await message.bot.edit_message_caption(
-            chat_id=chat_id,
-            message_id=message_id,
-            caption=caption,
-            parse_mode="HTML",
-            reply_markup=None,
-        )
+        if is_media:
+            await message.bot.edit_message_caption(
+                chat_id=chat_id,
+                message_id=message_id,
+                caption=caption,
+                parse_mode="HTML",
+                reply_markup=None,
+            )
+        else:
+            await message.bot.edit_message_text(
+                chat_id=chat_id,
+                message_id=message_id,
+                text=caption,
+                parse_mode="HTML",
+                reply_markup=None,
+            )
     except TelegramBadRequest as exc:
         if "message is not modified" not in str(exc).lower():
             raise
 
 
+from app.localization import recipient_language
+
+
+@recipient_language
 async def _notify_user_approved(message: Message, result: dict) -> None:
     user = result["user"]
     payment = result["payment"]
@@ -407,15 +426,14 @@ async def _notify_user_approved(message: Message, result: dict) -> None:
         )
     else:
         text = (
-            "✅ <b>پرداخت شما تأیید شد</b>\n\n"
-            f"🆔 شناسه پرداخت: <code>{payment['id']}</code>\n"
-            "💎 پلن: "
-            f"<b>{html.escape(str(payment['plan_name_snapshot']))}</b>\n"
-            f"💎 مدت افزوده‌شده: <code>{payment['duration_days']} روز</code>\n"
-            "📅 اعتبار اشتراک تا: "
-            f"<code>{_format_datetime(subscription.get('expires_at'), language)}</code>"
+            f"{_tr('✅ <b>پرداخت شما تأیید شد</b>\n\n🆔 شناسه پرداخت: <code>')}{payment['id']}{_tr('</code>\n💎 پلن: <b>')}{html.escape(str(payment['plan_name_snapshot']))}{_tr('</b>\n💎 مدت افزوده\u200cشده: <code>')}{payment['duration_days']}{_tr(' روز</code>\n📅 اعتبار اشتراک تا: <code>')}{_format_datetime(subscription.get('expires_at'), language)}</code>"
         )
 
+    start_label = "📅 Starts: " if language == "en" else "📅 شروع اشتراک: "
+    text += "\n" + start_label + _format_datetime(subscription.get("started_at"), language)
+    if payment.get("subscription_change_type") in {"downgrade", "switch"}:
+        text += ("\nYour new plan is scheduled after your existing paid subscriptions." if language == "en" else
+                 "\nپلن جدید پس از پایان اشتراک‌های خریداری‌شدهٔ قبلی شروع می‌شود.")
     await message.bot.send_message(
         chat_id=user["telegram_id"],
         text=text,
@@ -424,11 +442,12 @@ async def _notify_user_approved(message: Message, result: dict) -> None:
     )
 
 
+@recipient_language
 async def _notify_user_rejected(message: Message, result: dict) -> None:
     user = result["user"]
     payment = result["payment"]
     language = normalize_language(user.get("effective_language"))
-    reason = payment.get("rejection_reason") or ("Receipt was not approved" if language == "en" else "رسید تأیید نشد")
+    reason = payment.get("rejection_reason") or ("Receipt was not approved" if language == "en" else _tr("رسید تأیید نشد"))
 
     if language == "en":
         reason = "The administrator did not approve this receipt."
@@ -440,10 +459,7 @@ async def _notify_user_rejected(message: Message, result: dict) -> None:
         )
     else:
         text = (
-            "❌ <b>رسید پرداخت شما تأیید نشد</b>\n\n"
-            f"🆔 شناسه پرداخت: <code>{payment['id']}</code>\n"
-            f"📝 دلیل: {html.escape(str(reason))}\n\n"
-            "می‌توانید پس از رفع مشکل، رسید جدیدی ثبت کنید."
+            f"{_tr('❌ <b>رسید پرداخت شما تأیید نشد</b>\n\n🆔 شناسه پرداخت: <code>')}{payment['id']}{_tr('</code>\n📝 دلیل: ')}{html.escape(str(reason))}{_tr('\n\nمی\u200cتوانید پس از رفع مشکل، رسید جدیدی ثبت کنید.')}"
         )
 
     await message.bot.send_message(
@@ -474,7 +490,7 @@ async def send_payment_offers_menu(
         await state.clear()
         await message.answer(
             (
-                "💎 <b>خرید اشتراک</b>\n\nپلن موردنظر را انتخاب کنید:"
+                _tr("💎 <b>خرید اشتراک</b>\n\nپلن موردنظر را انتخاب کنید:")
                 if language == "fa"
                 else "💎 <b>Buy subscription</b>\n\nChoose a plan:"
             ),
@@ -489,13 +505,11 @@ async def send_payment_offers_menu(
             _payment_error_message(exc, language),
             parse_mode="HTML",
         )
-
-
 def _subscription_status_text(result: dict, language: str = "fa") -> str:
     is_fa = language == "fa"
     if not result.get("is_active"):
-        return ("👤 <b>وضعیت اشتراک</b>\n\n" if is_fa else "👤 <b>My subscription</b>\n\n") + (
-            "در حال حاضر اشتراک فعالی ندارید." if is_fa else "You do not have an active subscription."
+        return (_tr("👤 <b>وضعیت اشتراک</b>\n\n") if is_fa else "👤 <b>My subscription</b>\n\n") + (
+            _tr("در حال حاضر اشتراک فعالی ندارید.") if is_fa else "You do not have an active subscription."
         )
 
     plan_name = html.escape(
@@ -511,12 +525,12 @@ def _subscription_status_text(result: dict, language: str = "fa") -> str:
     )
     duration_days = int(result.get("duration_days") or 0)
     duration_labels = {
-        30: ("یک‌ماهه", "1 month"),
-        90: ("سه‌ماهه", "3 months"),
-        180: ("شش‌ماهه", "6 months"),
-        365: ("یک‌ساله", "1 year"),
+        30: (_tr("یک‌ماهه"), "1 month"),
+        90: (_tr("سه‌ماهه"), "3 months"),
+        180: (_tr("شش‌ماهه"), "6 months"),
+        365: (_tr("یک‌ساله"), "1 year"),
     }
-    duration = duration_labels.get(duration_days, (f"{duration_days} روز", f"{duration_days} days"))[0 if is_fa else 1]
+    duration = duration_labels.get(duration_days, (f"{duration_days}{_tr(' روز')}", f"{duration_days} days"))[0 if is_fa else 1]
     try:
         expiry = datetime.fromisoformat(str(result["expires_at"]).replace("Z", "+00:00"))
         if expiry.tzinfo is None:
@@ -525,15 +539,15 @@ def _subscription_status_text(result: dict, language: str = "fa") -> str:
     except (KeyError, TypeError, ValueError):
         remaining_days = 0
     limit = result.get("daily_download_limit")
-    limit_text = "♾️ نامحدود" if is_fa and limit is None else ("♾️ Unlimited" if limit is None else str(limit))
-    remaining = "♾️ نامحدود" if is_fa and result.get("remaining_downloads") is None else ("♾️ Unlimited" if result.get("remaining_downloads") is None else str(result.get("remaining_downloads")))
-    labels = ("مدت اشتراک", "Subscription duration", "تاریخ عضویت", "Registered", "تعداد دانلودهای انجام‌شده", "Downloads completed", "محدودیت دانلود روزانه", "Daily download limit", "دانلود باقیمانده", "Downloads remaining", "روز باقی‌مانده", "Days remaining")
+    limit_text = _tr("♾️ نامحدود") if is_fa and limit is None else ("♾️ Unlimited" if limit is None else str(limit))
+    remaining = _tr("♾️ نامحدود") if is_fa and result.get("remaining_downloads") is None else ("♾️ Unlimited" if result.get("remaining_downloads") is None else str(result.get("remaining_downloads")))
+    labels = (_tr("مدت اشتراک"), "Subscription duration", _tr("تاریخ عضویت"), "Registered", _tr("تعداد دانلودهای انجام‌شده"), "Downloads completed", _tr("محدودیت دانلود روزانه"), "Daily download limit", _tr("دانلود باقیمانده"), "Downloads remaining", _tr("روز باقی‌مانده"), "Days remaining")
     return (
-        ("👤 <b>وضعیت اشتراک</b>\n\n" if is_fa else "👤 <b>My subscription</b>\n\n")
-        + ("✅ اشتراک شما فعال است.\n" if is_fa else "✅ Your subscription is active.\n")
-        + f"💎 {'پلن' if is_fa else 'Plan'}: <b>{plan_name}</b>\n"
+        (_tr("👤 <b>وضعیت اشتراک</b>\n\n") if is_fa else "👤 <b>My subscription</b>\n\n")
+        + (_tr("✅ اشتراک شما فعال است.\n") if is_fa else "✅ Your subscription is active.\n")
+        + f"💎 {(_tr('پلن') if is_fa else 'Plan')}: <b>{plan_name}</b>\n"
         + f"📦 {labels[0 if is_fa else 1]}: <code>{html.escape(duration)}</code>\n"
-        + f"📅 {'اعتبار تا' if is_fa else 'Valid until'}: <code>{_format_datetime(result.get('expires_at'), language)}</code>\n"
+        + f"📅 {(_tr('اعتبار تا') if is_fa else 'Valid until')}: <code>{_format_datetime(result.get('expires_at'), language)}</code>\n"
         + f"⏳ {labels[10 if is_fa else 11]}: <code>{remaining_days}</code>\n"
         + f"🗓️ {labels[2 if is_fa else 3]}: <code>{_format_datetime(result.get('registered_at'), language)}</code>\n"
         + f"📥 {labels[4 if is_fa else 5]}: <code>{int(result.get('downloads_done') or 0)}</code>\n"
@@ -557,8 +571,15 @@ async def send_subscription_status(
             parse_mode="HTML",
             reply_markup=await _user_home_reply_keyboard(user),
         )
+        if result.get("scheduled"):
+            await message.answer(
+                "📅 Scheduled plans" if language == "en" else "📅 اشتراک‌های زمان‌بندی‌شده",
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(
+                    text="📅 " + str(len(result["scheduled"])), callback_data="subscription:schedule:1"
+                )]]),
+            )
     except BackendAPIError:
-        await message.answer("Could not load subscription status." if language == "en" else "دریافت وضعیت اشتراک ممکن نشد.")
+        await message.answer("Could not load subscription status." if language == "en" else _tr("دریافت وضعیت اشتراک ممکن نشد."))
 
 
 @router.callback_query(F.data == "payment:open")
@@ -581,7 +602,7 @@ async def open_payment_offers(
         await _replace_payment_message(
             callback.message,
             (
-                "💎 <b>خرید اشتراک</b>\n\nپلن موردنظر را انتخاب کنید:"
+                _tr("💎 <b>خرید اشتراک</b>\n\nپلن موردنظر را انتخاب کنید:")
                 if language == "fa"
                 else "💎 <b>Buy subscription</b>\n\nChoose a plan:"
             ),
@@ -594,7 +615,7 @@ async def open_payment_offers(
         await callback.answer()
     except BackendAPIError as exc:
         await callback.answer(
-            "Payment system is not ready." if language == "en" else "سیستم پرداخت آماده نیست.",
+            "Payment system is not ready." if language == "en" else _tr("سیستم پرداخت آماده نیست."),
             show_alert=True,
         )
         await callback.message.answer(
@@ -614,15 +635,21 @@ async def payment_status(callback: CallbackQuery) -> None:
         user = await get_telegram_user(callback.from_user.id)
         language = normalize_language(user.get("effective_language"))
 
+        keyboard = await _user_home_inline_keyboard(callback.from_user.id)
+        if result.get("scheduled"):
+            keyboard.inline_keyboard.insert(0, [InlineKeyboardButton(
+                text="📅 Scheduled plans" if language == "en" else "📅 اشتراک‌های زمان‌بندی‌شده",
+                callback_data="subscription:schedule:1",
+            )])
         await callback.message.edit_text(
             _subscription_status_text(result, language),
             parse_mode="HTML",
-            reply_markup=await _user_home_inline_keyboard(callback.from_user.id),
+            reply_markup=keyboard,
         )
         await callback.answer()
     except BackendAPIError:
         await callback.answer(
-            "Could not load subscription status." if language == "en" else "دریافت وضعیت اشتراک ممکن نشد.",
+            "Could not load subscription status." if language == "en" else _tr("دریافت وضعیت اشتراک ممکن نشد."),
             show_alert=True,
         )
 
@@ -642,7 +669,7 @@ async def continue_payment_offer(
         offer = data.get("offer")
         if not isinstance(offer, dict):
             await callback.answer(
-                "Purchase expired; choose a plan again." if language == "en" else "درخواست خرید منقضی شده است.",
+                "Purchase expired; choose a plan again." if language == "en" else _tr("درخواست خرید منقضی شده است."),
                 show_alert=True,
             )
             return
@@ -706,7 +733,7 @@ async def continue_payment_offer(
         await callback.answer()
     except BackendAPIError as exc:
         await callback.answer(
-            "Payment system is not ready." if language == "en" else "سیستم پرداخت آماده نیست.",
+            "Payment system is not ready." if language == "en" else _tr("سیستم پرداخت آماده نیست."),
             show_alert=True,
         )
         await callback.message.answer(_payment_error_message(exc, language), parse_mode="HTML")
@@ -734,7 +761,7 @@ async def select_usdt_destination(
         user = await get_telegram_user(callback.from_user.id)
         language = normalize_language(user.get("effective_language"))
         if language != "en":
-            await callback.answer("این روش پرداخت فقط برای زبان انگلیسی است.", show_alert=True)
+            await callback.answer(_tr("این روش پرداخت فقط برای زبان انگلیسی است."), show_alert=True)
             return
 
         data = await state.get_data()
@@ -766,7 +793,7 @@ async def select_usdt_destination(
             )
 
         receipt_rules = configuration["receipt"]
-        await state.set_state(PaymentStates.waiting_for_receipt)
+        await state.set_state(PaymentStates.waiting_for_txid)
         await state.update_data(
             offer=selected,
             offer_code=selected["code"],
@@ -809,7 +836,7 @@ async def select_usdt_destination(
         await callback.answer(
             "The selected network is not available. Choose again."
             if language == "en"
-            else "شبکه انتخابی در دسترس نیست.",
+            else _tr("شبکه انتخابی در دسترس نیست."),
             show_alert=True,
         )
         await callback.message.answer(_payment_error_message(exc, language), parse_mode="HTML")
@@ -837,7 +864,7 @@ async def select_payment_offer(
 
         if offer is None:
             await callback.answer(
-                "The selected plan is not available." if language == "en" else "بسته انتخاب‌شده معتبر نیست.",
+                "The selected plan is not available." if language == "en" else _tr("بسته انتخاب‌شده معتبر نیست."),
                 show_alert=True,
             )
             return
@@ -854,7 +881,7 @@ async def select_payment_offer(
         await callback.answer()
     except BackendAPIError as exc:
         await callback.answer(
-            "Payment system is not ready." if language == "en" else "سیستم پرداخت آماده نیست.",
+            "Payment system is not ready." if language == "en" else _tr("سیستم پرداخت آماده نیست."),
             show_alert=True,
         )
         await callback.message.answer(
@@ -879,25 +906,28 @@ async def cancel_payment_flow(
     if isinstance(callback.message, Message):
         await _replace_payment_message(
             callback.message,
-            "Subscription purchase cancelled." if language == "en" else "خرید اشتراک لغو شد.",
+            "Subscription purchase cancelled." if language == "en" else _tr("خرید اشتراک لغو شد."),
             reply_markup=await _user_home_inline_keyboard(callback.from_user.id),
         )
 
-    await callback.answer("Cancelled." if language == "en" else "لغو شد.")
+    await callback.answer("Cancelled." if language == "en" else _tr("لغو شد."))
 
 
-@router.message(PaymentStates.waiting_for_receipt, F.photo | F.document)
-async def receive_payment_receipt(
+async def _submit_payment_from_state(
     message: Message,
     state: FSMContext,
+    *,
+    receipt_message: Message | None,
+    telegram_id: int | None = None,
 ) -> None:
-    if message.from_user is None:
+    if telegram_id is None and message.from_user is None:
         return
+    customer_telegram_id = telegram_id or int(message.from_user.id)
 
     language = "fa"
     try:
         language = normalize_language(
-            (await get_telegram_user(message.from_user.id)).get("effective_language")
+            (await get_telegram_user(customer_telegram_id)).get("effective_language")
         )
     except BackendAPIError:
         pass
@@ -908,30 +938,32 @@ async def receive_payment_receipt(
     payment_card_id = state_data.get("payment_card_id")
     usdt_destination_id = state_data.get("usdt_destination_id")
     currency = str(state_data.get("currency") or "IRT")
+    txid = str(state_data.get("txid") or "").strip() or None
 
     if not offer_code or not isinstance(offer, dict):
         await state.clear()
         await message.answer(
             "This purchase expired; choose a plan again."
             if language == "en"
-            else "درخواست خرید منقضی شده است؛ دوباره پلن را انتخاب کنید."
+            else _tr("درخواست خرید منقضی شده است؛ دوباره پلن را انتخاب کنید.")
         )
         return
 
     try:
-        if ADMIN_PAYMENT_CHAT_ID is None or ADMIN_PAYMENT_TOPIC_ID is None:
-            raise RuntimeError("Admin payments topic is not configured")
+        routes = await notification_routes()
+        payment_chat_id = routes.get("chat_id")
+        payment_topic_id = (routes.get("topics") or {}).get("payments")
 
-        if message.photo:
-            receipt = message.photo[-1]
+        if receipt_message is not None and receipt_message.photo:
+            receipt = receipt_message.photo[-1]
             file_id = receipt.file_id
             unique_id = receipt.file_unique_id
             file_size = receipt.file_size
             file_type = "photo"
             mime_type = "image/jpeg"
             file_name = None
-        else:
-            document = message.document
+        elif receipt_message is not None:
+            document = receipt_message.document
 
             if document is None:
                 return
@@ -947,21 +979,29 @@ async def receive_payment_receipt(
             if mime_type not in allowed_types:
                 await message.answer(
                     "❌ Invalid receipt format. Send an image or PDF only."
-                    if language == "en" else "❌ فرمت رسید مجاز نیست. فقط تصویر یا PDF ارسال کنید."
+                    if language == "en" else _tr("❌ فرمت رسید مجاز نیست. فقط تصویر یا PDF ارسال کنید.")
                 )
                 return
+        else:
+            file_id = None
+            unique_id = None
+            file_size = None
+            file_type = None
+            mime_type = None
+            file_name = None
 
         max_size_mb = int((receipt_rules or {}).get("max_size_mb", 10))
         if file_size is not None and file_size > max_size_mb * 1024 * 1024:
             await message.answer(
                 f"❌ Receipt is larger than {max_size_mb} MB."
-                if language == "en" else f"❌ حجم رسید بیشتر از {max_size_mb} مگابایت است."
+                if language == "en" else f"{_tr('❌ حجم رسید بیشتر از ')}{max_size_mb}{_tr(' مگابایت است.')}"
             )
             return
 
-        await register_telegram_user(message)
+        if message.from_user is not None and message.from_user.id == customer_telegram_id:
+            await register_telegram_user(message)
         result = await create_manual_payment(
-            telegram_id=message.from_user.id,
+            telegram_id=customer_telegram_id,
             offer_code=offer_code,
             receipt_file_id=file_id,
             receipt_file_unique_id=unique_id,
@@ -969,7 +1009,11 @@ async def receive_payment_receipt(
             receipt_file_size=file_size,
             receipt_mime_type=mime_type,
             receipt_file_name=file_name,
-            user_receipt_message_id=message.message_id,
+            user_receipt_message_id=(
+                receipt_message.message_id
+                if receipt_message is not None
+                else int(state_data.get("txid_message_id") or message.message_id)
+            ),
             payment_card_id=(
                 int(payment_card_id) if payment_card_id is not None else None
             ),
@@ -979,58 +1023,49 @@ async def receive_payment_receipt(
                 if usdt_destination_id is not None
                 else None
             ),
+            txid=txid,
         )
         payment_id = int(result["payment"]["id"])
         caption = _build_admin_caption(result, offer)
         send_kwargs = {
-            "chat_id": ADMIN_PAYMENT_CHAT_ID,
-            "caption": caption,
+            "chat_id": payment_chat_id,
             "parse_mode": "HTML",
-            "message_thread_id": ADMIN_PAYMENT_TOPIC_ID,
-            "reply_markup": build_admin_payment_keyboard(payment_id),
+            "message_thread_id": payment_topic_id,
+            "reply_markup": build_admin_payment_keyboard(
+                payment_id,
+                explorer_url=_transaction_explorer_url(result["payment"]),
+            ),
         }
 
         try:
-            if file_type == "photo":
-                admin_message = await message.bot.send_photo(
-                    photo=file_id,
-                    **send_kwargs,
-                )
-            else:
-                admin_message = await message.bot.send_document(
-                    document=file_id,
-                    **send_kwargs,
-                )
-        except Exception:
-            try:
-                await mark_payment_delivery_failed(payment_id)
-            except Exception:
-                pass
-            raise
-
-        try:
+            if not routes.get("enabled") or not payment_chat_id or not payment_topic_id:
+                raise RuntimeError("Payments Topic is not configured")
+            # Text accommodates complete payment details; attachments have no
+            # duplicated action buttons and cannot overflow Telegram captions.
+            admin_message = await message.bot.send_message(text=caption, **send_kwargs)
             await set_payment_admin_message(
-                payment_id=payment_id,
-                admin_chat_id=ADMIN_PAYMENT_CHAT_ID,
+                payment_id=payment_id, admin_chat_id=payment_chat_id,
                 admin_message_id=admin_message.message_id,
-                admin_message_thread_id=ADMIN_PAYMENT_TOPIC_ID,
+                admin_message_thread_id=payment_topic_id,
             )
+            if file_id:
+                await getattr(message.bot, f"send_{file_type}")(
+                    **{file_type: file_id}, chat_id=payment_chat_id,
+                    message_thread_id=payment_topic_id,
+                )
         except Exception as exc:
-            print(
-                "Failed to store admin payment message metadata: "
-                f"{type(exc).__name__}: {exc}"
-            )
+            # Submission already committed. The finance panel remains the
+            # source of truth even when Telegram delivery is unavailable.
+            logger.warning("Payment %s Topic delivery failed: %s", payment_id, type(exc).__name__)
 
         await state.clear()
         await message.answer(
             (
-                "✅ <b>Your receipt was submitted</b>\n\n"
+                "✅ <b>Your USDT payment was submitted</b>\n\n"
                 f"Payment ID: <code>{payment_id}</code>\n"
                 "You will be notified here after administrator review."
                 if language == "en" else
-                "✅ <b>رسید شما ثبت شد</b>\n\n"
-                f"🆔 شناسه پرداخت: <code>{payment_id}</code>\n"
-                "پس از بررسی مدیر، نتیجه همین‌جا اطلاع داده می‌شود."
+                f"{_tr('✅ <b>رسید شما ثبت شد</b>\n\n🆔 شناسه پرداخت: <code>')}{payment_id}{_tr('</code>\nپس از بررسی مدیر، نتیجه همین\u200cجا اطلاع داده می\u200cشود.')}"
             ),
             parse_mode="HTML",
             reply_markup=await _user_home_reply_keyboard(result["user"]),
@@ -1046,15 +1081,67 @@ async def receive_payment_receipt(
     except Exception as exc:
         await message.answer(
             (
-                "❌ We could not send the receipt to the finance team.\n\n"
+                "❌ We could not send the payment to the finance team.\n\n"
                 "Please try again later."
                 if language == "en" else
-                "❌ ارسال رسید به بخش مالی انجام نشد.\n\n"
-                "لطفاً کمی بعد دوباره تلاش کنید.\n"
-                f"<code>{html.escape(str(exc)[:300])}</code>"
+                f"{_tr('❌ ارسال رسید به بخش مالی انجام نشد.\n\nلطفاً کمی بعد دوباره تلاش کنید.\n<code>')}{html.escape(str(exc)[:300])}</code>"
             ),
             parse_mode="HTML",
         )
+
+
+@router.message(PaymentStates.waiting_for_receipt, F.photo | F.document)
+async def receive_payment_receipt(
+    message: Message,
+    state: FSMContext,
+) -> None:
+    await _submit_payment_from_state(message, state, receipt_message=message)
+
+
+@router.message(PaymentStates.waiting_for_txid, F.text)
+async def receive_usdt_txid(message: Message, state: FSMContext) -> None:
+    txid = str(message.text or "").strip()
+    if not re.fullmatch(r"[A-Za-z0-9_-]{16,255}", txid):
+        await message.answer(
+            "❌ Invalid TxID. Send the 16-255 character transaction ID exactly as shown by your wallet."
+        )
+        return
+    await state.update_data(txid=txid, txid_message_id=message.message_id)
+    await state.set_state(PaymentStates.waiting_for_usdt_screenshot)
+    await message.answer(
+        "✅ TxID received.\n\nYou may now send a screenshot/PDF, or submit without one.",
+        reply_markup=build_usdt_screenshot_keyboard(),
+    )
+
+
+@router.message(
+    PaymentStates.waiting_for_usdt_screenshot,
+    F.photo | F.document,
+)
+async def receive_optional_usdt_screenshot(
+    message: Message,
+    state: FSMContext,
+) -> None:
+    await _submit_payment_from_state(message, state, receipt_message=message)
+
+
+@router.callback_query(
+    PaymentStates.waiting_for_usdt_screenshot,
+    F.data == "payment:usdt-screenshot:skip",
+)
+async def skip_usdt_screenshot(
+    callback: CallbackQuery,
+    state: FSMContext,
+) -> None:
+    if not isinstance(callback.message, Message):
+        return
+    await callback.answer()
+    await _submit_payment_from_state(
+        callback.message,
+        state,
+        receipt_message=None,
+        telegram_id=callback.from_user.id,
+    )
 
 
 @router.message(PaymentStates.waiting_for_receipt)
@@ -1067,7 +1154,19 @@ async def invalid_payment_receipt(message: Message) -> None:
             pass
     await message.answer(
         "📎 Send a receipt image or PDF file only."
-        if language == "en" else "📎 لطفاً فقط تصویر رسید یا فایل PDF را ارسال کنید."
+        if language == "en" else _tr("📎 لطفاً فقط تصویر رسید یا فایل PDF را ارسال کنید.")
+    )
+
+
+@router.message(PaymentStates.waiting_for_txid)
+async def invalid_usdt_txid(message: Message) -> None:
+    await message.answer("🔗 Send the TxID as text before attaching a screenshot.")
+
+
+@router.message(PaymentStates.waiting_for_usdt_screenshot)
+async def invalid_usdt_screenshot(message: Message) -> None:
+    await message.answer(
+        "📎 Send an image/PDF, or use “Submit without screenshot”."
     )
 
 
@@ -1090,12 +1189,12 @@ async def _ensure_admin(callback: CallbackQuery) -> bool:
             return True
     except BackendAPIError:
         await callback.answer(
-            "بررسی دسترسی مدیر ممکن نشد.",
+            _tr("بررسی دسترسی مدیر ممکن نشد."),
             show_alert=True,
         )
         return False
 
-    await callback.answer("شما دسترسی مدیر ندارید.", show_alert=True)
+    await callback.answer(_tr("شما دسترسی مدیر ندارید."), show_alert=True)
     return False
 
 
@@ -1115,13 +1214,48 @@ async def _ensure_message_admin(message: Message) -> bool:
 
 
 @router.callback_query(F.data.startswith("payment_admin:approve:"))
-async def approve_payment_callback(callback: CallbackQuery) -> None:
+async def request_approval_confirmation(
+    callback: CallbackQuery,
+    state: FSMContext,
+) -> None:
     if not await _ensure_admin(callback):
         return
-
     payment_id = _parse_admin_payment_id(callback)
     if payment_id is None or not isinstance(callback.message, Message):
-        await callback.answer("شناسه پرداخت نامعتبر است.", show_alert=True)
+        await callback.answer(_tr("شناسه پرداخت نامعتبر است."), show_alert=True)
+        return
+    await state.set_state(AdminPaymentStates.confirming_approval)
+    await state.update_data(
+        approval_payment_id=payment_id,
+        approval_expires_at=datetime.now(timezone.utc).timestamp() + 300,
+    )
+    await callback.message.edit_reply_markup(
+        reply_markup=build_payment_approval_confirmation_keyboard(payment_id)
+    )
+    await callback.answer(_tr("برای فعال‌سازی، تأیید نهایی را بزنید."))
+
+
+@router.callback_query(
+    AdminPaymentStates.confirming_approval,
+    F.data.startswith("payment_admin:approve-confirm:"),
+)
+async def approve_payment_callback(
+    callback: CallbackQuery,
+    state: FSMContext,
+) -> None:
+    if not await _ensure_admin(callback):
+        return
+    payment_id = _parse_admin_payment_id(callback)
+    data = await state.get_data()
+    if (
+        payment_id is None
+        or payment_id != int(data.get("approval_payment_id") or 0)
+        or datetime.now(timezone.utc).timestamp()
+        > float(data.get("approval_expires_at") or 0)
+        or not isinstance(callback.message, Message)
+    ):
+        await state.clear()
+        await callback.answer(_tr("تأیید منقضی یا نامعتبر است."), show_alert=True)
         return
 
     try:
@@ -1131,31 +1265,44 @@ async def approve_payment_callback(callback: CallbackQuery) -> None:
         )
         subscription = result.get("subscription") or {}
         status_line = (
-            "✅ وضعیت: <b>تأیید شد</b>\n"
-            f"👮 مدیر: <code>{callback.from_user.id}</code>\n"
-            "📅 اعتبار تا: "
-            f"<code>{_format_datetime(subscription.get('expires_at'))}</code>"
+            f"{_tr('✅ وضعیت: <b>تأیید شد</b>\n👮 مدیر: <code>')}{callback.from_user.id}{_tr('</code>\n📅 اعتبار تا: <code>')}{_format_datetime(subscription.get('expires_at'))}</code>"
         )
         await _edit_receipt_status(callback.message, status_line)
+        await state.clear()
 
         if not result.get("already_reviewed"):
             try:
                 await _notify_user_approved(callback.message, result)
             except Exception as exc:
                 await callback.message.reply(
-                    "⚠️ پرداخت تأیید شد، اما پیام نتیجه به کاربر نرسید: "
-                    f"<code>{html.escape(str(exc)[:250])}</code>",
+                    f"{_tr('⚠️ پرداخت تأیید شد، اما پیام نتیجه به کاربر نرسید: <code>')}{html.escape(str(exc)[:250])}</code>",
                     parse_mode="HTML",
                 )
 
         callback_text = (
-            "این پرداخت قبلاً تأیید شده بود."
+            _tr("این پرداخت قبلاً تأیید شده بود.")
             if result.get("already_reviewed")
-            else "پرداخت تأیید و اشتراک تمدید شد."
+            else _tr("پرداخت تأیید و اشتراک تمدید شد.")
         )
         await callback.answer(callback_text)
     except BackendAPIError as exc:
         await callback.answer(str(exc.detail)[:180], show_alert=True)
+
+
+@router.callback_query(
+    F.data.startswith("payment_admin:approve-cancel:"),
+)
+async def cancel_approval_confirmation(
+    callback: CallbackQuery,
+    state: FSMContext,
+) -> None:
+    await state.clear()
+    payment_id = _parse_admin_payment_id(callback)
+    if isinstance(callback.message, Message) and payment_id is not None:
+        await callback.message.edit_reply_markup(
+            reply_markup=build_admin_payment_keyboard(payment_id)
+        )
+    await callback.answer(_tr("تأیید پرداخت لغو شد."))
 
 
 @router.callback_query(F.data.startswith("payment_admin:reject:"))
@@ -1168,7 +1315,7 @@ async def request_rejection_reason(
 
     payment_id = _parse_admin_payment_id(callback)
     if payment_id is None or not isinstance(callback.message, Message):
-        await callback.answer("شناسه پرداخت نامعتبر است.", show_alert=True)
+        await callback.answer(_tr("شناسه پرداخت نامعتبر است."), show_alert=True)
         return
 
     await state.set_state(AdminPaymentStates.waiting_for_rejection_reason)
@@ -1176,17 +1323,17 @@ async def request_rejection_reason(
         payment_id=payment_id,
         receipt_chat_id=callback.message.chat.id,
         receipt_message_id=callback.message.message_id,
-        receipt_caption=callback.message.caption,
+        receipt_content=callback.message.caption or callback.message.text,
+        receipt_is_media=callback.message.caption is not None,
     )
     await callback.message.reply(
         (
-            f"📝 دلیل رد پرداخت <code>#{payment_id}</code> را ارسال کنید.\n"
-            "برای انصراف از <code>/cancel</code> استفاده کنید."
+            f"{_tr('📝 دلیل رد پرداخت <code>#')}{payment_id}{_tr('</code> را ارسال کنید.\nبرای انصراف از <code>/cancel</code> استفاده کنید.')}"
         ),
         parse_mode="HTML",
         reply_markup=ForceReply(selective=True),
     )
-    await callback.answer("دلیل رد را ارسال کنید.")
+    await callback.answer(_tr("دلیل رد را ارسال کنید."))
 
 
 @router.message(AdminPaymentStates.waiting_for_rejection_reason, F.text)
@@ -1196,27 +1343,53 @@ async def receive_rejection_reason(
 ) -> None:
     if not await _ensure_message_admin(message):
         await state.clear()
-        await message.answer("شما دسترسی بررسی پرداخت‌ها را ندارید.")
+        await message.answer(_tr("شما دسترسی بررسی پرداخت‌ها را ندارید."))
         return
 
     reason = (message.text or "").strip()
 
     if reason.lower() == "/cancel":
         await state.clear()
-        await message.answer("رد پرداخت لغو شد.")
+        await message.answer(_tr("رد پرداخت لغو شد."))
         return
 
     if len(reason) < 2:
-        await message.answer("دلیل رد باید حداقل دو نویسه باشد.")
+        await message.answer(_tr("دلیل رد باید حداقل دو نویسه باشد."))
         return
 
+    if len(reason) > 1000:
+        await message.answer("Please use at most 1000 characters.")
+        return
     state_data = await state.get_data()
     payment_id = int(state_data["payment_id"])
+    await state.set_state(AdminPaymentStates.confirming_rejection)
+    await state.update_data(rejection_reason=reason)
+    await message.answer(
+        f"Reject payment #{payment_id}?\n\nReason: {reason}",
+        parse_mode=None,
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="Confirm rejection", callback_data=f"payment_admin:reject-confirm:{payment_id}")],
+            [InlineKeyboardButton(text="Cancel", callback_data=f"payment_admin:approve-cancel:{payment_id}")],
+        ]),
+    )
 
+
+@router.callback_query(AdminPaymentStates.confirming_rejection, F.data.startswith("payment_admin:reject-confirm:"))
+async def confirm_payment_rejection(callback: CallbackQuery, state: FSMContext):
+    if not isinstance(callback.message, Message) or not await _ensure_admin(callback):
+        return
+    state_data = await state.get_data()
+    payment_id = int(state_data["payment_id"])
+    if _parse_admin_payment_id(callback) != payment_id:
+        return await callback.answer("This confirmation expired.", show_alert=True)
+    reason = str(state_data["rejection_reason"])
+    message = callback.message
+    admin_id = callback.from_user.id
+    await callback.answer()
     try:
         result = await reject_manual_payment(
             payment_id=payment_id,
-            admin_telegram_id=message.from_user.id,
+            admin_telegram_id=admin_id,
             reason=reason,
         )
         actual_reason = (
@@ -1227,11 +1400,10 @@ async def receive_rejection_reason(
             message,
             chat_id=int(state_data["receipt_chat_id"]),
             message_id=int(state_data["receipt_message_id"]),
-            original_caption=state_data.get("receipt_caption"),
+            original_content=state_data.get("receipt_content"),
+            is_media=bool(state_data.get("receipt_is_media")),
             status_line=(
-                "❌ وضعیت: <b>رد شد</b>\n"
-                f"👮 مدیر: <code>{message.from_user.id}</code>\n"
-                f"📝 دلیل: {html.escape(actual_reason)}"
+                f"{_tr('❌ وضعیت: <b>رد شد</b>\n👮 مدیر: <code>')}{admin_id}{_tr('</code>\n📝 دلیل: ')}{html.escape(actual_reason)}"
             ),
         )
 
@@ -1240,16 +1412,15 @@ async def receive_rejection_reason(
                 await _notify_user_rejected(message, result)
             except Exception as exc:
                 await message.answer(
-                    "⚠️ پرداخت رد شد، اما پیام نتیجه به کاربر نرسید: "
-                    f"<code>{html.escape(str(exc)[:250])}</code>",
+                    f"{_tr('⚠️ پرداخت رد شد، اما پیام نتیجه به کاربر نرسید: <code>')}{html.escape(str(exc)[:250])}</code>",
                     parse_mode="HTML",
                 )
 
         await state.clear()
         result_text = (
-            f"پرداخت #{payment_id} قبلاً رد شده بود."
+            f"{_tr('پرداخت #')}{payment_id}{_tr(' قبلاً رد شده بود.')}"
             if result.get("already_reviewed")
-            else f"❌ پرداخت #{payment_id} رد شد."
+            else f"{_tr('❌ پرداخت #')}{payment_id}{_tr(' رد شد.')}"
         )
         await message.answer(result_text)
     except BackendAPIError as exc:
@@ -1257,3 +1428,30 @@ async def receive_rejection_reason(
             f"❌ <code>{html.escape(str(exc.detail)[:500])}</code>",
             parse_mode="HTML",
         )
+
+
+@router.callback_query(F.data.startswith("subscription:schedule:"))
+async def subscription_schedule(callback: CallbackQuery):
+    if not isinstance(callback.message, Message) or callback.message.chat.type != "private":
+        return
+    try:
+        page = max(1, int(callback.data.rsplit(":", 1)[-1]))
+        language = normalize_language((await get_telegram_user(callback.from_user.id)).get("effective_language"))
+        result = await get_current_subscription(callback.from_user.id)
+        items = result.get("scheduled") or []
+        title = "📅 Scheduled plans" if language == "en" else "📅 اشتراک‌های زمان‌بندی‌شده"
+        lines = [title, ""]
+        for item in items[(page - 1) * 5:page * 5]:
+            name = item.get("plan_name_en") if language == "en" else item.get("plan_name")
+            lines.append(html.escape(str(name)) + "\n" + _format_datetime(item['started_at'], language) + " → " + _format_datetime(item['expires_at'], language))
+        if not items: lines.append("No scheduled plans." if language == "en" else "اشتراک زمان‌بندی‌شده‌ای ندارید.")
+        rows = []
+        nav = []
+        if page > 1: nav.append(InlineKeyboardButton(text="◀️", callback_data=f"subscription:schedule:{page - 1}"))
+        if page * 5 < len(items): nav.append(InlineKeyboardButton(text="▶️", callback_data=f"subscription:schedule:{page + 1}"))
+        if nav: rows.append(nav)
+        rows.append([InlineKeyboardButton(text="↩️", callback_data="payment:status")])
+        await callback.message.edit_text("\n".join(lines), parse_mode="HTML", reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))
+        await callback.answer()
+    except (BackendAPIError, ValueError):
+        await callback.answer("Could not load scheduled plans.", show_alert=True)

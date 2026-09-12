@@ -27,7 +27,7 @@ def test_home_keyboard_supports_language_and_admin_entry():
         "home:faq",
         "admin:open",
     ]
-    assert buttons[3].text == "🌐 Language | تغییر زبان"
+    assert buttons[3].text == "🌐 Language"
 
 
 def test_offer_keyboard_supports_arbitrary_custom_plan_durations():

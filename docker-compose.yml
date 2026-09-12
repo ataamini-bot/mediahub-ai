@@ -86,6 +86,7 @@ services:
       - media_data:/app/media
       - downloads_data:/app/downloads
       - temp_data:/app/tmp
+      - monitor_data:/app/monitor-data
       - ./secrets:/app/secrets:ro
 
     ports:
@@ -166,6 +167,10 @@ services:
 
     command: python -m app.monitoring.health_monitor
 
+    volumes:
+      - downloads_data:/app/downloads:ro
+      - monitor_data:/app/monitor-data
+
     env_file:
       - .env
 
@@ -185,3 +190,4 @@ volumes:
   downloads_data:
   temp_data:
   telegram_api_data:
+  monitor_data:

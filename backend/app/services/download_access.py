@@ -284,7 +284,9 @@ class DownloadAccessService:
             .join(Subscription, Subscription.plan_id == Plan.id)
             .where(
                 Subscription.user_id == user.id,
-                Subscription.status == SubscriptionStatus.ACTIVE,
+                Subscription.status.in_(
+                    (SubscriptionStatus.ACTIVE, SubscriptionStatus.SCHEDULED)
+                ),
                 Subscription.started_at <= now,
                 Subscription.expires_at > now,
             )

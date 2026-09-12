@@ -1,3 +1,4 @@
+from app.localization import tr as _tr, localized_collection as _localized_collection
 from aiogram.types import (
     InlineKeyboardButton,
     InlineKeyboardMarkup,
@@ -13,7 +14,7 @@ def build_active_download_keyboard(
             [
                 InlineKeyboardButton(
                     text=(
-                        "⏸ توقف دانلود"
+                        _tr("⏸ توقف دانلود")
                     ),
                     callback_data=(
                         f"download_pause:"
@@ -24,7 +25,7 @@ def build_active_download_keyboard(
             [
                 InlineKeyboardButton(
                     text=(
-                        "❌ انصراف از دانلود"
+                        _tr("❌ انصراف از دانلود")
                     ),
                     callback_data=(
                         f"download_cancel:"
@@ -45,7 +46,7 @@ def build_paused_download_keyboard(
             [
                 InlineKeyboardButton(
                     text=(
-                        "▶️ ادامه دانلود"
+                        _tr("▶️ ادامه دانلود")
                     ),
                     callback_data=(
                         f"download_resume:"
@@ -56,7 +57,7 @@ def build_paused_download_keyboard(
             [
                 InlineKeyboardButton(
                     text=(
-                        "❌ انصراف از دانلود"
+                        _tr("❌ انصراف از دانلود")
                     ),
                     callback_data=(
                         f"download_cancel:"

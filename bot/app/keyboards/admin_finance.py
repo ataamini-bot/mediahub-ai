@@ -1,3 +1,4 @@
+from app.localization import tr as _tr, localized_collection as _localized_collection
 from math import ceil
 
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
@@ -33,15 +34,16 @@ def build_payment_statistics_keyboard(
         rows = [
             [
                 InlineKeyboardButton(
-                    text="📅 انتخاب بازهٔ دیگر",
+                    text=_tr("📅 انتخاب بازهٔ دیگر"),
                     callback_data="admin:pay:stats",
                 )
             ]
         ]
+    rows.append([InlineKeyboardButton(text=_tr("📊 گزارش تفصیلی و CSV"), callback_data="reports:finance")])
     rows.append(
         [
             InlineKeyboardButton(
-                text="🔙 مدیریت پرداخت‌ها",
+                text=_tr("🔙 مدیریت پرداخت‌ها"),
                 callback_data="admin:payments",
             )
         ]
@@ -56,19 +58,19 @@ def build_finance_home_keyboard(
     rows = [
         [
             InlineKeyboardButton(
-                text="⏳ رسیدهای در انتظار",
+                text=_tr("⏳ رسیدهای در انتظار"),
                 callback_data="admin:pay:list:pending:1",
             )
         ],
         [
             InlineKeyboardButton(
-                text="🧾 همه پرداخت‌ها",
+                text=_tr("🧾 همه پرداخت‌ها"),
                 callback_data="admin:pay:list:all:1",
             )
         ],
         [
             InlineKeyboardButton(
-                text="📊 آمار پرداخت‌ها",
+                text=_tr("📊 آمار پرداخت‌ها"),
                 callback_data="admin:pay:stats",
             )
         ],
@@ -78,13 +80,13 @@ def build_finance_home_keyboard(
             [
                 [
                     InlineKeyboardButton(
-                        text="💳 شماره کارت‌ها",
+                        text=_tr("💳 شماره کارت‌ها"),
                         callback_data="admin:cards",
                     )
                 ],
                 [
                     InlineKeyboardButton(
-                        text="💵 کیف‌پول‌های USDT",
+                        text=_tr("💵 کیف‌پول‌های USDT"),
                         callback_data="admin:usdt",
                     )
                 ],
@@ -93,7 +95,7 @@ def build_finance_home_keyboard(
     rows.append(
         [
             InlineKeyboardButton(
-                text="🔙 بازگشت به پنل",
+                text=_tr("🔙 بازگشت به پنل"),
                 callback_data="admin:open",
             )
         ]
@@ -143,14 +145,14 @@ def build_payment_list_keyboard(
     if page > 1:
         navigation.append(
             InlineKeyboardButton(
-                text="◀️ قبلی",
+                text=_tr("◀️ قبلی"),
                 callback_data=f"admin:pay:list:{status_filter}:{page - 1}",
             )
         )
     if page < page_count:
         navigation.append(
             InlineKeyboardButton(
-                text="بعدی ▶️",
+                text=_tr("بعدی ▶️"),
                 callback_data=f"admin:pay:list:{status_filter}:{page + 1}",
             )
         )
@@ -159,7 +161,7 @@ def build_payment_list_keyboard(
     rows.append(
         [
             InlineKeyboardButton(
-                text="🔙 مدیریت پرداخت‌ها",
+                text=_tr("🔙 مدیریت پرداخت‌ها"),
                 callback_data="admin:payments",
             )
         ]
@@ -179,11 +181,11 @@ def build_payment_detail_keyboard(
         rows.append(
             [
                 InlineKeyboardButton(
-                    text="✅ تأیید و فعال‌سازی",
+                    text=_tr("✅ تأیید و فعال‌سازی"),
                     callback_data=f"payment_admin:approve:{payment['id']}",
                 ),
                 InlineKeyboardButton(
-                    text="❌ رد رسید",
+                    text=_tr("❌ رد رسید"),
                     callback_data=f"payment_admin:reject:{payment['id']}",
                 ),
             ]
@@ -191,7 +193,7 @@ def build_payment_detail_keyboard(
     rows.append(
         [
             InlineKeyboardButton(
-                text="🔙 فهرست پرداخت‌ها",
+                text=_tr("🔙 فهرست پرداخت‌ها"),
                 callback_data=f"admin:pay:list:{status_filter}:{page}",
             )
         ]
@@ -208,8 +210,7 @@ def build_cards_keyboard(cards: list[dict]) -> InlineKeyboardMarkup:
             [
                 InlineKeyboardButton(
                     text=(
-                        f"{status} {str(card.get('label') or 'کارت')[:28]} "
-                        f"— **** {number[-4:]}"
+                        f"{status} {str(card.get('label') or _tr('کارت'))[:28]} — **** {number[-4:]}"
                     ),
                     callback_data=f"admin:card:{int(card['id'])}",
                 )
@@ -219,13 +220,13 @@ def build_cards_keyboard(cards: list[dict]) -> InlineKeyboardMarkup:
         [
             [
                 InlineKeyboardButton(
-                    text="➕ افزودن کارت",
+                    text=_tr("➕ افزودن کارت"),
                     callback_data="admin:card:add",
                 )
             ],
             [
                 InlineKeyboardButton(
-                    text="🔙 مدیریت پرداخت‌ها",
+                    text=_tr("🔙 مدیریت پرداخت‌ها"),
                     callback_data="admin:payments",
                 )
             ],
@@ -240,47 +241,47 @@ def build_card_detail_keyboard(card: dict) -> InlineKeyboardMarkup:
         inline_keyboard=[
             [
                 InlineKeyboardButton(
-                    text="✏️ عنوان",
+                    text=_tr("✏️ عنوان"),
                     callback_data=f"admin:card:edit:label:{card_id}",
                 ),
                 InlineKeyboardButton(
-                    text="💳 شماره کارت",
+                    text=_tr("💳 شماره کارت"),
                     callback_data=f"admin:card:edit:number:{card_id}",
                 ),
             ],
             [
                 InlineKeyboardButton(
-                    text="👤 صاحب کارت",
+                    text=_tr("👤 صاحب کارت"),
                     callback_data=f"admin:card:edit:holder:{card_id}",
                 ),
                 InlineKeyboardButton(
-                    text="🏦 نام بانک",
+                    text=_tr("🏦 نام بانک"),
                     callback_data=f"admin:card:edit:bank:{card_id}",
                 ),
             ],
             [
                 InlineKeyboardButton(
-                    text="↕️ ترتیب",
+                    text=_tr("↕️ ترتیب"),
                     callback_data=f"admin:card:edit:order:{card_id}",
                 ),
                 InlineKeyboardButton(
                     text=(
-                        "⛔️ غیرفعال‌سازی"
+                        _tr("⛔️ غیرفعال‌سازی")
                         if card.get("is_active")
-                        else "✅ فعال‌سازی"
+                        else _tr("✅ فعال‌سازی")
                     ),
                     callback_data=f"admin:card:toggle:{card_id}",
                 ),
             ],
             [
                 InlineKeyboardButton(
-                    text="🗑 حذف کارت",
+                    text=_tr("🗑 حذف کارت"),
                     callback_data=f"admin:card:delete:{card_id}",
                 )
             ],
             [
                 InlineKeyboardButton(
-                    text="🔙 فهرست کارت‌ها",
+                    text=_tr("🔙 فهرست کارت‌ها"),
                     callback_data="admin:cards",
                 )
             ],
@@ -308,13 +309,13 @@ def build_usdt_keyboard(destinations: list[dict]) -> InlineKeyboardMarkup:
         [
             [
                 InlineKeyboardButton(
-                    text="➕ افزودن کیف‌پول USDT",
+                    text=_tr("➕ افزودن کیف‌پول USDT"),
                     callback_data="admin:usdt:add",
                 )
             ],
             [
                 InlineKeyboardButton(
-                    text="🔙 مدیریت پرداخت‌ها",
+                    text=_tr("🔙 مدیریت پرداخت‌ها"),
                     callback_data="admin:payments",
                 )
             ],
@@ -332,61 +333,61 @@ def build_usdt_detail_keyboard(destination: dict) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
-                InlineKeyboardButton(text="✏️ عنوان", callback_data=callback("label")),
+                InlineKeyboardButton(text=_tr("✏️ عنوان"), callback_data=callback("label")),
                 InlineKeyboardButton(
-                    text="🌐 نام شبکه",
+                    text=_tr("🌐 نام شبکه"),
                     callback_data=callback("network_name"),
                 ),
             ],
             [
                 InlineKeyboardButton(
-                    text="🔤 کد شبکه",
+                    text=_tr("🔤 کد شبکه"),
                     callback_data=callback("network_code"),
                 ),
                 InlineKeyboardButton(
-                    text="📍 آدرس",
+                    text=_tr("📍 آدرس"),
                     callback_data=callback("address"),
                 ),
             ],
             [
                 InlineKeyboardButton(
-                    text="🔢 تأییدها",
+                    text=_tr("🔢 تأییدها"),
                     callback_data=callback("confirmations_required"),
                 ),
                 InlineKeyboardButton(
-                    text="↕️ ترتیب",
+                    text=_tr("↕️ ترتیب"),
                     callback_data=callback("sort_order"),
                 ),
             ],
             [
                 InlineKeyboardButton(
-                    text="🧾 قرارداد",
+                    text=_tr("🧾 قرارداد"),
                     callback_data=callback("contract_address"),
                 ),
                 InlineKeyboardButton(
-                    text="🔎 مرورگر شبکه",
+                    text=_tr("🔎 مرورگر شبکه"),
                     callback_data=callback("explorer_url"),
                 ),
             ],
             [
                 InlineKeyboardButton(
                     text=(
-                        "⛔️ غیرفعال‌سازی"
+                        _tr("⛔️ غیرفعال‌سازی")
                         if destination.get("is_active")
-                        else "✅ فعال‌سازی"
+                        else _tr("✅ فعال‌سازی")
                     ),
                     callback_data=f"admin:usdt:toggle:{destination_id}",
                 )
             ],
             [
                 InlineKeyboardButton(
-                    text="🗑 حذف کیف‌پول",
+                    text=_tr("🗑 حذف کیف‌پول"),
                     callback_data=f"admin:usdt:delete:{destination_id}",
                 )
             ],
             [
                 InlineKeyboardButton(
-                    text="🔙 فهرست کیف‌پول‌ها",
+                    text=_tr("🔙 فهرست کیف‌پول‌ها"),
                     callback_data="admin:usdt",
                 )
             ],
@@ -399,7 +400,7 @@ def build_finance_cancel_keyboard() -> InlineKeyboardMarkup:
         inline_keyboard=[
             [
                 InlineKeyboardButton(
-                    text="انصراف",
+                    text=_tr("انصراف"),
                     callback_data="admin:finance:cancel",
                 )
             ]
@@ -412,15 +413,19 @@ def build_finance_confirmation_keyboard() -> InlineKeyboardMarkup:
         inline_keyboard=[
             [
                 InlineKeyboardButton(
-                    text="✅ تأیید و ثبت",
+                    text=_tr("✅ تأیید و ثبت"),
                     callback_data="admin:finance:confirm",
                 )
             ],
             [
                 InlineKeyboardButton(
-                    text="انصراف",
+                    text=_tr("انصراف"),
                     callback_data="admin:finance:cancel",
                 )
             ],
         ]
     )
+
+
+# Resolve static labels using the language of the current update.
+PAYMENT_STATISTICS_PERIODS = _localized_collection(PAYMENT_STATISTICS_PERIODS)

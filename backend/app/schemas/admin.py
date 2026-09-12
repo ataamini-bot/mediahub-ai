@@ -64,9 +64,12 @@ class AdminPaymentListItem(BaseModel):
     payment_method: str
     plan_name_snapshot: str
     duration_days: int
-    receipt_file_id: str
-    receipt_file_type: str
+    receipt_file_id: str | None
+    receipt_file_type: str | None
     receipt_mime_type: str | None
+    txid: str | None
+    usdt_network_code: str | None
+    subscription_change_type: str | None
     payment_destination_snapshot: dict
     reviewed_by_telegram_id: int | None
     reviewed_at: datetime | None

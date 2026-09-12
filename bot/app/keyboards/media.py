@@ -1,3 +1,4 @@
+from app.localization import tr as _tr, localized_collection as _localized_collection
 from aiogram.types import (
     InlineKeyboardButton,
     InlineKeyboardMarkup,
@@ -98,7 +99,7 @@ def build_media_entry_keyboard(
         if media_type == "image":
 
             button_text = (
-                f"📷 عکس {index}"
+                f"{_tr('📷 عکس ')}{index}"
             )
 
         else:
@@ -107,7 +108,7 @@ def build_media_entry_keyboard(
             # entries without media_type
             # are still treated as video.
             button_text = (
-                f"🎬 ویدئو {index}"
+                f"{_tr('🎬 ویدئو ')}{index}"
             )
 
         rows.append(
@@ -137,7 +138,7 @@ def build_media_entry_keyboard(
 
             navigation_row.append(
                 InlineKeyboardButton(
-                    text="⬅️ قبلی",
+                    text=_tr("⬅️ قبلی"),
                     callback_data=(
                         f"media_page:"
                         f"{token}:"
@@ -166,7 +167,7 @@ def build_media_entry_keyboard(
 
             navigation_row.append(
                 InlineKeyboardButton(
-                    text="بعدی ➡️",
+                    text=_tr("بعدی ➡️"),
                     callback_data=(
                         f"media_page:"
                         f"{token}:"

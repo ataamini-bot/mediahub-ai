@@ -1,3 +1,4 @@
+from app.localization import tr as _tr, localized_collection as _localized_collection
 def normalize_quality_label(
     height: int,
 ) -> str:
@@ -137,7 +138,7 @@ def format_date_for_language(value: object, language: str = "fa") -> str:
     from datetime import datetime
 
     if not value:
-        return "نامشخص" if language == "fa" else "Unknown"
+        return _tr("نامشخص") if language == "fa" else "Unknown"
     try:
         parsed = value if isinstance(value, datetime) else datetime.fromisoformat(str(value).replace("Z", "+00:00"))
         if language == "fa":

@@ -18,8 +18,9 @@ router = APIRouter(
 async def statistics(
     actor_telegram_id: int = Query(gt=0),
     section: str = Query(default="overview", pattern="^(overview|users|subscriptions|finance|downloads|charts|kpis|all)$"),
-    period: str = Query(default="30d", pattern="^(today|7d|30d|all)$"),
-    chart_range: str = Query(default="30d", pattern="^(today|7d|30d|3mo|1yr)$"),
+    period: str = Query(default="1mo", pattern="^(today|7d|30d|month|1mo|3mo|6mo|1yr|all)$"),
+    chart_range: str = Query(default="1mo", pattern="^(today|7d|1mo|3mo|6mo|1yr|30d)$"),
+    page: int = Query(default=1, ge=1),
     metric: str = Query(default="users", pattern="^(users|sales|subscriptions|downloads)$"),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
@@ -28,6 +29,6 @@ async def statistics(
             actor_telegram_id,
             PermissionCode.STATISTICS_VIEW,
         )
-        return await AdminStatisticsService(db).get(section, period, chart_range, metric)
+        return await AdminStatisticsService(db).get(section, period, chart_range, metric, page)
     except AdminAccessDenied as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc

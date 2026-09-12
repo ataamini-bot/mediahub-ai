@@ -48,6 +48,13 @@ class Payment(Base, TimestampMixin):
             "receipt_file_unique_id",
             unique=True,
         ),
+        Index(
+            "uq_payments_usdt_network_txid",
+            "usdt_network_code",
+            "txid_normalized",
+            unique=True,
+            postgresql_where=text("txid_normalized IS NOT NULL"),
+        ),
     )
 
     id: Mapped[int] = mapped_column(
@@ -113,9 +120,9 @@ class Payment(Base, TimestampMixin):
         nullable=False,
     )
 
-    receipt_file_id: Mapped[str] = mapped_column(
+    receipt_file_id: Mapped[str | None] = mapped_column(
         String(512),
-        nullable=False,
+        nullable=True,
     )
 
     receipt_file_unique_id: Mapped[str | None] = mapped_column(
@@ -123,9 +130,9 @@ class Payment(Base, TimestampMixin):
         nullable=True,
     )
 
-    receipt_file_type: Mapped[str] = mapped_column(
+    receipt_file_type: Mapped[str | None] = mapped_column(
         String(32),
-        nullable=False,
+        nullable=True,
     )
 
     receipt_file_size: Mapped[int | None] = mapped_column(
@@ -208,4 +215,18 @@ class Payment(Base, TimestampMixin):
         default=dict,
         server_default=text("'{}'::json"),
         nullable=False,
+    )
+
+    # USDT submissions are identified by a transaction id. The original
+    # spelling is kept for display while the normalized form participates in
+    # the per-network unique index.
+    txid: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    txid_normalized: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    usdt_network_code: Mapped[str | None] = mapped_column(String(32), nullable=True)
+
+    # Snapshot of how approval affected the subscription. This lets finance
+    # reports distinguish new purchases, renewals, upgrades and scheduled
+    # downgrades without reconstructing historical plan data.
+    subscription_change_type: Mapped[str | None] = mapped_column(
+        String(24), nullable=True
     )
