@@ -59,9 +59,14 @@ old_worker_image="$(docker inspect --format='{{.Image}}' mediahub-worker)"
 old_monitor_image="$(docker inspect --format='{{.Image}}' mediahub-monitor)"
 rollback_backend="mediahub-ai-backend:rollback-completion-$release_id"
 rollback_bot="mediahub-ai-bot:rollback-completion-$release_id"
+rollback_worker="mediahub-ai-worker:rollback-completion-$release_id"
+rollback_monitor="mediahub-ai-monitor:rollback-completion-$release_id"
 docker image tag "$old_backend_image" "$rollback_backend"
 docker image tag "$old_bot_image" "$rollback_bot"
-printf 'ROLLBACK_BACKEND=%s\nROLLBACK_BOT=%s\n' "$rollback_backend" "$rollback_bot"
+docker image tag "$old_worker_image" "$rollback_worker"
+docker image tag "$old_monitor_image" "$rollback_monitor"
+printf 'ROLLBACK_BACKEND=%s\nROLLBACK_BOT=%s\nROLLBACK_WORKER=%s\nROLLBACK_MONITOR=%s\n' \
+  "$rollback_backend" "$rollback_bot" "$rollback_worker" "$rollback_monitor"
 
 require_no_active_jobs
 
@@ -86,6 +91,8 @@ rollback_on_error() {
       git reset --keep "$expected_base" >/dev/null 2>&1 || true
       docker image tag "$old_backend_image" mediahub-ai-backend:latest || true
       docker image tag "$old_bot_image" mediahub-ai-bot:latest || true
+      docker image tag "$old_worker_image" mediahub-ai-worker:latest || true
+      docker image tag "$old_monitor_image" mediahub-ai-monitor:latest || true
       docker compose up -d --no-deps --force-recreate backend worker monitor bot || true
       printf 'PRE_MIGRATION_ROLLBACK=OK\n'
     else
