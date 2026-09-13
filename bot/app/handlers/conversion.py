@@ -193,7 +193,11 @@ async def receive_conversion_media(message: Message, state: FSMContext) -> None:
     stored_name = f"upload-{uuid.uuid4().hex}{_safe_suffix(original_name)}"
     input_path = incoming_dir / stored_name
     try:
-        await message.bot.download(item.file_id, destination=input_path)
+        await message.bot.download(
+            item.file_id,
+            destination=input_path,
+            timeout=3600,
+        )
         if not input_path.is_file() or input_path.stat().st_size <= 0:
             raise RuntimeError("Telegram returned an empty file")
         file_size = input_path.stat().st_size
@@ -290,6 +294,7 @@ async def choose_conversion_format(callback: CallbackQuery, state: FSMContext) -
     status_message = callback.message
     language = ui_language.get()
     job_created = False
+    backend_request_started = False
     try:
         await callback.answer(
             f"Converting to {normalized.upper()}…" if language == "en" else f"در حال تبدیل به {normalized.upper()}…"
@@ -302,6 +307,10 @@ async def choose_conversion_format(callback: CallbackQuery, state: FSMContext) -
             ),
             parse_mode="HTML",
         )
+        # Do not remove the source after a request has crossed the Backend
+        # boundary: a lost response can still leave a queued Worker owning
+        # this file.
+        backend_request_started = True
         job = await create_download_job(
             source_url=source_ref,
             telegram_id=callback.from_user.id,
@@ -343,7 +352,11 @@ async def choose_conversion_format(callback: CallbackQuery, state: FSMContext) -
             else "❌ تبدیل انجام نشد.\n\n" + html.escape(str(exc.detail)[:1000]),
             parse_mode="HTML",
         )
-        if not job_created and source_ref.startswith(UPLOAD_PREFIX):
+        if (
+            not job_created
+            and not backend_request_started
+            and source_ref.startswith(UPLOAD_PREFIX)
+        ):
             try:
                 (DOWNLOAD_DIR / "incoming" / input_name).unlink(missing_ok=True)
             except OSError:
@@ -358,7 +371,11 @@ async def choose_conversion_format(callback: CallbackQuery, state: FSMContext) -
         # If the job was never accepted by Backend, remove the staged file.
         # Once queued, the Worker owns cleanup so a transient Bot polling
         # failure cannot delete its input while it is still processing.
-        if not job_created and source_ref.startswith(UPLOAD_PREFIX):
+        if (
+            not job_created
+            and source_ref.startswith(UPLOAD_PREFIX)
+            and int(getattr(exc, "status_code", 500) or 500) < 500
+        ):
             try:
                 (DOWNLOAD_DIR / "incoming" / input_name).unlink(missing_ok=True)
             except OSError:
