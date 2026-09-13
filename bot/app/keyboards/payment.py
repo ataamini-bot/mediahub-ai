@@ -87,6 +87,9 @@ def build_home_keyboard(
             _inline_button(text=runtime_button(config, "language"), callback_data="language:open", style=runtime_button_style(config, "language")),
         ],
         [
+            _inline_button(text=runtime_button(config, "convert"), callback_data="convert:open", style=runtime_button_style(config, "convert")),
+        ],
+        [
             InlineKeyboardButton(
                 text=runtime_button(config, "tutorial"),
                 callback_data="home:tutorial",
@@ -148,6 +151,9 @@ def build_home_reply_keyboard(
         [
             _reply_button(runtime_button(config, "support"), runtime_button_style(config, "support")),
             _reply_button(runtime_button(config, "language"), runtime_button_style(config, "language")),
+        ],
+        [
+            _reply_button(runtime_button(config, "convert"), runtime_button_style(config, "convert")),
         ],
         [
             _reply_button(runtime_button(config, "tutorial"), runtime_button_style(config, "tutorial")),

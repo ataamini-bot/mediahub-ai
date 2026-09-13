@@ -26,6 +26,7 @@ class DownloadJobRepository:
         format_id: str | None = None,
         quality: str | None = None,
         media_type: str | None = None,
+        output_format: str | None = None,
         playlist_index: int | None = None,
     ) -> DownloadJob:
 
@@ -38,6 +39,7 @@ class DownloadJobRepository:
             format_id=format_id,
             quality=quality,
             media_type=media_type,
+            output_format=output_format,
             playlist_index=playlist_index,
             status=DownloadJobStatus.PENDING,
         )

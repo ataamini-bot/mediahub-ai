@@ -88,8 +88,10 @@ MediaHub AI یک ربات تلگرامی دو‌زبانه برای دریافت
 - تصویر و مجموعه تصاویر
 - Carousel و مجموعه‌های ترکیبی
 - استخراج صدای هر ویدئوی پشتیبانی‌شده
+- تبدیل صوت و ویدئو با انتخاب فرمت خروجی از فهرست امن و پشتیبانی‌شده
+- دریافت فایل صوتی/ویدئویی تلگرام و تبدیل آن با FFmpeg روی Volume مشترک
 
-تبدیل‌های عمومی فرمت مانند Video به GIF، MP4 به MKV/AVI یا تبدیل آزاد فرمت‌های صوتی در V1 پیاده‌سازی نمی‌شوند. استخراج صدا از ویدئو جزو V1 است.
+فرمت‌های خروجی صوتی V1 عبارت‌اند از MP3، M4A، WAV، AAC، FLAC، OGG و OPUS؛ فرمت‌های خروجی ویدئویی MP4، MKV، AVI، MOV و WEBM هستند. تبدیل فقط از مسیر allow-list انجام می‌شود و فایل ورودی حداکثر ۱۹۰۰ مگابایت است.
 
 ### 3.4 تجربه اجرای دانلود
 
@@ -563,6 +565,8 @@ Mode پیام و Segment مخاطب مستقل‌اند؛ برای مثال Forw
 - سهمیه دقیق خروجی و Concurrency هر پلن
 - Priority و Fair Use براساس تنظیم هر پلن
 - Audio extraction V1
+- User-selected audio extraction format
+- Upload-based audio/video format conversion
 - History و Cleanup/Retention
 
 **خروجی:** محدودیت‌ها در Backend enforce می‌شوند و UI کامل است.
@@ -639,7 +643,7 @@ Mode پیام و Segment مخاطب مستقل‌اند؛ برای مثال Forw
 - Instagram Story، Highlight و Private
 - هر نوع Cookie/Session/Login برای Instagram
 - دورزدن DRM
-- تبدیل آزاد فرمت‌های صوتی و تصویری به‌جز استخراج صدا
+- تبدیل فرمت‌های خارج از فهرست امن V1 یا اجرای دلخواه muxer/codec
 - Referral و پاداش دعوت
 - برداشت یا انتقال اعتبار داخلی
 - پرداخت ترکیبی Balance با Card/USDT

@@ -9,6 +9,7 @@ from app.handlers.payments import (
     send_payment_offers_menu,
     send_subscription_status,
 )
+from app.handlers.conversion import cleanup_staged_state, send_conversion_prompt
 from app.handlers.experience import (
     perform_custom_button,
     send_content_page,
@@ -57,6 +58,7 @@ async def persistent_home_button(
     try:
         user = await register_telegram_user(message)
     except Exception:
+        await cleanup_staged_state(state)
         await state.clear()
         await message.answer(
             translate(fallback_language, "start.registration_error"),
@@ -68,21 +70,27 @@ async def persistent_home_button(
     language = normalize_language(user.get("effective_language"))
     include_admin = bool(user.get("is_admin"))
     configuration = await runtime_configuration(language)
-    await state.clear()
-
     if action == "more":
+        await cleanup_staged_state(state)
+        await state.clear()
         await message.answer(translate(language, "home.ready"), reply_markup=build_home_keyboard(language, include_admin=include_admin, configuration=configuration))
         return
 
     if action == "buy":
+        await cleanup_staged_state(state)
+        await state.clear()
         await send_payment_offers_menu(message, state)
         return
 
     if action == "subscription":
+        await cleanup_staged_state(state)
+        await state.clear()
         await send_subscription_status(message, message.from_user.id)
         return
 
     if action == "language":
+        await cleanup_staged_state(state)
+        await state.clear()
         await message.answer(
             _tr("🌐 <b>زبان ربات را انتخاب کنید / Choose the bot language:</b>"),
             parse_mode="HTML",
@@ -91,6 +99,8 @@ async def persistent_home_button(
         return
 
     if action == "support":
+        await cleanup_staged_state(state)
+        await state.clear()
         await send_support_menu(
             message,
             state,
@@ -98,7 +108,13 @@ async def persistent_home_button(
         )
         return
 
+    if action == "convert":
+        await send_conversion_prompt(message, state)
+        return
+
     if action in {"tutorial", "faq"}:
+        await cleanup_staged_state(state)
+        await state.clear()
         await send_content_page(
             message,
             telegram_id=message.from_user.id,
@@ -107,6 +123,8 @@ async def persistent_home_button(
         return
 
     if action == "custom" and isinstance(runtime_home_action.get("button"), dict):
+        await cleanup_staged_state(state)
+        await state.clear()
         await perform_custom_button(
             message,
             state,
@@ -118,6 +136,8 @@ async def persistent_home_button(
     if action == "admin":
         if not include_admin:
             return
+        await cleanup_staged_state(state)
+        await state.clear()
         await show_admin_panel_message(
             message,
             state,
@@ -125,6 +145,8 @@ async def persistent_home_button(
         )
         return
 
+    await cleanup_staged_state(state)
+    await state.clear()
     await message.answer(
         translate(language, "home.ready"),
         reply_markup=build_home_reply_keyboard(

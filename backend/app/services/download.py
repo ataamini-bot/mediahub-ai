@@ -32,6 +32,10 @@ from app.services.download_access import (
 from app.services.social_media import (
     get_social_media_info,
 )
+from app.services.media_formats import (
+    normalize_output_format,
+    output_format_kind,
+)
 from app.workers.tasks.download import (
     cleanup_paused_download,
     download_task,
@@ -48,6 +52,10 @@ BGUTIL_POT_BASE_URL = os.getenv(
 )
 
 FILESIZE_PROBE_TIMEOUT = 10
+
+
+class DownloadFormatError(ValueError):
+    """The requested final media format is incompatible or unsupported."""
 
 DEFAULT_USER_AGENT = (
     "Mozilla/5.0 "
@@ -2438,9 +2446,28 @@ class DownloadService:
         format_id: str | None = None,
         quality: str | None = None,
         media_type: str | None = None,
+        output_format: str | None = None,
         playlist_index: int | None = None,
         estimated_size_bytes: int | None = None,
     ) -> DownloadJob:
+
+        normalized_media_type = str(media_type or "video").strip().lower()
+        if normalized_media_type not in {"audio", "video", "image", "convert"}:
+            raise DownloadFormatError("Unsupported media type")
+
+        normalized_output_format = normalize_output_format(output_format)
+        if output_format is not None and normalized_output_format is None:
+            raise DownloadFormatError("Unsupported output format")
+        if normalized_media_type == "convert" and normalized_output_format is None:
+            raise DownloadFormatError("A target output format is required")
+        if normalized_media_type == "image" and normalized_output_format is not None:
+            raise DownloadFormatError("Images cannot be converted by this job")
+        if normalized_output_format is not None:
+            target_kind = output_format_kind(normalized_output_format)
+            if normalized_media_type == "audio" and target_kind != "audio":
+                raise DownloadFormatError("Audio jobs require an audio output format")
+            if normalized_media_type == "video" and target_kind != "video":
+                raise DownloadFormatError("Video jobs require a video output format")
 
         entitlement = await DownloadAccessService(
             self.session
@@ -2465,9 +2492,8 @@ class DownloadService:
                 quality=(
                     quality
                 ),
-                media_type=(
-                    media_type
-                ),
+                media_type=normalized_media_type,
+                output_format=normalized_output_format,
                 playlist_index=playlist_index,
             )
         )

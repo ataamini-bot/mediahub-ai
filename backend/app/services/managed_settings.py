@@ -46,6 +46,7 @@ BUTTON_KEYS = frozenset(
         "subscription",
         "language",
         "support",
+        "convert",
         "tutorial",
         "faq",
         "admin",

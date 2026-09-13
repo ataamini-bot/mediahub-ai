@@ -28,6 +28,7 @@ def test_persistent_home_keyboard_is_localized_and_kept_open():
         "👤 وضعیت اشتراک من",
         "🛟 پشتیبانی",
         "🌐 تغییر زبان | Language",
+        "🔄 تبدیل فایل",
         "📘 آموزش استفاده",
         "❓ سوالات متداول",
     ]

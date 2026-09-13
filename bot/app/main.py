@@ -36,11 +36,13 @@ from app.keyboards.media import (
 from app.keyboards.quality import (
     build_quality_keyboard,
 )
+from app.keyboards.conversion import build_audio_format_keyboard
 from app.keyboards.payment import (
     build_home_reply_keyboard,
     build_upgrade_keyboard,
 )
 from app.handlers.operations import router as operations_router
+from app.handlers.conversion import cleanup_staged_state, router as conversion_router
 from app.handlers.home import (
     router as home_router,
 )
@@ -102,6 +104,7 @@ from app.services.backend import (
     register_telegram_user,
     resume_download_job,
 )
+from app.utils.media_conversion import AUDIO_FORMATS, normalize_format
 
 
 TOKEN = os.getenv(
@@ -146,7 +149,7 @@ dp = Dispatcher(
         REDIS_URL
     )
 )
-from app.middleware.interface import InterfaceContext, InterfaceCallbacks, InterfaceRequests
+from app.middleware.interface import InterfaceContext, InterfaceCallbacks, InterfaceRequests, ui_language
 from app.middleware.health import PollHeartbeatMiddleware
 
 dp.message.outer_middleware(InterfaceContext())
@@ -154,6 +157,7 @@ dp.callback_query.outer_middleware(InterfaceContext())
 dp.callback_query.outer_middleware(InterfaceCallbacks(dp.storage.redis))
 
 dp.include_router(operations_router)
+dp.include_router(conversion_router)
 dp.include_router(
     experience_router
 )
@@ -2108,6 +2112,8 @@ def build_smaller_quality_keyboard(
                 quality_options
             ),
             token=token,
+            audio_token=token,
+            language=ui_language.get(),
         )
     )
 
@@ -2547,6 +2553,7 @@ async def start_handler(
     state: FSMContext,
 ):
 
+    await cleanup_staged_state(state)
     try:
 
         user = await register_telegram_user(
@@ -2563,6 +2570,7 @@ async def start_handler(
         )
         configuration = await runtime_configuration(language)
 
+        await cleanup_staged_state(state)
         await state.clear()
 
         await message.answer(
@@ -3371,6 +3379,8 @@ async def media_entry_callback(
                     quality_options
                 ),
                 token=token,
+                audio_token=token,
+                language=ui_language.get(),
             )
         )
 
@@ -3421,6 +3431,162 @@ async def media_entry_callback(
 # ============================================================
 # Quality callback
 # ============================================================
+
+def _audio_picker_keyboard(token: str, language: str) -> InlineKeyboardMarkup:
+    return build_audio_format_keyboard(
+        token,
+        language=language,
+        callback_prefix="audio:format",
+        cancel_callback=f"audio:cancel:{token}",
+    )
+
+
+@dp.callback_query(F.data.startswith("audio:open:"))
+async def audio_open_callback(callback: CallbackQuery) -> None:
+    if not callback.data or not isinstance(callback.message, Message):
+        return
+    token = callback.data.split(":", 2)[-1]
+    selection = PENDING_SELECTIONS.get(token)
+    if not selection:
+        await callback.answer(
+            _tr("⏰ این درخواست منقضی شده است. لطفاً لینک را دوباره ارسال کنید."),
+            show_alert=True,
+        )
+        return
+
+    language = ui_language.get()
+    await callback.answer(
+        "Choose an audio format." if language == "en" else "فرمت صوتی را انتخاب کنید."
+    )
+    await safe_edit_message(
+        callback.message,
+        (
+            "🎵 <b>Extract audio</b>\n\nChoose the output format:"
+            if language == "en"
+            else "🎵 <b>استخراج صدا</b>\n\nفرمت خروجی را انتخاب کنید:"
+        ),
+        reply_markup=_audio_picker_keyboard(token, language),
+    )
+
+
+@dp.callback_query(F.data.startswith("audio:cancel:"))
+async def audio_cancel_callback(callback: CallbackQuery) -> None:
+    if not callback.data or not isinstance(callback.message, Message):
+        return
+    token = callback.data.split(":", 2)[-1]
+    selection = PENDING_SELECTIONS.get(token)
+    if not selection:
+        await callback.answer(_tr("⏰ این درخواست منقضی شده است."), show_alert=True)
+        return
+    quality_options = [
+        (int(height), size)
+        for height, size in (selection.get("sizes") or {}).items()
+        if str(height).isdigit()
+    ]
+    language = ui_language.get()
+    await callback.answer(
+        "Back to quality selection." if language == "en" else "بازگشت به انتخاب کیفیت."
+    )
+    await safe_edit_message(
+        callback.message,
+        (
+            "🎬 <b>Choose video quality</b>"
+            if language == "en"
+            else "🎬 <b>کیفیت ویدئو را انتخاب کنید</b>"
+        ),
+        reply_markup=build_quality_keyboard(
+            quality_options=quality_options,
+            token=token,
+            audio_token=token,
+            language=language,
+        ),
+    )
+
+
+@dp.callback_query(F.data.startswith("audio:format:"))
+async def audio_format_callback(callback: CallbackQuery) -> None:
+    if not callback.data or not isinstance(callback.message, Message):
+        return
+    parts = callback.data.split(":")
+    if len(parts) != 4:
+        await callback.answer("Invalid audio request.", show_alert=True)
+        return
+    _, _, token, raw_format = parts
+    output_format = normalize_format(raw_format)
+    if output_format not in AUDIO_FORMATS:
+        await callback.answer("Unsupported audio format.", show_alert=True)
+        return
+    selection = PENDING_SELECTIONS.pop(token, None)
+    if not selection:
+        await callback.answer(_tr("⏰ این درخواست منقضی شده است."), show_alert=True)
+        return
+
+    source_url = str(selection.get("source_url") or "")
+    playlist_index = selection.get("playlist_index")
+    if not source_url:
+        await callback.answer("The media link is missing.", show_alert=True)
+        return
+
+    language = ui_language.get()
+    status_message = callback.message
+    quality_label = f"audio/{output_format.upper()}"
+    try:
+        await callback.answer(
+            f"Extracting {output_format.upper()}…"
+            if language == "en"
+            else f"در حال استخراج {output_format.upper()}…"
+        )
+        await safe_edit_message(
+            status_message,
+            (
+                f"⏳ <b>Creating audio job…</b>\n\n🎵 Output: <code>{output_format.upper()}</code>"
+                if language == "en"
+                else f"⏳ <b>در حال ایجاد درخواست صوتی…</b>\n\n🎵 خروجی: <code>{output_format.upper()}</code>"
+            ),
+        )
+        job = await create_download_job(
+            source_url=source_url,
+            telegram_id=callback.from_user.id,
+            quality=None,
+            media_type="audio",
+            output_format=output_format,
+            playlist_index=playlist_index,
+        )
+        job_id = int(job["id"])
+        await safe_edit_message(
+            status_message,
+            (
+                f"✅ <b>Audio job queued</b>\n\n🆔 Job ID: <code>{job_id}</code>\n🎵 Output: <code>{output_format.upper()}</code>\n📊 Status: <code>pending</code>"
+                if language == "en"
+                else f"✅ <b>درخواست صوتی ایجاد شد</b>\n\n🆔 Job ID: <code>{job_id}</code>\n🎵 خروجی: <code>{output_format.upper()}</code>\n📊 وضعیت: <code>pending</code>"
+            ),
+            reply_markup=build_active_download_keyboard(job_id),
+        )
+        completed_job = await wait_for_download(job_id, status_message, quality_label)
+        if completed_job.get("status") == "completed":
+            await send_downloaded_file(
+                message=status_message,
+                status_message=status_message,
+                job=completed_job,
+            )
+    except asyncio.TimeoutError:
+        await safe_edit_message(
+            status_message,
+            "⌛ Audio job timed out. Check its status later."
+            if language == "en"
+            else "⌛ زمان انتظار استخراج صدا تمام شد؛ وضعیت درخواست را بعداً بررسی کنید.",
+            reply_markup=None,
+        )
+    except Exception as exc:
+        await safe_edit_message(
+            status_message,
+            (
+                "❌ <b>Audio extraction failed</b>\n\n"
+                if language == "en"
+                else "❌ <b>استخراج صدا انجام نشد</b>\n\n"
+            ) + html.escape(download_error_text(exc)[:1000]),
+            reply_markup=download_error_markup(exc),
+        )
 
 @dp.callback_query(
     F.data.startswith(
@@ -4132,6 +4298,8 @@ async def download_handler(
                     quality_options
                 ),
                 token=token,
+                audio_token=token,
+                language=ui_language.get(),
             )
         )
 

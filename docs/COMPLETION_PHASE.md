@@ -34,6 +34,11 @@ English UI, pagination, and confirmation flows.
 - Built-in Persian and English home buttons expose Telegram-supported styles
   (`default`, `primary`, `success`, `danger`) in the same admin text/button
   settings area; custom home buttons retain their independent style control.
+- Video quality pages expose user-selected audio extraction (MP3, M4A, WAV,
+  AAC, FLAC, OGG, OPUS). The home menu also accepts Telegram audio/video
+  uploads for allow-listed conversion to MP4, MKV, AVI, MOV, WEBM, or the
+  supported audio containers. Conversion uses the same 1900 MB limit, queue,
+  progress, cleanup, and quota accounting as ordinary downloads.
 
 ## Release smoke checks
 

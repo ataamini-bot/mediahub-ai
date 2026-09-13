@@ -25,7 +25,7 @@ class HomeButton(Base, TimestampMixin):
     __table_args__ = (
         CheckConstraint(
             "action_type IN ('url', 'message', 'buy', 'subscription', "
-            "'support', 'tutorial', 'faq')",
+            "'support', 'convert', 'tutorial', 'faq')",
             name="ck_home_buttons_action_type",
         ),
         CheckConstraint(

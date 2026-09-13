@@ -116,6 +116,11 @@ async def perform_custom_button(
     if action == "support":
         await send_support_menu(message, state, telegram_id=telegram_id)
         return
+    if action == "convert":
+        from app.handlers.conversion import send_conversion_prompt
+
+        await send_conversion_prompt(message, state)
+        return
     if action in {"tutorial", "faq"}:
         await send_content_page(message, telegram_id=telegram_id, key=action)
         return

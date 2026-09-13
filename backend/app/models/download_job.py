@@ -128,6 +128,16 @@ class DownloadJob(
         nullable=True,
     )
 
+    # Requested final container/extension.  ``None`` preserves the legacy
+    # downloader behaviour; audio extraction and conversion jobs set this to
+    # one of the validated media output formats.
+    output_format: Mapped[
+        Optional[str]
+    ] = mapped_column(
+        String(16),
+        nullable=True,
+    )
+
     # --------------------------------------------------------
     # Multi-video / playlist item
     #

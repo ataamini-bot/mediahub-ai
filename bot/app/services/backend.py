@@ -838,8 +838,10 @@ async def get_media_info(
 async def create_download_job(
     source_url: str,
     telegram_id: int,
+    format_id: str | None = None,
     quality: str | None = None,
     media_type: str = "video",
+    output_format: str | None = None,
     playlist_index: int | None = None,
     estimated_size_bytes: int | None = None,
 ) -> dict:
@@ -857,11 +859,17 @@ async def create_download_job(
         "source_url":
             source_url,
 
+        "format_id":
+            format_id,
+
         "quality":
             quality,
 
         "media_type":
             media_type,
+
+        "output_format":
+            output_format,
 
         "playlist_index":
             playlist_index,

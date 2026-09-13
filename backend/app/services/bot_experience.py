@@ -30,6 +30,7 @@ from app.models.user import User, UserStatus
 from app.services.application_settings import ApplicationSettingsService
 from app.services.audit import AuditService
 from app.services.admin_access import AdminAccessService
+from app.services.managed_settings import BUTTON_KEYS
 from app.core.language import effective_language
 
 
@@ -40,6 +41,7 @@ HOME_BUTTON_ACTIONS = {
     "buy",
     "subscription",
     "support",
+    "convert",
     "tutorial",
     "faq",
 }
@@ -47,10 +49,12 @@ BUTTON_STYLES = {"default", "primary", "success", "danger"}
 DEFAULT_BUTTON_STYLES: dict[str, dict[str, str]] = {
     "fa": {
         "buy": "success", "subscription": "primary", "support": "primary",
+        "convert": "primary",
         "admin": "danger",
     },
     "en": {
         "buy": "success", "subscription": "primary", "support": "primary",
+        "convert": "primary",
         "admin": "danger",
     },
 }
@@ -131,6 +135,7 @@ DEFAULT_BUTTONS: dict[str, dict[str, str]] = {
         "subscription": "👤 وضعیت اشتراک من",
         "language": "🌐 تغییر زبان | Language",
         "support": "🛟 پشتیبانی",
+        "convert": "🔄 تبدیل فایل",
         "tutorial": "📘 آموزش استفاده",
         "faq": "❓ سوالات متداول",
         "admin": "⚙️ پنل مدیریت",
@@ -142,6 +147,7 @@ DEFAULT_BUTTONS: dict[str, dict[str, str]] = {
         "subscription": "👤 My subscription",
         "language": "🌐 Language | تغییر زبان",
         "support": "🛟 Support",
+        "convert": "🔄 Convert media",
         "tutorial": "📘 How to use",
         "faq": "❓ FAQ",
         "admin": "⚙️ Admin panel",

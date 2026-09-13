@@ -10,6 +10,7 @@ ButtonAction = Literal[
     "buy",
     "subscription",
     "support",
+    "convert",
     "tutorial",
     "faq",
 ]

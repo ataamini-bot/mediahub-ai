@@ -26,6 +26,7 @@ def test_home_keyboard_supports_language_and_admin_entry():
         "payment:status",
         "support:open",
         "language:open",
+        "convert:open",
         "home:tutorial",
         "home:faq",
         "admin:open",

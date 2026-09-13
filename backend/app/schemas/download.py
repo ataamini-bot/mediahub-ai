@@ -10,6 +10,7 @@ from pydantic import (
 from app.models.download_job import (
     DownloadJobStatus,
 )
+from app.services.media_formats import normalize_output_format
 
 
 # ============================================================
@@ -39,6 +40,11 @@ class DownloadCreate(
     ) = None
 
     media_type: (
+        str
+        | None
+    ) = None
+
+    output_format: (
         str
         | None
     ) = None
@@ -113,6 +119,24 @@ class DownloadCreate(
 
         return value
 
+    @field_validator(
+        "output_format",
+        mode="before",
+    )
+    @classmethod
+    def validate_output_format(
+        cls,
+        value: object,
+    ) -> str | None:
+        if value is None or str(value).strip() == "":
+            return None
+        normalized = normalize_output_format(value)
+        if normalized is None:
+            raise ValueError(
+                "Unsupported output format."
+            )
+        return normalized
+
 
 class DownloadEntitlementResponse(BaseModel):
     plan_id: int | None
@@ -157,6 +181,11 @@ class DownloadResponse(
     )
 
     media_type: (
+        str
+        | None
+    )
+
+    output_format: (
         str
         | None
     )

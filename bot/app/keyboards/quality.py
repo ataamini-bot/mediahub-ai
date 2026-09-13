@@ -17,6 +17,8 @@ def build_quality_keyboard(
         ]
     ],
     token: str,
+    audio_token: str | None = None,
+    language: str = "fa",
 ) -> InlineKeyboardMarkup:
 
     buttons: list[
@@ -87,6 +89,18 @@ def build_quality_keyboard(
         buttons.append(
             row
         )
+
+    if audio_token:
+        buttons.append([
+            InlineKeyboardButton(
+                text=(
+                    "🎵 Extract audio"
+                    if language == "en"
+                    else "🎵 استخراج صدا"
+                ),
+                callback_data=f"audio:open:{audio_token}",
+            )
+        ])
 
     return InlineKeyboardMarkup(
         inline_keyboard=buttons

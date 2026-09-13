@@ -27,6 +27,7 @@ from app.schemas.download import (
     MediaInfoResponse,
 )
 from app.services.download import (
+    DownloadFormatError,
     DownloadService,
 )
 from app.services.download_access import (
@@ -76,6 +77,7 @@ async def create_download(
             format_id=data.format_id,
             quality=data.quality,
             media_type=data.media_type,
+            output_format=data.output_format,
             playlist_index=data.playlist_index,
             estimated_size_bytes=data.estimated_size_bytes,
         )
@@ -84,6 +86,8 @@ async def create_download(
             status_code=exc.status_code,
             detail=exc.detail(),
         ) from exc
+    except DownloadFormatError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     return job
 

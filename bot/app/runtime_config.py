@@ -15,6 +15,7 @@ _DEFAULT_BUTTON_STYLES = {
     "buy": "success",
     "subscription": "primary",
     "support": "primary",
+    "convert": "primary",
     "admin": "danger",
 }
 
@@ -63,6 +64,7 @@ def fallback_configuration(language: str) -> dict[str, Any]:
             "subscription": translate(normalized, "home.subscription"),
             "language": translate(normalized, "home.language"),
             "support": "🛟 پشتیبانی" if normalized == "fa" else "🛟 Support",
+            "convert": translate(normalized, "home.convert"),
             "tutorial": "📘 آموزش استفاده" if normalized == "fa" else "📘 How to use",
             "faq": "❓ سوالات متداول" if normalized == "fa" else "❓ FAQ",
             "admin": translate(normalized, "home.admin"),
@@ -183,6 +185,7 @@ def action_for_runtime_text(
         "subscription": "subscription",
         "language": "language",
         "support": "support",
+        "convert": "convert",
         "tutorial": "tutorial",
         "faq": "faq",
         "admin": "admin",

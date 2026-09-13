@@ -8,7 +8,9 @@ from typing import Any
 from urllib.parse import urlparse
 import json
 import os
+import selectors as io_selectors
 import subprocess
+import time
 import requests
 
 import yt_dlp
@@ -27,6 +29,10 @@ from app.services.social_media import (
     is_threads_url,
     social_platform,
     social_referer,
+)
+from app.services.media_formats import (
+    normalize_output_format,
+    output_format_kind,
 )
 from app.workers.celery_app import celery_app
 
@@ -55,6 +61,8 @@ MAX_DOWNLOAD_BYTES = (
     * 1024
     * 1024
 )
+
+UPLOAD_SOURCE_PREFIX = "upload://"
 
 
 def _resolve_max_download_bytes(plan_limits_snapshot: object) -> int:
@@ -2142,6 +2150,298 @@ def _has_audio_stream(
 
 
 # ============================================================
+# FFmpeg conversion
+# ============================================================
+
+def _resolve_uploaded_source(source_url: str) -> Path | None:
+    """Resolve a bot-uploaded file without allowing path traversal."""
+
+    value = str(source_url or "")
+    if not value.startswith(UPLOAD_SOURCE_PREFIX):
+        return None
+
+    name = value.removeprefix(UPLOAD_SOURCE_PREFIX)
+    if (
+        not name
+        or name in {".", ".."}
+        or Path(name).name != name
+        or any(char not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-" for char in name)
+    ):
+        raise RuntimeError("Invalid uploaded media reference")
+
+    incoming_dir = (DOWNLOAD_DIR / "incoming").resolve()
+    candidate = (incoming_dir / name).resolve()
+    if candidate.parent != incoming_dir:
+        raise RuntimeError("Invalid uploaded media path")
+    if not candidate.is_file():
+        raise FileNotFoundError("Uploaded media file is no longer available")
+    return candidate
+
+
+def _media_duration_seconds(probe: dict | None) -> float | None:
+    if not isinstance(probe, dict):
+        return None
+    format_info = probe.get("format")
+    if not isinstance(format_info, dict):
+        return None
+    try:
+        duration = float(format_info.get("duration") or 0)
+    except (TypeError, ValueError):
+        return None
+    return duration if duration > 0 else None
+
+
+def _build_ffmpeg_conversion_command(
+    input_path: Path,
+    output_path: Path,
+    output_format: str,
+    probe: dict | None = None,
+) -> list[str]:
+    """Build a deterministic, allow-listed FFmpeg conversion command."""
+
+    normalized = normalize_output_format(output_format)
+    if normalized is None:
+        raise ValueError("Unsupported output format")
+
+    streams = probe.get("streams", []) if isinstance(probe, dict) else []
+    has_video = any(
+        isinstance(stream, dict) and stream.get("codec_type") == "video"
+        for stream in streams
+    )
+    has_audio = any(
+        isinstance(stream, dict) and stream.get("codec_type") == "audio"
+        for stream in streams
+    )
+
+    kind = output_format_kind(normalized)
+    if kind == "audio" and not has_audio:
+        raise RuntimeError("The input file has no audio stream")
+    if kind == "video" and not has_video:
+        raise RuntimeError("The input file has no video stream")
+
+    command = [
+        "ffmpeg",
+        "-y",
+        "-v",
+        "error",
+        "-nostdin",
+        "-i",
+        str(input_path),
+    ]
+
+    if kind == "audio":
+        command.extend(["-map", "0:a:0", "-vn"])
+        audio_args = {
+            "mp3": ["-c:a", "libmp3lame", "-b:a", "192k", "-f", "mp3"],
+            "m4a": ["-c:a", "aac", "-b:a", "192k", "-f", "ipod"],
+            "wav": ["-c:a", "pcm_s16le", "-f", "wav"],
+            "aac": ["-c:a", "aac", "-b:a", "192k", "-f", "adts"],
+            "flac": ["-c:a", "flac", "-f", "flac"],
+            "ogg": ["-c:a", "libvorbis", "-q:a", "5", "-f", "ogg"],
+            "opus": ["-c:a", "libopus", "-b:a", "128k", "-f", "opus"],
+        }
+        command.extend(audio_args[normalized])
+    else:
+        command.extend(["-map", "0:v:0", "-map", "0:a:0?"])
+        video_args = {
+            "mp4": [
+                "-c:v", "libx264", "-preset", "veryfast", "-crf", "23",
+                "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "128k",
+                "-movflags", "+faststart", "-f", "mp4",
+            ],
+            "mkv": [
+                "-c:v", "libx264", "-preset", "veryfast", "-crf", "23",
+                "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "128k",
+                "-f", "matroska",
+            ],
+            "avi": [
+                "-c:v", "mpeg4", "-q:v", "5", "-c:a", "libmp3lame",
+                "-b:a", "128k", "-f", "avi",
+            ],
+            "mov": [
+                "-c:v", "libx264", "-preset", "veryfast", "-crf", "23",
+                "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "128k",
+                "-movflags", "+faststart", "-f", "mov",
+            ],
+            "webm": [
+                "-c:v", "libvpx-vp9", "-b:v", "0", "-crf", "32",
+                "-c:a", "libopus", "-b:a", "128k", "-f", "webm",
+            ],
+        }
+        command.extend(video_args[normalized])
+
+    command.extend([
+        "-progress", "pipe:1",
+        "-nostats",
+        str(output_path),
+    ])
+    return command
+
+
+def _terminate_process(process: subprocess.Popen[str]) -> None:
+    if process.poll() is not None:
+        return
+    process.terminate()
+    try:
+        process.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        process.kill()
+        process.wait(timeout=5)
+
+
+def _run_ffmpeg_conversion(
+    *,
+    job_id: int,
+    input_path: Path,
+    output_format: str,
+    max_download_bytes: int,
+) -> Path:
+    """Convert one local media file and report progress to the Job row."""
+
+    normalized = normalize_output_format(output_format)
+    if normalized is None:
+        raise ValueError("Unsupported output format")
+
+    probe = _probe_media_file(input_path)
+    if probe is None:
+        raise RuntimeError("The input file is not a readable audio/video file")
+
+    duration = _media_duration_seconds(probe)
+    temporary_path = DOWNLOAD_DIR / f"{job_id}.converted.{normalized}.part"
+    final_path = DOWNLOAD_DIR / f"{job_id}.{normalized}"
+    temporary_path.unlink(missing_ok=True)
+    if final_path != input_path:
+        final_path.unlink(missing_ok=True)
+
+    command = _build_ffmpeg_conversion_command(
+        input_path=input_path,
+        output_path=temporary_path,
+        output_format=normalized,
+        probe=probe,
+    )
+    print(
+        "Starting FFmpeg conversion: "
+        f"job={job_id}, input={input_path.name}, output={normalized}"
+    )
+
+    try:
+        process: subprocess.Popen[str] = subprocess.Popen(
+            command,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            bufsize=1,
+        )
+    except FileNotFoundError as exc:
+        raise RuntimeError("FFmpeg is not available for media conversion") from exc
+    except OSError as exc:
+        raise RuntimeError("Unable to start FFmpeg media conversion") from exc
+
+    selector = io_selectors.DefaultSelector()
+    if process.stdout is not None:
+        selector.register(process.stdout, io_selectors.EVENT_READ)
+    started = time.monotonic()
+    last_update = 0.0
+
+    try:
+        while process.poll() is None:
+            events = selector.select(timeout=0.5)
+            out_time_seconds: float | None = None
+            for key, _ in events:
+                line = key.fileobj.readline()
+                if not line:
+                    continue
+                field, _, value = line.strip().partition("=")
+                if field == "out_time_ms":
+                    try:
+                        # FFmpeg reports this value in microseconds.
+                        out_time_seconds = max(0.0, float(value) / 1_000_000)
+                    except ValueError:
+                        pass
+
+            _check_job_control(job_id)
+            if temporary_path.exists() and temporary_path.stat().st_size > max_download_bytes:
+                raise RuntimeError("Converted output exceeds the plan file-size limit")
+
+            now = time.monotonic()
+            if now - last_update >= 1.0:
+                progress = 0
+                if duration and out_time_seconds is not None:
+                    progress = min(99, max(0, int(out_time_seconds / duration * 100)))
+                output_size = temporary_path.stat().st_size if temporary_path.exists() else 0
+                speed = output_size / max(now - started, 0.001)
+                _update_download_stats(
+                    job_id=job_id,
+                    progress=progress,
+                    downloaded_bytes=output_size,
+                    total_bytes=None,
+                    speed=speed,
+                    eta=(
+                        max(1, int((duration - out_time_seconds) / max(out_time_seconds / max(now - started, 0.001), 0.001)))
+                        if duration and out_time_seconds and out_time_seconds < duration
+                        else None
+                    ),
+                )
+                last_update = now
+
+        stdout_tail = process.stdout.read() if process.stdout is not None else ""
+        stderr_text = process.stderr.read() if process.stderr is not None else ""
+        return_code = process.wait()
+    except (DownloadPausedError, DownloadCancelledError):
+        _terminate_process(process)
+        raise
+    except Exception:
+        _terminate_process(process)
+        raise
+    finally:
+        selector.close()
+        if process.stdout is not None:
+            process.stdout.close()
+        if process.stderr is not None:
+            process.stderr.close()
+
+    if return_code != 0:
+        temporary_path.unlink(missing_ok=True)
+        detail = (stderr_text or stdout_tail).strip()
+        if len(detail) > 2000:
+            detail = detail[-2000:]
+        raise RuntimeError("FFmpeg media conversion failed" + (f": {detail}" if detail else ""))
+    if not temporary_path.exists() or temporary_path.stat().st_size <= 0:
+        temporary_path.unlink(missing_ok=True)
+        raise RuntimeError("FFmpeg conversion did not create a valid output file")
+    if temporary_path.stat().st_size > max_download_bytes:
+        temporary_path.unlink(missing_ok=True)
+        raise RuntimeError("Converted output exceeds the plan file-size limit")
+
+    temporary_path.replace(final_path)
+    if input_path != final_path:
+        _cleanup_uploaded_source(input_path)
+    print(f"FFmpeg conversion completed: job={job_id}, file={final_path}")
+    return final_path
+
+
+def _cleanup_uploaded_source(source_path: Path | None) -> None:
+    if source_path is None:
+        return
+    try:
+        source_path.unlink(missing_ok=True)
+    except OSError as exc:
+        print(f"Failed to remove uploaded source {source_path}: {exc}")
+
+
+def _cleanup_uploaded_source_reference(source_url: str | None) -> None:
+    """Best-effort cleanup for jobs cancelled before the worker starts."""
+
+    if not str(source_url or "").startswith(UPLOAD_SOURCE_PREFIX):
+        return
+    try:
+        _cleanup_uploaded_source(_resolve_uploaded_source(str(source_url)))
+    except (FileNotFoundError, RuntimeError):
+        # Missing or already-invalid staged files need no further action.
+        return
+
+
+# ============================================================
 # iOS / Instagram video compatibility
 # ============================================================
 
@@ -3797,6 +4097,7 @@ def cleanup_paused_download(
                 "has not expired yet"
             )
 
+    _cleanup_uploaded_source_reference(job.source_url)
     _cleanup_job_files(
         job_id
     )
@@ -3867,6 +4168,8 @@ def download_task(
             == DownloadJobStatus.CANCELLED
         ):
 
+            _cleanup_uploaded_source_reference(job.source_url)
+
             _cleanup_job_files(
                 job_id
             )
@@ -3880,6 +4183,8 @@ def download_task(
             job.status
             == DownloadJobStatus.EXPIRED
         ):
+
+            _cleanup_uploaded_source_reference(job.source_url)
 
             _cleanup_job_files(
                 job_id
@@ -3916,6 +4221,10 @@ def download_task(
             job.media_type
         )
 
+        output_format = (
+            job.output_format
+        )
+
         playlist_index = (
             job.playlist_index
         )
@@ -3941,6 +4250,11 @@ def download_task(
         parents=True,
         exist_ok=True,
     )
+
+    # Upload-based conversion jobs keep the staged source outside the
+    # job-id glob until conversion succeeds.  Keep a reference so every
+    # terminal path can remove it without ever touching an arbitrary path.
+    uploaded_source: Path | None = None
 
     # --------------------------------------------------------
     # IMPORTANT:
@@ -4407,14 +4721,38 @@ def download_task(
             )
 
         # ====================================================
-        # Audio / Video
+        # Uploaded conversion
+        # ====================================================
+
+        elif media_type == "convert" and str(source_url).startswith(UPLOAD_SOURCE_PREFIX):
+            uploaded_source = _resolve_uploaded_source(source_url)
+            file_path = _run_ffmpeg_conversion(
+                job_id=job_id,
+                input_path=uploaded_source,
+                output_format=str(output_format or ""),
+                max_download_bytes=max_download_bytes,
+            )
+            _cleanup_uploaded_source(uploaded_source)
+            uploaded_source = None
+
+        # ====================================================
+        # Audio / Video / URL conversion
         # ====================================================
 
         else:
 
+            target_kind = output_format_kind(output_format) if output_format else None
+            download_media_type = (
+                target_kind
+                if media_type == "convert" and target_kind in {"audio", "video"}
+                else media_type
+            )
+            if media_type == "convert" and target_kind is None:
+                raise RuntimeError("A valid conversion output format is required")
+
             direct_download_url = source_url
             threads_direct_video = (
-                media_type == "video"
+                download_media_type == "video"
                 and is_threads_url(source_url)
             )
 
@@ -4434,7 +4772,7 @@ def download_task(
                         source_url=source_url,
                         format_id=format_id,
                         quality=quality,
-                        media_type=media_type,
+                        media_type=download_media_type,
                         playlist_index=(
                             playlist_index
                         ),
@@ -4501,10 +4839,7 @@ def download_task(
             # Audio
             # ================================================
 
-            if (
-                media_type
-                == "audio"
-            ):
+            if download_media_type == "audio":
 
                 ydl_options = (
                     _get_yt_dlp_options(
@@ -4555,12 +4890,18 @@ def download_task(
                 job_id
             )
 
-            file_path = (
-                _find_final_output_file(
-                    job_id=job_id,
-                    media_type=media_type,
-                )
+            file_path = _find_final_output_file(
+                job_id=job_id,
+                media_type=download_media_type,
             )
+
+            if output_format:
+                file_path = _run_ffmpeg_conversion(
+                    job_id=job_id,
+                    input_path=file_path,
+                    output_format=output_format,
+                    max_download_bytes=max_download_bytes,
+                )
 
         # ====================================================
         # Instagram / iOS compatibility
@@ -4683,7 +5024,6 @@ def download_task(
     # ========================================================
 
     except DownloadPausedError:
-
         print(
             "Download job paused: "
             f"{job_id}"
@@ -4699,6 +5039,8 @@ def download_task(
     # ========================================================
 
     except DownloadCancelledError:
+
+        _cleanup_uploaded_source(uploaded_source)
 
         status = (
             _get_job_status(
@@ -4764,6 +5106,8 @@ def download_task(
             DownloadJobStatus.EXPIRED,
         ):
 
+            _cleanup_uploaded_source(uploaded_source)
+
             _cleanup_job_files(
                 job_id
             )
@@ -4787,7 +5131,6 @@ def download_task(
             self.request.retries
             < self.max_retries
         ):
-
             countdown = min(
                 60,
                 2 ** (
@@ -4808,6 +5151,8 @@ def download_task(
         _cleanup_job_files(
             job_id
         )
+
+        _cleanup_uploaded_source(uploaded_source)
 
         _set_failed(
             job_id=job_id,
