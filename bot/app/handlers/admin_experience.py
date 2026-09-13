@@ -7,6 +7,7 @@ from aiogram import F, Router
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, ForceReply, Message
 
+from app.i18n import normalize_language
 from app.keyboards.admin_experience import (
     BUTTON_LABELS,
     CONTENT_LABELS,
@@ -25,7 +26,11 @@ from app.keyboards.admin_experience import (
     build_home_buttons_admin_keyboard,
     build_home_style_keyboard,
 )
-from app.runtime_config import clear_runtime_configuration_cache
+from app.keyboards.payment import build_home_keyboard, build_home_reply_keyboard
+from app.runtime_config import (
+    clear_runtime_configuration_cache,
+    runtime_configuration,
+)
 from app.services.backend import (
     BackendAPIError,
     create_home_button,
@@ -33,6 +38,7 @@ from app.services.backend import (
     delete_home_button,
     delete_required_channel,
     get_admin_context,
+    get_telegram_user,
     list_application_settings,
     list_home_buttons,
     list_required_channels,
@@ -109,6 +115,58 @@ async def _setting_row(
     key = _copy_setting_key(language, section)
     rows = await list_application_settings(actor_telegram_id)
     return next((row for row in rows if row.get("key") == key), None)
+
+
+async def _refresh_saved_style_for_admin(
+    callback: CallbackQuery,
+    *,
+    edited_language: str,
+    saved_styles: dict[str, str],
+) -> None:
+    """Show the saved style immediately and replace a stale reply keyboard.
+
+    Telegram reply keyboards belong to an already-sent message. Updating the
+    setting cannot mutate that old markup, so a fresh markup must be sent to
+    the current chat. If the administrator is editing the other language, an
+    inline preview is used instead of unexpectedly changing their persistent
+    menu language.
+    """
+    configuration = dict(
+        await runtime_configuration(edited_language, refresh=True)
+    )
+    configuration["button_styles"] = {
+        **dict(configuration.get("button_styles") or {}),
+        **saved_styles,
+    }
+
+    try:
+        user = await get_telegram_user(callback.from_user.id)
+        current_language = (
+            normalize_language(user.get("effective_language"))
+            or edited_language
+        )
+    except BackendAPIError:
+        current_language = edited_language
+
+    if current_language == edited_language:
+        text = _tr("✅ رنگ جدید روی منوی اصلی این گفتگو اعمال شد.")
+        markup = build_home_reply_keyboard(
+            edited_language,
+            include_admin=True,
+            configuration=configuration,
+        )
+    else:
+        text = _tr(
+            "✅ رنگ ذخیره شد. پیش‌نمایش زبان ویرایش‌شده را اینجا می‌بینید."
+        )
+        markup = build_home_keyboard(
+            edited_language,
+            include_admin=True,
+            configuration=configuration,
+        )
+
+    if isinstance(callback.message, Message):
+        await callback.message.answer(text, reply_markup=markup)
 
 
 async def _show_home_buttons(message: Message, actor_telegram_id: int) -> None:
@@ -379,6 +437,11 @@ async def save_copy_style(callback: CallbackQuery, state: FSMContext) -> None:
         await callback.message.edit_text(
             _tr("✅ رنگ دکمه ذخیره شد.\n\nرنگ دکمه‌های دیگر را هم می‌توانید تغییر دهید."),
             reply_markup=build_copy_style_items_keyboard(language, values),
+        )
+        await _refresh_saved_style_for_admin(
+            callback,
+            edited_language=language,
+            saved_styles=values,
         )
         await callback.answer(_tr("رنگ ذخیره شد."))
     except BackendAPIError as exc:

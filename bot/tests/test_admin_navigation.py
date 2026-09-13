@@ -10,7 +10,13 @@ from aiogram import Bot
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.storage.base import StorageKey
 from aiogram.fsm.storage.memory import MemoryStorage
-from aiogram.types import CallbackQuery, Chat, Message, User
+from aiogram.types import (
+    CallbackQuery,
+    Chat,
+    Message,
+    ReplyKeyboardMarkup,
+    User,
+)
 
 from app import main
 from app.handlers import admin, admin_experience, admin_finance, home
@@ -109,6 +115,58 @@ def test_home_purchase_still_opens_when_no_form_is_active(ui, monkeypatch):
     monkeypatch.setattr(home, "runtime_configuration", AsyncMock(return_value=fallback_configuration("fa")))
     asyncio.run(ui.dispatch(text="💎 خرید اشتراک"))
     purchase.assert_awaited_once()
+
+
+def test_saving_main_button_color_refreshes_persistent_keyboard(ui, monkeypatch):
+    context = {"is_admin": True, "permissions": ["settings.manage"]}
+    monkeypatch.setattr(
+        admin_experience,
+        "get_admin_context",
+        AsyncMock(return_value=context),
+    )
+    row = {
+        "key": "bot.button_styles.fa",
+        "category": "bot_buttons",
+        "version": 7,
+        "value": {"buy": "success", "subscription": "primary"},
+    }
+    monkeypatch.setattr(
+        admin_experience,
+        "list_application_settings",
+        AsyncMock(return_value=[row]),
+    )
+    save = AsyncMock()
+    monkeypatch.setattr(admin_experience, "update_application_setting", save)
+    monkeypatch.setattr(
+        admin_experience,
+        "get_telegram_user",
+        AsyncMock(return_value={"effective_language": "fa", "is_admin": True}),
+    )
+    configuration = fallback_configuration("fa")
+    refreshed = AsyncMock(return_value=configuration)
+    monkeypatch.setattr(admin_experience, "runtime_configuration", refreshed)
+
+    async def exercise():
+        await ui.dispatch(callback="admin:copy:style-set:fa:buy:danger")
+
+        save.assert_awaited_once()
+        assert save.await_args.kwargs["value"] == {
+            "buy": "danger",
+            "subscription": "primary",
+        }
+        refreshed.assert_awaited_once_with("fa", refresh=True)
+        assert ui.answer.await_count == 1
+        markup = ui.answer.await_args.kwargs["reply_markup"]
+        assert isinstance(markup, ReplyKeyboardMarkup)
+        buttons = {
+            button.text: button
+            for keyboard_row in markup.keyboard
+            for button in keyboard_row
+        }
+        assert buttons[configuration["buttons"]["buy"]].style == "danger"
+        assert await ui.state.get_state() is None
+
+    asyncio.run(exercise())
 
 
 @pytest.mark.parametrize("permissions", [

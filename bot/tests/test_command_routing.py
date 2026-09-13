@@ -7,6 +7,7 @@ from app.main import (
     download_error_markup,
     download_error_text,
 )
+from app.middleware.interface import ui_language
 from app.services.backend import BackendAPIError
 
 
@@ -89,3 +90,29 @@ def test_plan_limit_errors_are_rendered_in_persian():
     assert "3/3" in download_error_text(daily_error)
     markup = download_error_markup(daily_error)
     assert markup.inline_keyboard[0][0].callback_data == "payment:open"
+
+
+def test_free_weekly_conversion_limit_has_a_localized_upgrade_message():
+    error = BackendAPIError(
+        status_code=429,
+        detail={
+            "code": "weekly_conversion_limit_reached",
+            "plan_name": "Free",
+            "used": 1,
+            "limit": 1,
+        },
+    )
+
+    token = ui_language.set("fa")
+    try:
+        assert "۱ تبدیل فرمت هفتگی" in download_error_text(error)
+        markup = download_error_markup(error)
+        assert markup.inline_keyboard[0][0].callback_data == "payment:open"
+    finally:
+        ui_language.reset(token)
+
+    token = ui_language.set("en")
+    try:
+        assert "one file conversion per week" in download_error_text(error)
+    finally:
+        ui_language.reset(token)

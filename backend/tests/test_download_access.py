@@ -38,6 +38,7 @@ from app.services.download_access import (  # noqa: E402
     DownloadAccessService,
     DownloadFileSizeLimitExceeded,
     DownloadQualityLimitExceeded,
+    WeeklyConversionLimitReached,
     quota_week_start_utc,
     quota_window_start_utc,
     quota_day_start_utc,
@@ -124,12 +125,13 @@ def make_job(
     *,
     status: DownloadJobStatus,
     delivered_at: datetime | None = None,
+    media_type: str = "video",
 ) -> DownloadJob:
     return DownloadJob(
         user_id=user.id,
         source_url="https://example.com/video",
         quality="720p",
-        media_type="video",
+        media_type=media_type,
         status=status,
         progress=100 if status == DownloadJobStatus.COMPLETED else 0,
         delivered_at=delivered_at,
@@ -210,6 +212,83 @@ async def test_custom_plan_enforces_concurrency_and_daily_delivery_quota():
                     telegram_id=user.telegram_id,
                     quality="1080p",
                     estimated_size_bytes=400 * 1024 * 1024,
+                )
+        finally:
+            await transaction.rollback()
+            await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_free_conversion_has_its_own_one_per_week_allowance():
+    async with AsyncSessionLocal() as session:
+        transaction = await session.begin()
+        try:
+            user = await add_user(session)
+            session.add(
+                make_job(
+                    user,
+                    status=DownloadJobStatus.COMPLETED,
+                    delivered_at=datetime.now(timezone.utc),
+                    media_type="convert",
+                )
+            )
+            await session.flush()
+            service = DownloadAccessService(session)
+
+            # A previous conversion does not consume Free's normal weekly
+            # download allowance.
+            entitlement = await service.authorize_job(
+                telegram_id=user.telegram_id,
+                quality="720p",
+                estimated_size_bytes=10 * 1024 * 1024,
+                media_type="video",
+            )
+            assert entitlement.plan_slug == "free"
+
+            with pytest.raises(WeeklyConversionLimitReached):
+                await service.authorize_job(
+                    telegram_id=user.telegram_id,
+                    quality="720p",
+                    estimated_size_bytes=10 * 1024 * 1024,
+                    media_type="convert",
+                )
+        finally:
+            await transaction.rollback()
+            await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_paid_conversion_consumes_the_normal_daily_output_quota():
+    async with AsyncSessionLocal() as session:
+        transaction = await session.begin()
+        try:
+            user = await add_user(session)
+            await add_custom_subscription(session, user, daily_limit=2)
+            now = datetime.now(timezone.utc)
+            session.add_all(
+                [
+                    make_job(
+                        user,
+                        status=DownloadJobStatus.COMPLETED,
+                        delivered_at=now,
+                        media_type="video",
+                    ),
+                    make_job(
+                        user,
+                        status=DownloadJobStatus.COMPLETED,
+                        delivered_at=now,
+                        media_type="convert",
+                    ),
+                ]
+            )
+            await session.flush()
+
+            with pytest.raises(DailyDownloadLimitReached):
+                await DownloadAccessService(session).authorize_job(
+                    telegram_id=user.telegram_id,
+                    quality="720p",
+                    estimated_size_bytes=10 * 1024 * 1024,
+                    media_type="convert",
                 )
         finally:
             await transaction.rollback()

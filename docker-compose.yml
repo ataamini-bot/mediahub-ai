@@ -44,7 +44,9 @@ services:
 
 
   telegram-api:
-    image: aiogram/telegram-bot-api:latest
+    # Button colors require Telegram Bot API 9.4 or newer. Keep the server on
+    # a known modern release instead of silently reusing an old cached latest.
+    image: ${TELEGRAM_BOT_API_IMAGE:-aiogram/telegram-bot-api:10.3}
     container_name: mediahub-telegram-api
     restart: unless-stopped
 
@@ -123,6 +125,9 @@ services:
     volumes:
       - downloads_data:/app/downloads
       - temp_data:/app/tmp
+      # Local Bot API returns a local file path. The Bot must see the same
+      # data directory to stream an uploaded conversion input safely.
+      - telegram_api_data:/var/lib/telegram-bot-api:ro
 
     networks:
       - mediahub

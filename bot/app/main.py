@@ -248,6 +248,16 @@ def download_error_text(exc: Exception) -> str:
         if ui_language.get() == "en":
             return f"Your weekly quota for {plan_name} has been reached ({exc.detail.get('used', 0)}/{exc.detail.get('limit', 0)})."
         return f"{_tr('سهمیه هفتگی ')}{plan_name}{_tr(' تمام شده است (')}{exc.detail.get('used', 0)}/{exc.detail.get('limit', 0)})."
+    if code == "weekly_conversion_limit_reached":
+        if ui_language.get() == "en":
+            return (
+                "Your Free plan includes one file conversion per week. "
+                "Upgrade to Professional or Gold for more conversions."
+            )
+        return (
+            "سهمیهٔ ۱ تبدیل فرمت هفتگی پلن رایگان شما تمام شده است؛ "
+            "برای تبدیل بیشتر، پلن حرفه‌ای یا طلایی را تهیه کنید."
+        )
     if code == "daily_download_limit_reached":
         return (
             f"{_tr('سهمیه روزانه ')}{plan_name}{_tr(' تمام شده است (')}{exc.detail.get('used', 0)}/{exc.detail.get('limit', 0)})."
@@ -290,6 +300,7 @@ def download_error_markup(exc: Exception):
     if str(exc.detail.get("code") or "") in {
         "daily_download_limit_reached",
         "weekly_download_limit_reached",
+        "weekly_conversion_limit_reached",
         "download_quality_limit_exceeded",
         "download_file_size_limit_exceeded",
     }:

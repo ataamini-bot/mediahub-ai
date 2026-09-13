@@ -1,3 +1,5 @@
+from pathlib import Path
+
 from app.keyboards.conversion import (
     build_audio_format_keyboard,
     build_conversion_format_keyboard,
@@ -63,3 +65,10 @@ def test_conversion_entry_is_present_in_both_home_menus():
 
     reply = [button for row in build_home_reply_keyboard("en").keyboard for button in row]
     assert any(button.text == "🔄 Convert media" for button in reply)
+
+
+def test_bot_can_read_uploads_exposed_by_the_local_telegram_api():
+    compose_path = Path(__file__).resolve().parents[2] / "docker-compose.yml"
+    compose = compose_path.read_text(encoding="utf-8")
+
+    assert "telegram_api_data:/var/lib/telegram-bot-api:ro" in compose

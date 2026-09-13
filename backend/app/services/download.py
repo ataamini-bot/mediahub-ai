@@ -2475,6 +2475,7 @@ class DownloadService:
             telegram_id=telegram_id,
             quality=quality,
             estimated_size_bytes=estimated_size_bytes,
+            media_type=normalized_media_type,
         )
 
         job = (

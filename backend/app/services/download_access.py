@@ -109,6 +109,13 @@ class WeeklyDownloadLimitReached(DownloadAccessError):
     status_code = 429
 
 
+class WeeklyConversionLimitReached(DownloadAccessError):
+    """The one weekly conversion included with the Free plan was used."""
+
+    code = "weekly_conversion_limit_reached"
+    status_code = 429
+
+
 class ConcurrentDownloadLimitReached(DownloadAccessError):
     code = "concurrent_download_limit_reached"
     status_code = 429
@@ -134,6 +141,7 @@ class DownloadEntitlement:
     user_id: int
     plan_id: int | None
     plan_name: str
+    plan_slug: str
     daily_download_limit: int | None
     max_file_size_mb: int
     max_quality: int | None
@@ -145,6 +153,7 @@ class DownloadEntitlement:
 
     def limits_snapshot(self) -> dict[str, object]:
         return {
+            "plan_slug": self.plan_slug,
             "daily_download_limit": self.daily_download_limit,
             "download_limit_period": self.download_limit_period,
             "max_file_size_mb": self.max_file_size_mb,
@@ -192,6 +201,7 @@ class DownloadAccessService:
         telegram_id: int,
         quality: str | None,
         estimated_size_bytes: int | None,
+        media_type: str = "video",
     ) -> DownloadEntitlement:
         try:
             await ensure_public_operation(self.session, "downloads")
@@ -220,7 +230,17 @@ class DownloadAccessService:
         self._validate_estimated_size(entitlement, estimated_size_bytes)
 
         if not entitlement.is_admin_bypass:
-            await self._validate_download_limit(entitlement)
+            normalized_media_type = str(media_type or "video").strip().lower()
+            if (
+                normalized_media_type == "convert"
+                and entitlement.plan_slug == "free"
+            ):
+                # The Free plan includes one *separate* conversion per week.
+                # It must not consume the normal weekly download allowance.
+                await self._validate_free_conversion_limit(entitlement)
+            else:
+                # Paid conversions use the same quota as every other output.
+                await self._validate_download_limit(entitlement)
             await self._validate_concurrency(entitlement)
 
         return entitlement
@@ -304,6 +324,7 @@ class DownloadAccessService:
                 user_id=user.id,
                 plan_id=None,
                 plan_name="Administrator",
+                plan_slug="administrator",
                 daily_download_limit=None,
                 max_file_size_mb=TECHNICAL_MAX_FILE_SIZE_MB,
                 max_quality=None,
@@ -357,6 +378,7 @@ class DownloadAccessService:
             user_id=user.id,
             plan_id=plan.id,
             plan_name=plan.name,
+            plan_slug=str(plan.slug or "").strip().lower(),
             daily_download_limit=(
                 subscription.daily_download_limit
                 if subscription is not None
@@ -433,9 +455,19 @@ class DownloadAccessService:
             DownloadJobStatus.PROCESSING,
             DownloadJobStatus.PAUSED,
         )
+        usage_filters = [DownloadJob.user_id == entitlement.user_id]
+        if entitlement.plan_slug == "free":
+            # The Free plan's conversion allowance is counted independently.
+            # Keep legacy jobs with a null media type in the normal quota.
+            usage_filters.append(
+                or_(
+                    DownloadJob.media_type.is_(None),
+                    DownloadJob.media_type != "convert",
+                )
+            )
         result = await self.session.execute(
             select(func.count(DownloadJob.id)).where(
-                DownloadJob.user_id == entitlement.user_id,
+                *usage_filters,
                 or_(
                     DownloadJob.delivered_at >= window_start,
                     DownloadJob.status.in_(reserved_statuses),
@@ -458,6 +490,49 @@ class DownloadAccessService:
                 limit=limit,
                 used=used_or_reserved,
                 period=period,
+            )
+
+    async def _validate_free_conversion_limit(
+        self,
+        entitlement: DownloadEntitlement,
+    ) -> None:
+        """Reserve the Free plan's single conversion in the local quota week."""
+        timezone_name = await get_managed_setting(
+            self.session,
+            "quota.timezone",
+        )
+        window_start = quota_window_start_utc(
+            "weekly",
+            timezone_name=timezone_name,
+        )
+        reserved_statuses = (
+            DownloadJobStatus.PENDING,
+            DownloadJobStatus.PROCESSING,
+            DownloadJobStatus.PAUSED,
+        )
+        result = await self.session.execute(
+            select(func.count(DownloadJob.id)).where(
+                DownloadJob.user_id == entitlement.user_id,
+                DownloadJob.media_type == "convert",
+                or_(
+                    DownloadJob.delivered_at >= window_start,
+                    DownloadJob.status.in_(reserved_statuses),
+                    and_(
+                        DownloadJob.status == DownloadJobStatus.COMPLETED,
+                        DownloadJob.delivered_at.is_(None),
+                        DownloadJob.created_at >= window_start,
+                    ),
+                ),
+            )
+        )
+        used_or_reserved = int(result.scalar_one())
+        if used_or_reserved >= 1:
+            raise WeeklyConversionLimitReached(
+                "The Free plan includes one conversion per week",
+                plan_name=entitlement.plan_name,
+                limit=1,
+                used=used_or_reserved,
+                period="weekly",
             )
 
     async def _validate_daily_limit(self, entitlement: DownloadEntitlement) -> None:

@@ -115,9 +115,13 @@ async def send_conversion_prompt(message: Message, state: FSMContext) -> None:
     await state.clear()
     await state.set_state(ConversionStates.waiting_for_media)
     text = (
-        "🔄 <b>Convert media</b>\n\nSend an audio or video file; then choose the output format."
+        "🔄 <b>Convert media</b>\n\n"
+        "Send an audio or video file; then choose the output format.\n\n"
+        "Free: one conversion per week. Professional and Gold: each conversion uses one daily output."
         if language == "en"
-        else "🔄 <b>تبدیل فایل</b>\n\nیک فایل صوتی یا ویدئویی ارسال کنید؛ سپس فرمت خروجی را انتخاب کنید."
+        else "🔄 <b>تبدیل فایل</b>\n\n"
+        "یک فایل صوتی یا ویدئویی ارسال کنید؛ سپس فرمت خروجی را انتخاب کنید.\n\n"
+        "رایگان: ۱ تبدیل در هر هفته. حرفه‌ای و طلایی: هر تبدیل یک خروجی از سهمیه روزانه را مصرف می‌کند."
     )
     await message.answer(text, parse_mode="HTML", reply_markup=_cancel_keyboard(language))
 
@@ -294,7 +298,6 @@ async def choose_conversion_format(callback: CallbackQuery, state: FSMContext) -
     status_message = callback.message
     language = ui_language.get()
     job_created = False
-    backend_request_started = False
     try:
         await callback.answer(
             f"Converting to {normalized.upper()}…" if language == "en" else f"در حال تبدیل به {normalized.upper()}…"
@@ -307,10 +310,6 @@ async def choose_conversion_format(callback: CallbackQuery, state: FSMContext) -
             ),
             parse_mode="HTML",
         )
-        # Do not remove the source after a request has crossed the Backend
-        # boundary: a lost response can still leave a queued Worker owning
-        # this file.
-        backend_request_started = True
         job = await create_download_job(
             source_url=source_ref,
             telegram_id=callback.from_user.id,
@@ -346,17 +345,21 @@ async def choose_conversion_format(callback: CallbackQuery, state: FSMContext) -
                 job=completed,
             )
     except BackendAPIError as exc:
+        # Imported lazily because main includes the conversion router. This
+        # keeps quota errors consistent with normal download errors.
+        from app.main import download_error_markup, download_error_text
+
         await status_message.edit_text(
-            "❌ Conversion failed.\n\n" + html.escape(str(exc.detail)[:1000])
+            "❌ Conversion failed.\n\n" + html.escape(download_error_text(exc))
             if language == "en"
-            else "❌ تبدیل انجام نشد.\n\n" + html.escape(str(exc.detail)[:1000]),
+            else "❌ تبدیل انجام نشد.\n\n" + html.escape(download_error_text(exc)),
             parse_mode="HTML",
+            reply_markup=download_error_markup(exc),
         )
-        if (
-            not job_created
-            and not backend_request_started
-            and source_ref.startswith(UPLOAD_PREFIX)
-        ):
+        # A definite Backend rejection did not create a job, so the Bot owns
+        # this staged file and can clean it up. Unknown transport errors are
+        # handled below without deleting a file a Worker may already own.
+        if not job_created and source_ref.startswith(UPLOAD_PREFIX):
             try:
                 (DOWNLOAD_DIR / "incoming" / input_name).unlink(missing_ok=True)
             except OSError:
