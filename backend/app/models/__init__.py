@@ -16,6 +16,7 @@ from app.models.bot_experience import (
 )
 from app.models.download_job import DownloadJob, DownloadJobStatus
 from app.models.payment import Payment, PaymentStatus
+from app.models.payment_order import PaymentOrder
 from app.models.payment_destination import PaymentCard, UsdtDestination
 from app.models.plan import Plan
 from app.models.subscription import Subscription
@@ -39,6 +40,7 @@ __all__ = [
     "Plan",
     "Payment",
     "PaymentStatus",
+    "PaymentOrder",
     "PaymentCard",
     "UsdtDestination",
     "Subscription",

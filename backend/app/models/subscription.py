@@ -1,7 +1,7 @@
 import enum
 from datetime import datetime
 
-from sqlalchemy import DateTime, Enum, ForeignKey, Integer
+from sqlalchemy import CheckConstraint, DateTime, Enum, ForeignKey, Integer, String
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base, TimestampMixin
@@ -16,6 +16,12 @@ class SubscriptionStatus(str, enum.Enum):
 
 class Subscription(Base, TimestampMixin):
     __tablename__ = "subscriptions"
+    __table_args__ = (
+        CheckConstraint(
+            "download_limit_period IN ('daily', 'weekly')",
+            name="ck_subscriptions_download_limit_period",
+        ),
+    )
 
     id: Mapped[int] = mapped_column(
         Integer,
@@ -57,6 +63,13 @@ class Subscription(Base, TimestampMixin):
     daily_download_limit: Mapped[int | None] = mapped_column(
         Integer,
         nullable=True,
+    )
+
+    download_limit_period: Mapped[str] = mapped_column(
+        String(16),
+        default="daily",
+        server_default="daily",
+        nullable=False,
     )
 
     auto_renew: Mapped[bool] = mapped_column(

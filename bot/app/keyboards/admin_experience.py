@@ -26,6 +26,13 @@ BUTTON_LABELS = {
     "back_home": "منوی اصلی",
 }
 
+BUTTON_STYLE_LABELS = {
+    "default": "معمولی",
+    "primary": "آبی (Primary)",
+    "success": "سبز (Success)",
+    "danger": "قرمز (Danger)",
+}
+
 
 def build_copy_root_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
@@ -54,6 +61,12 @@ def build_copy_section_keyboard(language: str) -> InlineKeyboardMarkup:
                     callback_data=f"admin:copy:section:{language}:buttons",
                 )
             ],
+            [
+                InlineKeyboardButton(
+                    text=_tr("🎨 رنگ دکمه‌ها"),
+                    callback_data=f"admin:copy:section:{language}:styles",
+                )
+            ],
             [InlineKeyboardButton(text=_tr("🔙 انتخاب زبان"), callback_data="admin:copy")],
         ]
     )
@@ -78,6 +91,53 @@ def build_copy_items_keyboard(language: str, section: str) -> InlineKeyboardMark
             )
         ]
     )
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def build_copy_style_items_keyboard(
+    language: str,
+    values: dict | None = None,
+) -> InlineKeyboardMarkup:
+    values = values if isinstance(values, dict) else {}
+    rows = [
+        [
+            InlineKeyboardButton(
+                text=f"🎨 {label}: {BUTTON_STYLE_LABELS.get(str(values.get(key) or 'default'), BUTTON_STYLE_LABELS['default'])}",
+                callback_data=f"admin:copy:style-item:{language}:{key}",
+            )
+        ]
+        for key, label in BUTTON_LABELS.items()
+    ]
+    rows.append([
+        InlineKeyboardButton(
+            text=_tr("🔙 بازگشت"),
+            callback_data=f"admin:copy:lang:{language}",
+        )
+    ])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def build_copy_style_keyboard(
+    language: str,
+    key: str,
+    current: str = "default",
+) -> InlineKeyboardMarkup:
+    rows = []
+    for style, label in BUTTON_STYLE_LABELS.items():
+        marker = "✅ " if style == current else ""
+        kwargs = {
+            "text": marker + _tr(label),
+            "callback_data": f"admin:copy:style-set:{language}:{key}:{style}",
+        }
+        if style in {"primary", "success", "danger"}:
+            kwargs["style"] = style
+        rows.append([InlineKeyboardButton(**kwargs)])
+    rows.append([
+        InlineKeyboardButton(
+            text=_tr("انصراف"),
+            callback_data=f"admin:copy:section:{language}:styles",
+        )
+    ])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 

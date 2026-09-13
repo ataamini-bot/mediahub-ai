@@ -249,10 +249,11 @@ def _admin_plan_text(plan: dict) -> str:
     )
     priority = _tr("بالا") if plan.get("priority_processing") else _tr("عادی")
     forced_join = _tr("بله") if plan.get("forced_join_required") else _tr("خیر")
+    limit_label = _tr("سقف هفتگی") if str(plan.get("download_limit_period") or "daily") == "weekly" else _tr("سقف روزانه")
     description = html.escape(str(plan.get("description") or "—"))
     description_en = html.escape(str(plan.get("description_en") or "—"))
     return (
-        f"{_tr('📦 <b>مشخصات پلن</b>\n\nنام فارسی: <b>')}{html.escape(str(plan['name']))}{_tr('</b>\nنام انگلیسی: <b>')}{html.escape(str(plan.get('name_en') or plan['name']))}{_tr('</b>\nنوع: ')}{plan_type}{_tr('\nوضعیت: <b>')}{status}{_tr('</b>\nمدت: <code>')}{duration}{_tr('</code>\nمبلغ ریالی: <b>')}{price}{_tr('</b>\nمبلغ بین\u200cالمللی: <b>')}{price_usdt}{_tr('</b>\n\n📊 سقف روزانه: <code>')}{_plan_daily_limit_text(plan.get('daily_download_limit'))}{_tr('</code>\n📦 حداکثر حجم: <code>')}{file_size}{_tr('</code>\n🎞 حداکثر کیفیت: <code>')}{quality}{_tr('</code>\n⚙️ دانلود هم\u200cزمان: <code>')}{int(plan.get('max_concurrent_downloads', 1))}{_tr('</code>\n🚀 اولویت پردازش: <code>')}{priority}{_tr('</code>\n📣 عضویت اجباری: <code>')}{forced_join}{_tr('</code>\n↕️ ترتیب نمایش: <code>')}{int(plan.get('sort_order', 0))}{_tr('</code>\n\n📝 توضیح فارسی: ')}{description}{_tr('\n🌐 توضیح انگلیسی: ')}{description_en}"
+        f"{_tr('📦 <b>مشخصات پلن</b>\n\nنام فارسی: <b>')}{html.escape(str(plan['name']))}{_tr('</b>\nنام انگلیسی: <b>')}{html.escape(str(plan.get('name_en') or plan['name']))}{_tr('</b>\nنوع: ')}{plan_type}{_tr('\nوضعیت: <b>')}{status}{_tr('</b>\nمدت: <code>')}{duration}{_tr('</code>\nمبلغ ریالی: <b>')}{price}{_tr('</b>\nمبلغ بین\u200cالمللی: <b>')}{price_usdt}{_tr('</b>\n\n📊 ' + limit_label + ': <code>')}{_plan_daily_limit_text(plan.get('daily_download_limit'))}{_tr('</code>\n📦 حداکثر حجم: <code>')}{file_size}{_tr('</code>\n🎞 حداکثر کیفیت: <code>')}{quality}{_tr('</code>\n⚙️ دانلود هم\u200cزمان: <code>')}{int(plan.get('max_concurrent_downloads', 1))}{_tr('</code>\n🚀 اولویت پردازش: <code>')}{priority}{_tr('</code>\n📣 عضویت اجباری: <code>')}{forced_join}{_tr('</code>\n↕️ ترتیب نمایش: <code>')}{int(plan.get('sort_order', 0))}{_tr('</code>\n\n📝 توضیح فارسی: ')}{description}{_tr('\n🌐 توضیح انگلیسی: ')}{description_en}"
     )
 
 

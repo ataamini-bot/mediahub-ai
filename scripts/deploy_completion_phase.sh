@@ -6,7 +6,7 @@ set -Eeuo pipefail
 # services. It never downgrades a database after a successful migration.
 cd "${MEDIAHUB_DIR:-/opt/mediahub-ai}"
 
-expected_base="4e4df8a20c38624a3e08d973e119f8318a744342"
+expected_base="678fea7d6812604459c82ee5c03ff2a9f3ae1cdd"
 expected_branch="feature/admin-foundation"
 target_commit="${1:-}"
 
@@ -112,25 +112,33 @@ docker compose run --rm --no-deps -T backend python -m compileall -q app alembic
 docker compose run --rm --no-deps -T bot python -m compileall -q app
 docker compose run --rm --no-deps -T backend python - <<'PY'
 from app.models.payment import Payment
+from app.models.payment_order import PaymentOrder
+from app.models.plan import Plan
 from app.models.bot_experience import SupportTicket, SupportTicketEvent
+from app.models.subscription import Subscription
 from app.models.subscription import SubscriptionStatus
+from app.services.managed_settings import BUTTON_STYLES
 from app.services.operations import MONITOR_DEFAULTS
 
 assert hasattr(Payment, "txid") and hasattr(Payment, "txid_normalized")
+assert hasattr(Payment, "order_id") and hasattr(PaymentOrder, "offer_snapshot")
+assert hasattr(Plan, "download_limit_period") and hasattr(Subscription, "download_limit_period")
+assert BUTTON_STYLES == {"default", "primary", "success", "danger"}
 assert hasattr(SupportTicket, "reopened_count")
 assert SupportTicketEvent.__tablename__ == "support_ticket_events"
 assert SubscriptionStatus.SCHEDULED.value == "scheduled"
 assert set(MONITOR_DEFAULTS) >= {"cpu_percent", "ram_percent", "disk_percent", "download_error_percent"}
 print("COMPLETION_SCHEMA_CODE=OK")
+print("PAYMENT_ORDER_QUOTA_STYLE_CODE=OK")
 PY
 
 docker compose stop bot worker monitor backend >/dev/null
 require_no_active_jobs
 migration_started=1
 docker compose run --rm --no-deps -T backend alembic upgrade head
-docker compose run --rm --no-deps -T backend alembic current | grep -q e6f7a8b9c0d1
+docker compose run --rm --no-deps -T backend alembic current | grep -q f8b9c0d1e2f3
 migration_succeeded=1
-printf 'MIGRATION=e6f7a8b9c0d1\n'
+printf 'MIGRATION=f8b9c0d1e2f3\n'
 
 docker compose up -d --no-deps --force-recreate backend
 for _ in $(seq 1 40); do
@@ -148,6 +156,8 @@ from app.keyboards.admin_statistics import STATISTICS_PERIODS
 
 assert [key for key, _label in STATISTICS_PERIODS] == ["1yr", "6mo", "3mo", "1mo", "7d", "today"]
 assert len(text_pages("x" * 7000)) > 1
+from app.runtime_config import fallback_configuration
+assert fallback_configuration("en")["button_styles"]["buy"] == "success"
 print("BOT_COMPLETION_CODE=OK")
 PY
 docker compose up -d --no-deps --force-recreate bot

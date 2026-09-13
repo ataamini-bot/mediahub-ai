@@ -23,6 +23,7 @@ class BotConfigurationResponse(BaseModel):
     language: Literal["fa", "en"]
     content: dict[str, str]
     buttons: dict[str, str]
+    button_styles: dict[str, ButtonStyle] = Field(default_factory=dict)
     custom_buttons: list[dict[str, Any]]
     required_channels: list[dict[str, Any]]
 

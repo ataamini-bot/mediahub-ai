@@ -17,6 +17,8 @@ from app.keyboards.admin_experience import (
     build_copy_items_keyboard,
     build_copy_root_keyboard,
     build_copy_section_keyboard,
+    build_copy_style_items_keyboard,
+    build_copy_style_keyboard,
     build_home_action_keyboard,
     build_home_button_delete_keyboard,
     build_home_button_detail_keyboard,
@@ -46,7 +48,7 @@ router.message.filter(F.chat.type == "private")
 router.callback_query.filter(F.message.chat.type == "private")
 
 LANGUAGES = {"fa", "en"}
-SECTIONS = {"content", "buttons"}
+SECTIONS = {"content", "buttons", "styles"}
 HOME_ACTIONS = {
     "url",
     "message",
@@ -90,7 +92,8 @@ def _api_error(exc: BackendAPIError) -> str:
 
 
 def _copy_setting_key(language: str, section: str) -> str:
-    return f"bot.{section}.{language}"
+    setting_section = "button_styles" if section == "styles" else section
+    return f"bot.{setting_section}.{language}"
 
 
 def _copy_labels(section: str) -> dict[str, str]:
@@ -214,7 +217,7 @@ async def copy_language(callback: CallbackQuery, state: FSMContext) -> None:
 
 
 @router.callback_query(
-    F.data.regexp(r"^admin:copy:section:(fa|en):(content|buttons)$")
+    F.data.regexp(r"^admin:copy:section:(fa|en):(content|buttons|styles)$")
 )
 async def copy_section(callback: CallbackQuery, state: FSMContext) -> None:
     if not callback.data or not isinstance(callback.message, Message):
@@ -224,6 +227,24 @@ async def copy_section(callback: CallbackQuery, state: FSMContext) -> None:
         return
     _admin, _copy, _section, language, section = callback.data.split(":")
     await state.clear()
+    if section == "styles":
+        try:
+            row = await _setting_row(
+                callback.from_user.id,
+                language=language,
+                section=section,
+            )
+        except BackendAPIError as exc:
+            await callback.answer(_api_error(exc), show_alert=True)
+            return
+        values = row.get("value") if isinstance(row, dict) and isinstance(row.get("value"), dict) else {}
+        await callback.message.edit_text(
+            _tr("🎨 <b>رنگ دکمه‌های اصلی</b>\n\nرنگ هر دکمه را انتخاب کنید:"),
+            parse_mode="HTML",
+            reply_markup=build_copy_style_items_keyboard(language, values),
+        )
+        await callback.answer()
+        return
     await callback.message.edit_text(
         (
             _tr("📝 <b>متن محتواها</b>\n\nیک مورد را برای ویرایش انتخاب کنید:")
@@ -282,6 +303,86 @@ async def begin_copy_edit(callback: CallbackQuery, state: FSMContext) -> None:
         reply_markup=ForceReply(selective=True),
     )
     await callback.answer()
+
+
+@router.callback_query(
+    F.data.regexp(r"^admin:copy:style-item:(fa|en):[a-z_]+$")
+)
+async def begin_copy_style_edit(callback: CallbackQuery, state: FSMContext) -> None:
+    if not callback.data or not isinstance(callback.message, Message):
+        return
+    if await _context(callback.from_user.id, "settings.manage") is None:
+        await callback.answer(_tr("دسترسی ندارید."), show_alert=True)
+        return
+    _admin, _copy, _style_item, language, item_key = callback.data.split(":")
+    if item_key not in BUTTON_LABELS:
+        await callback.answer(_tr("گزینه معتبر نیست."), show_alert=True)
+        return
+    try:
+        row = await _setting_row(
+            callback.from_user.id,
+            language=language,
+            section="styles",
+        )
+    except BackendAPIError as exc:
+        await callback.answer(_api_error(exc), show_alert=True)
+        return
+    if row is None:
+        await callback.answer(_tr("تنظیم رنگ‌ها در دیتابیس پیدا نشد."), show_alert=True)
+        return
+    values = row.get("value") if isinstance(row.get("value"), dict) else {}
+    current = str(values.get(item_key) or "default").strip().lower()
+    if current not in HOME_STYLES:
+        current = "default"
+    await state.clear()
+    await callback.message.edit_text(
+        f"🎨 <b>{html.escape(BUTTON_LABELS[item_key])}</b>\n\n{_tr('رنگ فعلی:')} <code>{html.escape(current)}</code>\n\n{_tr('رنگ جدید را انتخاب کنید:')}",
+        parse_mode="HTML",
+        reply_markup=build_copy_style_keyboard(language, item_key, current),
+    )
+    await callback.answer()
+
+
+@router.callback_query(
+    F.data.regexp(r"^admin:copy:style-set:(fa|en):[a-z_]+:(default|primary|success|danger)$")
+)
+async def save_copy_style(callback: CallbackQuery, state: FSMContext) -> None:
+    if not callback.data or not isinstance(callback.message, Message):
+        return
+    if await _context(callback.from_user.id, "settings.manage") is None:
+        await callback.answer(_tr("دسترسی ندارید."), show_alert=True)
+        return
+    _admin, _copy, _style_set, language, item_key, style = callback.data.split(":")
+    if item_key not in BUTTON_LABELS or style not in HOME_STYLES:
+        await callback.answer(_tr("رنگ معتبر نیست."), show_alert=True)
+        return
+    try:
+        row = await _setting_row(
+            callback.from_user.id,
+            language=language,
+            section="styles",
+        )
+        if row is None:
+            raise BackendAPIError(status_code=404, detail="missing style setting")
+        values = dict(row.get("value") or {})
+        values[item_key] = style
+        await update_application_setting(
+            actor_telegram_id=callback.from_user.id,
+            key=str(row["key"]),
+            category=str(row.get("category") or "bot_buttons"),
+            value=values,
+            expected_version=int(row["version"]),
+            description=row.get("description"),
+        )
+        clear_runtime_configuration_cache()
+        await state.clear()
+        await callback.message.edit_text(
+            _tr("✅ رنگ دکمه ذخیره شد.\n\nرنگ دکمه‌های دیگر را هم می‌توانید تغییر دهید."),
+            reply_markup=build_copy_style_items_keyboard(language, values),
+        )
+        await callback.answer(_tr("رنگ ذخیره شد."))
+    except BackendAPIError as exc:
+        await callback.answer(_api_error(exc), show_alert=True)
 
 
 @router.message(AdminExperienceStates.waiting_for_copy_value)

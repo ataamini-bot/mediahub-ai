@@ -38,6 +38,8 @@ from app.services.download_access import (  # noqa: E402
     DownloadAccessService,
     DownloadFileSizeLimitExceeded,
     DownloadQualityLimitExceeded,
+    quota_week_start_utc,
+    quota_window_start_utc,
     quota_day_start_utc,
 )
 from app.workers.tasks.download import (  # noqa: E402
@@ -266,6 +268,13 @@ def test_daily_quota_uses_tehran_calendar_day():
         30,
         tzinfo=timezone.utc,
     )
+
+
+def test_weekly_quota_starts_on_local_monday():
+    now = datetime(2026, 9, 2, 0, 15, tzinfo=timezone.utc)
+    expected = datetime(2026, 8, 31, 20, 30, tzinfo=timezone.utc)
+    assert quota_week_start_utc(now, "Asia/Tehran") == expected
+    assert quota_window_start_utc("weekly", now, "Asia/Tehran") == expected
 
 
 def test_worker_uses_snapshot_file_size_with_technical_cap():

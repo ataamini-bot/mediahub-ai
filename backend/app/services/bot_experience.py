@@ -44,6 +44,16 @@ HOME_BUTTON_ACTIONS = {
     "faq",
 }
 BUTTON_STYLES = {"default", "primary", "success", "danger"}
+DEFAULT_BUTTON_STYLES: dict[str, dict[str, str]] = {
+    "fa": {
+        "buy": "success", "subscription": "primary", "support": "primary",
+        "admin": "danger",
+    },
+    "en": {
+        "buy": "success", "subscription": "primary", "support": "primary",
+        "admin": "danger",
+    },
+}
 SUPPORT_CATEGORIES = {"download", "payment", "subscription", "account", "other"}
 SUPPORT_FILE_TYPES = {"photo", "document", "video", "voice"}
 SUPPORT_STATUSES = {"new", "in_progress", "waiting_user", "answered", "closed"}
@@ -69,7 +79,7 @@ DEFAULT_CONTENT: dict[str, dict[str, str]] = {
             "• چرا حجم نهایی کمی متفاوت است؟\n"
             "در پخش‌های چندبخشی حجم قبل از دانلود برآورد می‌شود و ممکن است اندکی تغییر کند.\n\n"
             "• سهمیه چه زمانی برمی‌گردد؟\n"
-            "سهمیه روزانه در نیمه‌شب منطقه زمانی تنظیم‌شده بازنشانی می‌شود.\n\n"
+            "سهمیه پلن رایگان هفتگی است و در آغاز هفته منطقه زمانی تنظیم‌شده بازنشانی می‌شود؛ پلن‌های دیگر طبق تنظیم خود عمل می‌کنند.\n\n"
             "• پرداخت من چه زمانی فعال می‌شود؟\n"
             "پس از بررسی رسید توسط مدیر مالی، نتیجه در همین گفتگو ارسال می‌شود."
         ),
@@ -101,7 +111,7 @@ DEFAULT_CONTENT: dict[str, dict[str, str]] = {
             "• Why can the final size differ slightly?\n"
             "Segmented streams are estimated before download and may vary slightly.\n\n"
             "• When does my quota reset?\n"
-            "Daily quota resets at midnight in the configured quota timezone.\n\n"
+            "The Free plan quota resets weekly at the start of the week in the configured timezone; other plans follow their configured period.\n\n"
             "• When is a payment activated?\n"
             "You will be notified here after a finance administrator reviews the receipt."
         ),
@@ -216,6 +226,17 @@ def _merge_string_map(defaults: dict[str, str], value: Any) -> dict[str, str]:
     return result
 
 
+def _merge_style_map(defaults: dict[str, str], value: Any) -> dict[str, str]:
+    result = dict(defaults)
+    if not isinstance(value, dict):
+        return result
+    for key in BUTTON_KEYS:
+        candidate = str(value.get(key) or "").strip().lower()
+        if candidate in BUTTON_STYLES:
+            result[key] = candidate
+    return result
+
+
 class BotExperienceService:
     def __init__(self, session: AsyncSession):
         self.session = session
@@ -231,6 +252,10 @@ class BotExperienceService:
             DEFAULT_BUTTONS[normalized],
             await settings.get_value(f"bot.buttons.{normalized}"),
         )
+        button_styles = _merge_style_map(
+            DEFAULT_BUTTON_STYLES[normalized],
+            await settings.get_value(f"bot.button_styles.{normalized}"),
+        )
         home_result = await self.session.execute(
             select(HomeButton)
             .where(HomeButton.is_active.is_(True))
@@ -245,6 +270,7 @@ class BotExperienceService:
             "language": normalized,
             "content": content,
             "buttons": buttons,
+            "button_styles": button_styles,
             "custom_buttons": [self.serialize_home_button(row) for row in home_result.scalars()],
             "required_channels": [self.serialize_channel(row) for row in channel_result.scalars()],
         }

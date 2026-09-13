@@ -10,6 +10,13 @@ from app.services.backend import get_bot_configuration
 CACHE_TTL_SECONDS = 30
 _cache: dict[str, tuple[float, dict[str, Any]]] = {}
 _PERSIAN_TEXT_RE = re.compile(r"[\u0600-\u06ff]")
+_BUTTON_STYLES = {"default", "primary", "success", "danger"}
+_DEFAULT_BUTTON_STYLES = {
+    "buy": "success",
+    "subscription": "primary",
+    "support": "primary",
+    "admin": "danger",
+}
 
 
 FALLBACK_CONTENT: dict[str, dict[str, str]] = {
@@ -22,7 +29,7 @@ FALLBACK_CONTENT: dict[str, dict[str, str]] = {
         ),
         "faq": (
             "❓ سوالات متداول\n\n"
-            "محتوای خصوصی یا نیازمند ورود قابل دریافت نیست. حجم پخش‌های چندبخشی پیش از دانلود برآورد می‌شود."
+            "محتوای خصوصی یا نیازمند ورود قابل دریافت نیست. سهمیه پلن رایگان هفتگی است و حجم پخش‌های چندبخشی پیش از دانلود برآورد می‌شود."
         ),
         "support_intro": "موضوع درخواست پشتیبانی را انتخاب کنید:",
         "support_prompt": "پیام خود را در یک نوبت بفرستید.",
@@ -35,7 +42,7 @@ FALLBACK_CONTENT: dict[str, dict[str, str]] = {
         "welcome_instruction": "🎬 Send a media link and I will inspect it.",
         "tutorial": "📘 How to use\n\nSend a media link, then choose an item and quality.",
         "faq": (
-            "❓ FAQ\n\nPrivate or login-only media is unavailable. Segmented-stream sizes are estimates."
+            "❓ FAQ\n\nPrivate or login-only media is unavailable. The Free plan quota resets weekly. Segmented-stream sizes are estimates."
         ),
         "support_intro": "Choose the subject of your support request:",
         "support_prompt": "Send your request in one message.",
@@ -64,6 +71,7 @@ def fallback_configuration(language: str) -> dict[str, Any]:
             ),
             "back_home": "🏠 منوی اصلی" if normalized == "fa" else "🏠 Main menu",
         },
+        "button_styles": dict(_DEFAULT_BUTTON_STYLES),
         "custom_buttons": [],
         "required_channels": [],
     }
@@ -94,6 +102,15 @@ async def runtime_configuration(
         result["buttons"] = {
             **fallback["buttons"],
             **(buttons if isinstance(buttons, dict) else {}),
+        }
+        styles = result.get("button_styles")
+        result["button_styles"] = {
+            **fallback["button_styles"],
+            **{
+                str(key): str(value).strip().lower()
+                for key, value in (styles.items() if isinstance(styles, dict) else [])
+                if str(value).strip().lower() in _BUTTON_STYLES
+            },
         }
         result["custom_buttons"] = list(result.get("custom_buttons") or [])
         result["required_channels"] = list(result.get("required_channels") or [])
@@ -138,6 +155,15 @@ def runtime_button(configuration: dict, key: str) -> str:
         ):
             return value.strip()
     return str(fallback_configuration(configuration.get("language", "fa"))["buttons"].get(key, key))
+
+
+def runtime_button_style(configuration: dict, key: str) -> str:
+    styles = configuration.get("button_styles")
+    if isinstance(styles, dict):
+        value = str(styles.get(key) or "").strip().lower()
+        if value in _BUTTON_STYLES:
+            return value
+    return str(fallback_configuration(configuration.get("language", "fa"))["button_styles"].get(key, "default"))
 
 
 def action_for_runtime_text(

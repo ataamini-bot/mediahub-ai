@@ -152,7 +152,8 @@ async def audit(actor_telegram_id: int = Query(gt=0), page: int = Query(default=
         .offset((page-1)*page_size).limit(page_size))).scalars()
     activity = (await db.execute(select(AuditLog.actor_telegram_id, func.count(AuditLog.id),
         func.count(AuditLog.id).filter(AuditLog.success.is_(False))).where(*filters, AuditLog.actor_telegram_id.is_not(None),
-        ~AuditLog.action.in_(("support.ticket_created", "user.language_changed")))
+        ~AuditLog.action.in_(("support.ticket_created", "user.language_changed")),
+        ~AuditLog.action.like("payment_order.%"))
         .group_by(AuditLog.actor_telegram_id).order_by(func.count(AuditLog.id).desc(), AuditLog.actor_telegram_id)
         .offset((page-1)*page_size).limit(page_size))).all()
     return {"items": [{"id": r.id, "actor": r.actor_telegram_id, "action": r.action,

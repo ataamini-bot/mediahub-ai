@@ -3,11 +3,14 @@ from app.handlers.payments import _status_caption, _subscription_status_text
 from app.keyboards.payment import (
     build_admin_payment_keyboard,
     build_home_keyboard,
+    build_home_reply_keyboard,
     build_payment_offers_keyboard,
     build_usdt_destination_keyboard,
     format_usdt_network,
     format_toman,
 )
+from app.main import download_error_text
+from app.services.backend import BackendAPIError
 
 
 def test_format_toman():
@@ -28,6 +31,30 @@ def test_home_keyboard_supports_language_and_admin_entry():
         "admin:open",
     ]
     assert buttons[3].text == "🌐 Language"
+
+
+def test_main_button_colors_are_read_from_runtime_configuration():
+    configuration = {
+        "language": "en",
+        "buttons": {
+            "buy": "Buy", "subscription": "Status", "support": "Support",
+            "language": "Language", "tutorial": "How to use", "faq": "FAQ", "admin": "Admin",
+        },
+        "button_styles": {
+            "buy": "danger", "subscription": "success", "support": "default",
+            "language": "primary", "tutorial": "danger", "faq": "success", "admin": "primary",
+        },
+        "custom_buttons": [],
+    }
+    inline = build_home_keyboard(language="en", include_admin=True, configuration=configuration)
+    inline_by_callback = {button.callback_data: button for row in inline.inline_keyboard for button in row}
+    assert inline_by_callback["payment:open"].style == "danger"
+    assert inline_by_callback["payment:status"].style == "success"
+    assert inline_by_callback["language:open"].style == "primary"
+    reply = build_home_reply_keyboard(language="en", include_admin=True, configuration=configuration)
+    reply_by_text = {button.text: button for row in reply.keyboard for button in row}
+    assert reply_by_text["Buy"].style == "danger"
+    assert reply_by_text["Admin"].style == "primary"
 
 
 def test_offer_keyboard_supports_arbitrary_custom_plan_durations():
@@ -191,3 +218,16 @@ def test_english_subscription_uses_english_plan_name():
 
     assert "💎 Plan: <b>Silver</b>" in text
     assert "نقره‌ای" not in text
+
+
+def test_weekly_free_limit_error_is_explicit():
+    error = BackendAPIError(
+        status_code=429,
+        detail={
+            "code": "weekly_download_limit_reached",
+            "plan_name": "Free",
+            "used": 3,
+            "limit": 3,
+        },
+    )
+    assert "سهمیه هفتگی" in download_error_text(error)

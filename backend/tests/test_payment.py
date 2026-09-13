@@ -104,6 +104,31 @@ def test_payment_offer_snapshots_custom_plan_limits():
     }
 
 
+def test_payment_offer_snapshots_weekly_period_without_changing_daily_contract():
+    plan = Plan(
+        id=93,
+        name="Free",
+        slug="free",
+        price=Decimal("0"),
+        duration_days=0,
+        daily_download_limit=3,
+        download_limit_period="weekly",
+        max_file_size_mb=300,
+        max_quality=720,
+        max_concurrent_downloads=1,
+        priority_processing=False,
+        forced_join_required=False,
+        is_unlimited=False,
+        ai_enabled=False,
+        sort_order=0,
+        is_system=True,
+        is_active=True,
+    )
+    offer = PaymentOffer.from_plan(plan)
+    assert offer.localized_description("en").find("downloads/week") >= 0
+    assert offer.limits_snapshot()["download_limit_period"] == "weekly"
+
+
 def test_payment_offer_uses_usdt_price_for_english_catalog():
     plan = Plan(
         id=92,

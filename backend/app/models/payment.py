@@ -1,6 +1,7 @@
 import enum
 from datetime import datetime
 from decimal import Decimal
+from uuid import UUID
 
 from sqlalchemy import (
     BigInteger,
@@ -14,6 +15,7 @@ from sqlalchemy import (
     Numeric,
     String,
     Text,
+    Uuid,
     text,
 )
 from sqlalchemy.orm import Mapped, mapped_column
@@ -61,6 +63,11 @@ class Payment(Base, TimestampMixin):
         Integer,
         primary_key=True,
         autoincrement=True,
+    )
+
+    order_id: Mapped[UUID | None] = mapped_column(
+        Uuid, ForeignKey("payment_orders.id", ondelete="RESTRICT"),
+        nullable=True, unique=True,
     )
 
     user_id: Mapped[int] = mapped_column(

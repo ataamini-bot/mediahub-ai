@@ -1,6 +1,6 @@
 import re
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 from sqlalchemy import and_, func, or_, select
@@ -40,6 +40,34 @@ def quota_day_start_utc(
     )
 
 
+def quota_week_start_utc(
+    now: datetime | None = None,
+    timezone_name: str | None = None,
+) -> datetime:
+    """Return Monday 00:00 of the current local quota week in UTC."""
+    current_utc = now or datetime.now(timezone.utc)
+    if current_utc.tzinfo is None:
+        current_utc = current_utc.replace(tzinfo=timezone.utc)
+    quota_zone = ZoneInfo(timezone_name or settings.quota_timezone)
+    local = current_utc.astimezone(quota_zone)
+    return (
+        (local - timedelta(days=local.weekday()))
+        .replace(hour=0, minute=0, second=0, microsecond=0)
+        .astimezone(timezone.utc)
+    )
+
+
+def quota_window_start_utc(
+    period: str | None,
+    now: datetime | None = None,
+    timezone_name: str | None = None,
+) -> datetime:
+    """Resolve the configured quota boundary while keeping daily as fallback."""
+    if str(period or "").strip().lower() == "weekly":
+        return quota_week_start_utc(now=now, timezone_name=timezone_name)
+    return quota_day_start_utc(now=now, timezone_name=timezone_name)
+
+
 class DownloadAccessError(RuntimeError):
     code = "download_access_error"
     status_code = 400
@@ -76,6 +104,11 @@ class DailyDownloadLimitReached(DownloadAccessError):
     status_code = 429
 
 
+class WeeklyDownloadLimitReached(DownloadAccessError):
+    code = "weekly_download_limit_reached"
+    status_code = 429
+
+
 class ConcurrentDownloadLimitReached(DownloadAccessError):
     code = "concurrent_download_limit_reached"
     status_code = 429
@@ -107,11 +140,13 @@ class DownloadEntitlement:
     max_concurrent_downloads: int
     priority_processing: bool
     forced_join_required: bool
+    download_limit_period: str = "daily"
     is_admin_bypass: bool = False
 
     def limits_snapshot(self) -> dict[str, object]:
         return {
             "daily_download_limit": self.daily_download_limit,
+            "download_limit_period": self.download_limit_period,
             "max_file_size_mb": self.max_file_size_mb,
             "max_quality": self.max_quality,
             "max_concurrent_downloads": self.max_concurrent_downloads,
@@ -185,7 +220,7 @@ class DownloadAccessService:
         self._validate_estimated_size(entitlement, estimated_size_bytes)
 
         if not entitlement.is_admin_bypass:
-            await self._validate_daily_limit(entitlement)
+            await self._validate_download_limit(entitlement)
             await self._validate_concurrency(entitlement)
 
         return entitlement
@@ -275,6 +310,7 @@ class DownloadAccessService:
                 max_concurrent_downloads=ADMIN_MAX_CONCURRENT_DOWNLOADS,
                 priority_processing=True,
                 forced_join_required=False,
+                download_limit_period="daily",
                 is_admin_bypass=True,
             )
 
@@ -326,6 +362,11 @@ class DownloadAccessService:
                 if subscription is not None
                 else plan.daily_download_limit
             ),
+            download_limit_period=(
+                subscription.download_limit_period
+                if subscription is not None
+                else (plan.download_limit_period or "daily")
+            ),
             max_file_size_mb=min(
                 plan.max_file_size_mb,
                 TECHNICAL_MAX_FILE_SIZE_MB,
@@ -373,7 +414,7 @@ class DownloadAccessService:
                 max_file_size_mb=entitlement.max_file_size_mb,
             )
 
-    async def _validate_daily_limit(
+    async def _validate_download_limit(
         self,
         entitlement: DownloadEntitlement,
     ) -> None:
@@ -385,7 +426,8 @@ class DownloadAccessService:
             self.session,
             "quota.timezone",
         )
-        day_start = quota_day_start_utc(timezone_name=timezone_name)
+        period = entitlement.download_limit_period if entitlement.download_limit_period in {"daily", "weekly"} else "daily"
+        window_start = quota_window_start_utc(period, timezone_name=timezone_name)
         reserved_statuses = (
             DownloadJobStatus.PENDING,
             DownloadJobStatus.PROCESSING,
@@ -395,12 +437,12 @@ class DownloadAccessService:
             select(func.count(DownloadJob.id)).where(
                 DownloadJob.user_id == entitlement.user_id,
                 or_(
-                    DownloadJob.delivered_at >= day_start,
+                    DownloadJob.delivered_at >= window_start,
                     DownloadJob.status.in_(reserved_statuses),
                     and_(
                         DownloadJob.status == DownloadJobStatus.COMPLETED,
                         DownloadJob.delivered_at.is_(None),
-                        DownloadJob.created_at >= day_start,
+                        DownloadJob.created_at >= window_start,
                     ),
                 ),
             )
@@ -408,12 +450,19 @@ class DownloadAccessService:
         used_or_reserved = int(result.scalar_one())
 
         if used_or_reserved >= limit:
-            raise DailyDownloadLimitReached(
-                "Daily successful output limit has been reached",
+            error_type = WeeklyDownloadLimitReached if period == "weekly" else DailyDownloadLimitReached
+            period_label = "Weekly" if period == "weekly" else "Daily"
+            raise error_type(
+                f"{period_label} successful output limit has been reached",
                 plan_name=entitlement.plan_name,
                 limit=limit,
                 used=used_or_reserved,
+                period=period,
             )
+
+    async def _validate_daily_limit(self, entitlement: DownloadEntitlement) -> None:
+        """Backward-compatible wrapper for integrations using the old method."""
+        await self._validate_download_limit(entitlement)
 
     async def _validate_concurrency(
         self,

@@ -31,6 +31,10 @@ class Plan(Base, TimestampMixin):
             name="ck_plans_daily_limit_positive",
         ),
         CheckConstraint(
+            "download_limit_period IN ('daily', 'weekly')",
+            name="ck_plans_download_limit_period",
+        ),
+        CheckConstraint(
             "max_file_size_mb IS NULL OR max_file_size_mb > 0",
             name="ck_plans_file_size_positive",
         ),
@@ -102,6 +106,15 @@ class Plan(Base, TimestampMixin):
     daily_download_limit: Mapped[int | None] = mapped_column(
         Integer,
         nullable=True,
+    )
+
+    # The numeric limit is retained for compatibility with existing plans;
+    # this field determines the window in which it is consumed.
+    download_limit_period: Mapped[str] = mapped_column(
+        String(16),
+        default="daily",
+        server_default="daily",
+        nullable=False,
     )
 
     max_file_size_mb: Mapped[int | None] = mapped_column(

@@ -10,7 +10,8 @@ English UI, pagination, and confirmation flows.
 - USDT submissions require a TxID and network. A screenshot is optional. The
   same normalized TxID cannot be submitted twice on the same network; review is
   still manual and no blockchain confirmation is claimed by the bot.
-- Same-plan renewals add time and daily quota. Upgrades start immediately and
+- Same-plan renewals add time and keep the plan's quota period. The Free plan
+  uses a weekly quota and reports a weekly-limit error. Upgrades start immediately and
   preserve the exact remaining time. Downgrades and mixed changes start after
   all already-paid entitlements. Future scheduled purchases are shifted when a
   renewal extends the current entitlement.
@@ -30,6 +31,9 @@ English UI, pagination, and confirmation flows.
 - Long text and inline menus paginate without dropping rows, links, Unicode, or
   attachments. Sensitive final actions are actor-, message-, and form-bound
   confirmations that expire after five minutes and cannot be replayed.
+- Built-in Persian and English home buttons expose Telegram-supported styles
+  (`default`, `primary`, `success`, `danger`) in the same admin text/button
+  settings area; custom home buttons retain their independent style control.
 
 ## Release smoke checks
 

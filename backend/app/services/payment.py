@@ -1,6 +1,7 @@
 import re
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal
 
 from sqlalchemy import and_, func, or_, select, update
 from sqlalchemy.exc import IntegrityError
@@ -9,20 +10,21 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import settings
 from app.core.language import effective_language
 from app.models.payment import Payment, PaymentStatus
+from app.models.payment_order import PaymentOrder
 from app.models.download_job import DownloadJob, DownloadJobStatus
 from app.models.plan import Plan
 from app.models.subscription import Subscription, SubscriptionStatus
 from app.models.user import User, UserStatus
 from app.schemas.payment import PaymentCreate
 from app.services.admin_access import AdminAccessService, PermissionCode
-from app.services.payment_offers import get_payment_offer
+from app.services.payment_offers import PaymentOffer, get_payment_offer
 from app.services.managed_settings import (
     ensure_public_operation,
     get_managed_setting,
     get_receipt_max_size_mb,
 )
 from app.services.payment_management import PaymentManagementService
-from app.services.download_access import quota_day_start_utc
+from app.services.download_access import quota_window_start_utc
 from app.services.audit import AuditService
 
 
@@ -66,6 +68,7 @@ class PaymentActionResult:
     user: User
     subscription: Subscription | None = None
     already_reviewed: bool = False
+    already_submitted: bool = False
 
 
 def add_duration_days(value: datetime, days: int) -> datetime:
@@ -101,6 +104,12 @@ def payment_daily_download_limit(payment: Payment, plan: Plan) -> int | None:
     except (TypeError, ValueError):
         return plan.daily_download_limit
     return parsed if parsed > 0 else plan.daily_download_limit
+
+
+def payment_download_limit_period(payment: Payment, plan: Plan) -> str:
+    snapshot = payment.plan_limits_snapshot if isinstance(payment.plan_limits_snapshot, dict) else {}
+    value = str(snapshot.get("download_limit_period") or plan.download_limit_period or "daily").strip().lower()
+    return value if value in {"daily", "weekly"} else "daily"
 
 
 def canonical_network(value):
@@ -191,11 +200,6 @@ class PaymentService:
         self,
         data: PaymentCreate,
     ) -> PaymentActionResult:
-        await ensure_public_operation(self.session, "payments")
-        self.validate_receipt(
-            data,
-            await get_receipt_max_size_mb(self.session),
-        )
         result = await self.session.execute(
             select(User)
             .where(User.telegram_id == data.telegram_id)
@@ -219,13 +223,55 @@ class PaymentService:
                 f"{data.currency} payments are not available in the active language"
             )
 
-        offer = await get_payment_offer(
-            self.session,
-            data.offer_code,
-            currency=data.currency,
-        )
+        from app.services.payment_orders import PaymentOrderError, PaymentOrderService
+        order = None
+        if data.order_id is not None:
+            order = await PaymentOrderService(self.session).get(data.order_id, user.id, lock=True)
+            if order.currency != data.currency or order.offer_snapshot["code"] != data.offer_code:
+                raise PaymentOrderError("payment_order_mismatch")
+            if order.status == "submitted":
+                previous = (await self.session.execute(select(Payment).where(Payment.order_id == order.id))).scalar_one()
+                # A lost HTTP response may be retried without creating another
+                # payment or sending another set of review buttons.
+                if (normalize_transaction_id(data.txid) != normalize_transaction_id(previous.txid)
+                        or data.receipt_file_unique_id != previous.receipt_file_unique_id
+                        or data.receipt_file_id != previous.receipt_file_id):
+                    raise PaymentOrderError("payment_order_submitted")
+                await self.session.commit()
+                return PaymentActionResult(payment=previous, user=user, already_submitted=True)
+            if order.status != "open":
+                raise PaymentOrderError("payment_order_closed")
+            saved = order.offer_snapshot
+            offer = PaymentOffer(
+                code=saved["code"], label=saved["label"], plan_id=order.plan_id,
+                price=Decimal(saved["price"]), duration_days=saved["duration_days"],
+                daily_download_limit=saved["daily_download_limit"],
+                download_limit_period=saved.get("download_limit_period", "daily"),
+                max_file_size_mb=saved["max_file_size_mb"], max_quality=saved["max_quality"],
+                max_concurrent_downloads=saved["max_concurrent_downloads"],
+                priority_processing=saved["priority_processing"], forced_join_required=saved["forced_join_required"],
+                description=saved.get("description_fa"), description_en=saved.get("description_en"),
+            )
+            destination_snapshot = order.destination_snapshot.copy()
+            payment_card_id = order.payment_card_id
+            payment_method = "usdt" if order.currency == "USDT" else "card"
+            network_code = canonical_network(destination_snapshot.get("network_code")) if payment_method == "usdt" else None
+            txid = str(data.txid or "").strip() if payment_method == "usdt" else None
+            txid_normalized = normalize_transaction_id(txid) if txid is not None else None
+            self.validate_receipt(data, int(order.receipt_rules["max_size_mb"]))
+        else:
+            # Compatibility for checkout screens opened before this release.
+            # Every checkout opened by the updated bot supplies an order id.
+            existing_order = (await self.session.execute(select(PaymentOrder.id).where(
+                PaymentOrder.user_id == user.id, PaymentOrder.status == "open"
+            ))).scalar_one_or_none()
+            if existing_order is not None:
+                raise PaymentOrderError("open_payment_order_exists", order_id=str(existing_order))
+            await ensure_public_operation(self.session, "payments")
+            self.validate_receipt(data, await get_receipt_max_size_mb(self.session))
+            offer = await get_payment_offer(self.session, data.offer_code, currency=data.currency)
         management = PaymentManagementService(self.session)
-        if data.currency == "USDT":
+        if order is None and data.currency == "USDT":
             payment_card_id = None
             destination_snapshot = await management.usdt_destination_for_submission(
                 data.usdt_destination_id
@@ -234,7 +280,7 @@ class PaymentService:
             network_code = canonical_network(destination_snapshot.get("network_code"))
             txid = str(data.txid or "").strip()
             txid_normalized = normalize_transaction_id(txid)
-        else:
+        elif order is None:
             payment_card_id, destination_snapshot = (
                 await management.payment_card_for_submission(data.payment_card_id)
             )
@@ -287,6 +333,7 @@ class PaymentService:
                 )
 
         payment = Payment(
+            order_id=order.id if order is not None else None,
             user_id=user.id,
             plan_id=offer.plan_id,
             amount=offer.price,
@@ -311,6 +358,10 @@ class PaymentService:
             usdt_network_code=network_code,
         )
         self.session.add(payment)
+        if order is not None:
+            order.status = "submitted"
+            AuditService(self.session).record(action="payment_order.submitted", actor_user_id=user.id,
+                actor_telegram_id=user.telegram_id, target_type="payment_order", target_id=str(order.id))
 
         try:
             await self.session.commit()
@@ -429,6 +480,7 @@ class PaymentService:
 
         if current_subscription is None:
             purchased_daily_limit = payment_daily_download_limit(payment, plan)
+            purchased_limit_period = payment_download_limit_period(payment, plan)
             future_end = (await self.session.execute(
                 select(func.max(Subscription.expires_at)).where(
                     Subscription.user_id == user.id,
@@ -449,6 +501,7 @@ class PaymentService:
                     payment.duration_days,
                 ),
                 daily_download_limit=purchased_daily_limit,
+                download_limit_period=purchased_limit_period,
                 auto_renew=False,
             )
             self.session.add(subscription)
@@ -463,6 +516,7 @@ class PaymentService:
                 subscription.daily_download_limit,
                 payment_daily_download_limit(payment, plan),
             )
+            subscription.download_limit_period = payment_download_limit_period(payment, plan)
             payment.subscription_change_type = "renewal"
         else:
             change_type = classify_plan_change(current_plan, plan)
@@ -478,6 +532,7 @@ class PaymentService:
                     started_at=now,
                     expires_at=add_duration_days(now, payment.duration_days) + remaining_time,
                     daily_download_limit=payment_daily_download_limit(payment, plan),
+                    download_limit_period=payment_download_limit_period(payment, plan),
                     auto_renew=False,
                 )
                 self.session.add(subscription)
@@ -501,6 +556,7 @@ class PaymentService:
                     started_at=start_at,
                     expires_at=add_duration_days(start_at, payment.duration_days),
                     daily_download_limit=payment_daily_download_limit(payment, plan),
+                    download_limit_period=payment_download_limit_period(payment, plan),
                     auto_renew=False,
                 )
                 self.session.add(subscription)
@@ -633,11 +689,12 @@ class PaymentService:
         )
         downloads_done = int(count_result.scalar() or 0)
         daily_limit = subscription.daily_download_limit
+        limit_period = subscription.download_limit_period if subscription.download_limit_period in {"daily", "weekly"} else (plan.download_limit_period or "daily")
         timezone_name = await get_managed_setting(
             self.session,
             "quota.timezone",
         )
-        day_start = quota_day_start_utc(timezone_name=timezone_name)
+        window_start = quota_window_start_utc(limit_period, timezone_name=timezone_name)
         reserved_statuses = (
             DownloadJobStatus.PENDING,
             DownloadJobStatus.PROCESSING,
@@ -647,12 +704,12 @@ class PaymentService:
             select(func.count(DownloadJob.id)).where(
                 DownloadJob.user_id == user.id,
                 or_(
-                    DownloadJob.delivered_at >= day_start,
+                    DownloadJob.delivered_at >= window_start,
                     DownloadJob.status.in_(reserved_statuses),
                     and_(
                         DownloadJob.status == DownloadJobStatus.COMPLETED,
                         DownloadJob.delivered_at.is_(None),
-                        DownloadJob.created_at >= day_start,
+                        DownloadJob.created_at >= window_start,
                     ),
                 ),
             )
@@ -670,6 +727,7 @@ class PaymentService:
             "registered_at": user.created_at,
             "downloads_done": downloads_done,
             "daily_download_limit": daily_limit,
+            "download_limit_period": limit_period,
             "remaining_downloads": None if daily_limit is None else max(daily_limit - used_today, 0),
         }
 

@@ -10,7 +10,7 @@ from app.services.application_settings import (
 )
 
 
-SettingKind = Literal["boolean", "integer", "timezone", "string_map"]
+SettingKind = Literal["boolean", "integer", "timezone", "string_map", "style_map"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -53,6 +53,7 @@ BUTTON_KEYS = frozenset(
         "back_home",
     }
 )
+BUTTON_STYLES = frozenset({"default", "primary", "success", "danger"})
 
 
 MANAGED_SETTINGS: dict[str, ManagedSetting] = {
@@ -138,6 +139,24 @@ MANAGED_SETTINGS: dict[str, ManagedSetting] = {
         allowed_keys=BUTTON_KEYS,
         value_max_length=64,
     ),
+    "bot.button_styles.fa": ManagedSetting(
+        key="bot.button_styles.fa",
+        category="bot_buttons",
+        kind="style_map",
+        default={},
+        label_fa="رنگ دکمه‌های فارسی",
+        description_fa="رنگ دکمه‌های اصلی بر اساس سبک‌های رسمی تلگرام",
+        allowed_keys=BUTTON_KEYS,
+    ),
+    "bot.button_styles.en": ManagedSetting(
+        key="bot.button_styles.en",
+        category="bot_buttons",
+        kind="style_map",
+        default={},
+        label_fa="رنگ دکمه‌های انگلیسی",
+        description_fa="Telegram styles for English built-in buttons",
+        allowed_keys=BUTTON_KEYS,
+    ),
 }
 
 
@@ -185,6 +204,20 @@ def validate_managed_setting(key: str, value: Any) -> Any:
             if len(rendered) > maximum:
                 raise SettingValidationError("Text setting value is too long")
             normalized[str(raw_key)] = rendered
+        return normalized
+
+    if definition.kind == "style_map":
+        if not isinstance(value, dict):
+            raise SettingValidationError("Button styles must be an object")
+        allowed_keys = definition.allowed_keys or frozenset()
+        if not set(value).issubset(allowed_keys):
+            raise SettingValidationError("Setting contains an unknown button key")
+        normalized: dict[str, str] = {}
+        for raw_key, raw_value in value.items():
+            style = str(raw_value or "").strip().lower()
+            if style not in BUTTON_STYLES:
+                raise SettingValidationError("Unsupported Telegram button style")
+            normalized[str(raw_key)] = style
         return normalized
 
     raise SettingValidationError("Unsupported managed setting type")

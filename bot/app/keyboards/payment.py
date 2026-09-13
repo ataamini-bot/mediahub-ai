@@ -1,4 +1,5 @@
 from app.localization import tr as _tr, localized_collection as _localized_collection
+from decimal import Decimal, InvalidOperation
 from aiogram.types import (
     InlineKeyboardButton,
     InlineKeyboardMarkup,
@@ -7,7 +8,7 @@ from aiogram.types import (
 )
 
 from app.i18n import translate
-from app.runtime_config import fallback_configuration, runtime_button
+from app.runtime_config import fallback_configuration, runtime_button, runtime_button_style
 
 
 def _configuration(language: str, value: dict | None) -> dict:
@@ -21,6 +22,13 @@ def _reply_button(text: str, style: str = "default") -> KeyboardButton:
     return KeyboardButton(**kwargs)
 
 
+def _inline_button(*, text: str, callback_data: str, style: str = "default") -> InlineKeyboardButton:
+    kwargs = {"text": text, "callback_data": callback_data}
+    if style in {"primary", "success", "danger"}:
+        kwargs["style"] = style
+    return InlineKeyboardButton(**kwargs)
+
+
 def format_toman(value: object) -> str:
     try:
         amount = int(float(str(value)))
@@ -32,8 +40,14 @@ def format_toman(value: object) -> str:
 
 def format_usdt(value: object) -> str:
     try:
-        return f"{float(str(value)):.2f} USDT"
-    except (TypeError, ValueError):
+        amount = Decimal(str(value))
+        if not amount.is_finite():
+            raise ValueError("Invalid amount")
+        # Catalog prices support four decimal places. Never change the
+        # amount a customer is instructed to transfer through display rounding.
+        places = max(2, -amount.normalize().as_tuple().exponent)
+        return f"{amount:.{places}f} USDT"
+    except (InvalidOperation, TypeError, ValueError):
         return f"{value} USDT"
 
 
@@ -63,38 +77,25 @@ def build_home_keyboard(
     config = _configuration(language, configuration)
     rows = [
         [
-            InlineKeyboardButton(
-                text=runtime_button(config, "buy"),
-                callback_data="payment:open",
-                style="success",
-            )
+            _inline_button(text=runtime_button(config, "buy"), callback_data="payment:open", style=runtime_button_style(config, "buy"))
         ],
         [
-            InlineKeyboardButton(
-                text=runtime_button(config, "subscription"),
-                callback_data="payment:status",
-                style="primary",
-            )
+            _inline_button(text=runtime_button(config, "subscription"), callback_data="payment:status", style=runtime_button_style(config, "subscription"))
         ],
         [
-            InlineKeyboardButton(
-                text=runtime_button(config, "support"),
-                callback_data="support:open",
-                style="primary",
-            ),
-            InlineKeyboardButton(
-                text=runtime_button(config, "language"),
-                callback_data="language:open",
-            )
+            _inline_button(text=runtime_button(config, "support"), callback_data="support:open", style=runtime_button_style(config, "support")),
+            _inline_button(text=runtime_button(config, "language"), callback_data="language:open", style=runtime_button_style(config, "language")),
         ],
         [
             InlineKeyboardButton(
                 text=runtime_button(config, "tutorial"),
                 callback_data="home:tutorial",
+                **({"style": runtime_button_style(config, "tutorial")} if runtime_button_style(config, "tutorial") != "default" else {}),
             ),
             InlineKeyboardButton(
                 text=runtime_button(config, "faq"),
                 callback_data="home:faq",
+                **({"style": runtime_button_style(config, "faq")} if runtime_button_style(config, "faq") != "default" else {}),
             ),
         ],
     ]
@@ -121,6 +122,7 @@ def build_home_keyboard(
                 InlineKeyboardButton(
                     text=runtime_button(config, "admin"),
                     callback_data="admin:open",
+                    **({"style": runtime_button_style(config, "admin")} if runtime_button_style(config, "admin") != "default" else {}),
                 )
             ]
         )
@@ -140,16 +142,16 @@ def build_home_reply_keyboard(
     config = _configuration(language, configuration)
     rows = [
         [
-            _reply_button(runtime_button(config, "buy"), "success"),
-            _reply_button(runtime_button(config, "subscription"), "primary"),
+            _reply_button(runtime_button(config, "buy"), runtime_button_style(config, "buy")),
+            _reply_button(runtime_button(config, "subscription"), runtime_button_style(config, "subscription")),
         ],
         [
-            _reply_button(runtime_button(config, "support"), "primary"),
-            _reply_button(runtime_button(config, "language")),
+            _reply_button(runtime_button(config, "support"), runtime_button_style(config, "support")),
+            _reply_button(runtime_button(config, "language"), runtime_button_style(config, "language")),
         ],
         [
-            _reply_button(runtime_button(config, "tutorial")),
-            _reply_button(runtime_button(config, "faq")),
+            _reply_button(runtime_button(config, "tutorial"), runtime_button_style(config, "tutorial")),
+            _reply_button(runtime_button(config, "faq"), runtime_button_style(config, "faq")),
         ],
     ]
 
@@ -169,7 +171,7 @@ def build_home_reply_keyboard(
 
     if include_admin:
         rows.append(
-            [_reply_button(runtime_button(config, "admin"), "danger")]
+            [_reply_button(runtime_button(config, "admin"), runtime_button_style(config, "admin"))]
         )
 
     return ReplyKeyboardMarkup(
@@ -286,7 +288,7 @@ def build_usdt_destination_keyboard(
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def build_receipt_cancel_keyboard(language: str = "fa") -> InlineKeyboardMarkup:
+def build_receipt_cancel_keyboard(language: str = "fa", order_id: str | None = None) -> InlineKeyboardMarkup:
     is_fa = language != "en"
     return InlineKeyboardMarkup(
         inline_keyboard=[
@@ -297,13 +299,13 @@ def build_receipt_cancel_keyboard(language: str = "fa") -> InlineKeyboardMarkup:
                         if is_fa
                         else "🔙 Choose another plan"
                     ),
-                    callback_data="payment:open",
+                    callback_data=f"payment:order:change:{order_id}" if order_id else "payment:open",
                 )
             ],
             [
                 InlineKeyboardButton(
                     text=_tr("❌ انصراف") if is_fa else "❌ Cancel",
-                    callback_data="payment:cancel",
+                    callback_data=f"payment:order:cancel:{order_id}" if order_id else "payment:cancel",
                 )
             ],
         ]
@@ -335,20 +337,20 @@ def build_admin_payment_keyboard(
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def build_usdt_screenshot_keyboard() -> InlineKeyboardMarkup:
+def build_usdt_screenshot_keyboard(order_id: str | None = None) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
                 InlineKeyboardButton(
                     text="⏭ Submit without screenshot",
-                    callback_data="payment:usdt-screenshot:skip",
+                    callback_data=f"payment:order:submit:{order_id}" if order_id else "payment:usdt-screenshot:skip",
                     style="success",
                 )
             ],
             [
                 InlineKeyboardButton(
                     text="❌ Cancel",
-                    callback_data="payment:cancel",
+                    callback_data=f"payment:order:cancel:{order_id}" if order_id else "payment:cancel",
                 )
             ],
         ]

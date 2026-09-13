@@ -37,6 +37,7 @@ class PaymentOffer:
     forced_join_required: bool
     description: str | None
     description_en: str | None
+    download_limit_period: str = "daily"
 
     @classmethod
     def from_plan(cls, plan: Plan, *, currency: str = "IRT") -> "PaymentOffer":
@@ -52,6 +53,7 @@ class PaymentOffer:
             duration_days=plan.duration_days,
             price=price,
             daily_download_limit=plan.daily_download_limit,
+            download_limit_period=(plan.download_limit_period or "daily"),
             max_file_size_mb=plan.max_file_size_mb,
             max_quality=plan.max_quality,
             max_concurrent_downloads=plan.max_concurrent_downloads,
@@ -67,10 +69,11 @@ class PaymentOffer:
                 return self.description_en
             # Legacy plans predate bilingual descriptions. Never leak the
             # Persian description into an English payment flow.
+            period_label = "week" if self.download_limit_period == "weekly" else "day"
             limit = (
                 "unlimited"
                 if self.daily_download_limit is None
-                else f"{self.daily_download_limit} downloads/day"
+                else f"{self.daily_download_limit} downloads/{period_label}"
             )
             quality = (
                 "the highest available quality"
@@ -84,7 +87,7 @@ class PaymentOffer:
         return self.description or "توضیحی برای این پلن ثبت نشده است."
 
     def limits_snapshot(self) -> dict:
-        return {
+        snapshot = {
             "daily_download_limit": self.daily_download_limit,
             "max_file_size_mb": self.max_file_size_mb,
             "max_quality": self.max_quality,
@@ -92,6 +95,9 @@ class PaymentOffer:
             "priority_processing": self.priority_processing,
             "forced_join_required": self.forced_join_required,
         }
+        if self.download_limit_period != "daily":
+            snapshot["download_limit_period"] = self.download_limit_period
+        return snapshot
 
 
 async def get_payment_offers(
@@ -206,6 +212,7 @@ async def get_payment_configuration(
                 "price": offer.price,
                 "currency": currency,
                 "daily_download_limit": offer.daily_download_limit,
+                "download_limit_period": offer.download_limit_period,
                 "max_file_size_mb": offer.max_file_size_mb,
                 "max_quality": offer.max_quality,
                 "max_concurrent_downloads": offer.max_concurrent_downloads,

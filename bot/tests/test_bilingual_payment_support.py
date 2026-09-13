@@ -1,6 +1,7 @@
 import asyncio
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock
+import pytest
 
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.storage.base import StorageKey
@@ -23,6 +24,11 @@ from app.runtime_config import fallback_configuration, runtime_content
 from app.services.backend import BackendAPIError
 from app.state.payment import PaymentStates
 from app.utils.payment_qr import build_usdt_address_qr
+
+
+@pytest.fixture(autouse=True)
+def no_saved_checkout(monkeypatch):
+    monkeypatch.setattr(payments, "get_current_payment_order", AsyncMock(return_value=None))
 
 
 def test_english_support_and_payment_controls_have_no_persian_text():
@@ -224,11 +230,16 @@ def test_selected_usdt_network_is_revalidated_before_showing_its_qr(
         "get_telegram_user",
         AsyncMock(return_value={"effective_language": "en"}),
     )
-    get_configuration = AsyncMock(return_value=_usdt_configuration())
+    configuration = _usdt_configuration()
+    create_order = AsyncMock(return_value={
+        "id": "36d081d1-05a1-4dc0-bf21-a3e583b0de5e", "status": "open", "currency": "USDT",
+        "offer": configuration["offers"][0], "destination": configuration["destinations"][1],
+        "receipt": configuration["receipt"],
+    })
     monkeypatch.setattr(
         payments,
-        "get_payment_configuration",
-        get_configuration,
+        "create_payment_order",
+        create_order,
     )
     monkeypatch.setattr(
         payments,
@@ -245,10 +256,8 @@ def test_selected_usdt_network_is_revalidated_before_showing_its_qr(
         assert (await state.get_data())["usdt_destination_id"] == 12
 
     asyncio.run(exercise())
-    get_configuration.assert_awaited_once_with(
-        select_destination=True,
-        language="en",
-    )
+    create_order.assert_awaited_once_with(telegram_id=callback.from_user.id,
+        offer_code="global", currency="USDT", usdt_destination_id=12)
     assert "Ethereum" in answer_photo.await_args.kwargs["caption"]
     assert "0x2222222222222222222222222222222222222222" in (
         answer_photo.await_args.kwargs["caption"]

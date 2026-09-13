@@ -2,6 +2,7 @@ from datetime import datetime
 from decimal import Decimal
 import re
 from typing import Any, Literal
+from uuid import UUID
 
 from pydantic import BaseModel, Field, computed_field, field_validator, model_validator
 
@@ -21,6 +22,7 @@ class PaymentOfferResponse(BaseModel):
     max_concurrent_downloads: int
     priority_processing: bool
     forced_join_required: bool
+    download_limit_period: Literal["daily", "weekly"] = "daily"
     description: str | None = None
     description_fa: str | None = None
     description_en: str | None = None
@@ -55,6 +57,7 @@ class PaymentConfigurationResponse(BaseModel):
 
 
 class PaymentCreate(BaseModel):
+    order_id: UUID | None = None
     telegram_id: int = Field(gt=0)
     offer_code: str = Field(min_length=3, max_length=100)
     currency: Literal["IRT", "USDT"] = "IRT"
@@ -131,6 +134,7 @@ class PaymentReject(PaymentAdminReview):
 
 class PaymentResponse(BaseModel):
     id: int
+    order_id: UUID | None = None
     user_id: int
     plan_id: int
     amount: Decimal
@@ -200,6 +204,36 @@ class PaymentActionResponse(BaseModel):
     user: PaymentUserResponse
     subscription: SubscriptionResponse | None = None
     already_reviewed: bool = False
+    already_submitted: bool = False
+
+
+class PaymentOrderCreate(BaseModel):
+    telegram_id: int = Field(gt=0)
+    offer_code: str = Field(min_length=3, max_length=100)
+    currency: Literal["IRT", "USDT"]
+    usdt_destination_id: int | None = Field(default=None, gt=0)
+
+    @model_validator(mode="after")
+    def validate_destination(self):
+        self.offer_code = self.offer_code.strip().lower()
+        if (self.currency == "USDT") != (self.usdt_destination_id is not None):
+            raise ValueError("Choose a network for USDT only")
+        return self
+
+
+class PaymentOrderActor(BaseModel):
+    telegram_id: int = Field(gt=0)
+
+
+class PaymentOrderResponse(BaseModel):
+    id: UUID
+    status: Literal["open", "submitted", "cancelled"]
+    currency: Literal["IRT", "USDT"]
+    offer: PaymentOfferResponse
+    destination: PaymentDestinationResponse
+    receipt: PaymentReceiptRulesResponse
+    created_at: datetime
+    payment_id: int | None = None
 
 
 class CurrentSubscriptionResponse(BaseModel):
@@ -214,4 +248,5 @@ class CurrentSubscriptionResponse(BaseModel):
     registered_at: datetime | None = None
     downloads_done: int = 0
     daily_download_limit: int | None = None
+    download_limit_period: Literal["daily", "weekly"] = "daily"
     remaining_downloads: int | None = None

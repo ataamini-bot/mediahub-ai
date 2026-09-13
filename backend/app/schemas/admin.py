@@ -1,6 +1,6 @@
 from datetime import datetime
 from decimal import Decimal
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import (
     BaseModel,
@@ -310,6 +310,7 @@ class AdminPlanResponse(BaseModel):
     currency: str = "IRT"
     duration_days: int
     daily_download_limit: int | None
+    download_limit_period: Literal["daily", "weekly"] = "daily"
     max_file_size_mb: int | None
     max_quality: int | None
     max_concurrent_downloads: int
@@ -334,6 +335,7 @@ class AdminPlanCreate(BaseModel):
     price_usdt: Decimal | None = Field(default=None, gt=0, max_digits=12)
     duration_days: int = Field(ge=1, le=3650)
     daily_download_limit: int | None = Field(default=None, ge=0, le=1_000_000)
+    download_limit_period: Literal["daily", "weekly"] = "daily"
     max_file_size_mb: int = Field(ge=1, le=1900)
     max_quality: int
     max_concurrent_downloads: int = Field(ge=1, le=3)
@@ -354,6 +356,7 @@ class AdminPlanUpdate(BaseModel):
     price_usdt: Decimal | None = Field(default=None, gt=0, max_digits=12)
     duration_days: int | None = Field(default=None, ge=1, le=3650)
     daily_download_limit: int | None = Field(default=None, ge=0, le=1_000_000)
+    download_limit_period: Literal["daily", "weekly"] | None = None
     max_file_size_mb: int | None = Field(default=None, ge=1, le=1900)
     max_quality: int | None = None
     max_concurrent_downloads: int | None = Field(default=None, ge=1, le=3)

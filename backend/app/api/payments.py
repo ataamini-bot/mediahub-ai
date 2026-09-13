@@ -1,5 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
+from uuid import UUID
 
 from app.core.internal_auth import require_internal_api_key
 from app.db.session import get_db
@@ -14,6 +15,7 @@ from app.schemas.payment import (
     PaymentResponse,
     PaymentUserResponse,
     SubscriptionResponse,
+    PaymentOrderCreate, PaymentOrderActor, PaymentOrderResponse,
 )
 from app.services.payment import (
     DuplicateReceipt,
@@ -31,6 +33,7 @@ from app.services.payment_offers import (
 )
 from app.services.managed_settings import PublicOperationDisabled
 from app.services.payment_management import PaymentDestinationValidation
+from app.services.payment_orders import PaymentOrderService, PaymentOrderError
 
 
 router = APIRouter(
@@ -50,7 +53,48 @@ def serialize_action(result: PaymentActionResult) -> PaymentActionResponse:
             else None
         ),
         already_reviewed=result.already_reviewed,
+        already_submitted=result.already_submitted,
     )
+
+
+async def order_response(db, operation):
+    try:
+        order = await operation
+        return await PaymentOrderService(db).payload(order)
+    except (PaymentOrderError, PaymentConfigurationError, PaymentDestinationValidation,
+            LookupError, PermissionError, PublicOperationDisabled) as exc:
+        await db.rollback()
+        if isinstance(exc, PaymentOrderError):
+            raise HTTPException(exc.status_code, exc.detail) from exc
+        if isinstance(exc, PublicOperationDisabled):
+            raise HTTPException(503, exc.detail()) from exc
+        status = (403 if isinstance(exc, PermissionError) else 404 if isinstance(exc, LookupError)
+                  else 503 if isinstance(exc, PaymentConfigurationError) else 409)
+        raise HTTPException(status, str(exc)) from exc
+
+
+@router.post("/orders", response_model=PaymentOrderResponse)
+async def start_order(data: PaymentOrderCreate, db: AsyncSession = Depends(get_db)):
+    return await order_response(db, PaymentOrderService(db).start(data))
+
+
+@router.get("/orders/current", response_model=PaymentOrderResponse | None)
+async def current_order(telegram_id: int = Query(gt=0), db: AsyncSession = Depends(get_db)):
+    return await order_response(db, PaymentOrderService(db).current(telegram_id))
+
+
+@router.get("/orders/{order_id}", response_model=PaymentOrderResponse)
+async def get_order(order_id: UUID, telegram_id: int = Query(gt=0), db: AsyncSession = Depends(get_db)):
+    async def load():
+        service = PaymentOrderService(db)
+        user = await service.user(telegram_id)
+        return await service.get(order_id, user.id)
+    return await order_response(db, load())
+
+
+@router.post("/orders/{order_id}/cancel", response_model=PaymentOrderResponse)
+async def cancel_order(order_id: UUID, data: PaymentOrderActor, db: AsyncSession = Depends(get_db)):
+    return await order_response(db, PaymentOrderService(db).cancel(order_id, data.telegram_id))
 
 
 @router.get(
@@ -87,6 +131,9 @@ async def create_payment(
 
     try:
         return serialize_action(await service.create_payment(data))
+    except PaymentOrderError as exc:
+        await db.rollback()
+        raise HTTPException(exc.status_code, exc.detail) from exc
     except PaymentConfigurationError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     except PendingPaymentExists as exc:

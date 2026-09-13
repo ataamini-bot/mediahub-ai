@@ -160,6 +160,13 @@ class PlanManagementService:
 
         return normalized
 
+    @staticmethod
+    def normalize_download_limit_period(value: str | None) -> str:
+        normalized = str(value or "daily").strip().lower()
+        if normalized not in {"daily", "weekly"}:
+            raise PlanValidationError("Download limit period must be daily or weekly")
+        return normalized
+
     @classmethod
     def normalize_file_size_mb(cls, value: int | str) -> int:
         normalized = cls.normalize_integer(value, field="max_file_size_mb")
@@ -244,6 +251,7 @@ class PlanManagementService:
         price: Decimal,
         price_usdt: Decimal | None = None,
         daily_download_limit: int | None,
+        download_limit_period: str = "daily",
         max_file_size_mb: int,
         max_quality: int,
         max_concurrent_downloads: int,
@@ -272,6 +280,7 @@ class PlanManagementService:
             ),
             duration_days=self.normalize_duration_days(duration_days),
             daily_download_limit=normalized_daily_limit,
+            download_limit_period=self.normalize_download_limit_period(download_limit_period),
             max_file_size_mb=self.normalize_file_size_mb(max_file_size_mb),
             max_quality=self.normalize_quality(max_quality),
             ai_enabled=False,
@@ -320,6 +329,7 @@ class PlanManagementService:
         price_usdt_supplied: bool = False,
         daily_download_limit: int | None = None,
         daily_limit_supplied: bool = False,
+        download_limit_period: str | None = None,
         max_file_size_mb: int | None = None,
         max_quality: int | None = None,
         max_concurrent_downloads: int | None = None,
@@ -391,6 +401,9 @@ class PlanManagementService:
             )
             plan.daily_download_limit = normalized_limit
             plan.is_unlimited = normalized_limit is None
+
+        if download_limit_period is not None:
+            plan.download_limit_period = self.normalize_download_limit_period(download_limit_period)
 
         if max_file_size_mb is not None:
             plan.max_file_size_mb = self.normalize_file_size_mb(
@@ -485,6 +498,7 @@ class PlanManagementService:
                     else None
                 ),
                 "daily_download_limit": plan.daily_download_limit,
+                "download_limit_period": plan.download_limit_period,
                 "max_file_size_mb": plan.max_file_size_mb,
                 "max_quality": plan.max_quality,
                 "max_concurrent_downloads": plan.max_concurrent_downloads,

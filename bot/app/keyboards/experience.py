@@ -1,7 +1,7 @@
 from app.localization import tr as _tr, localized_collection as _localized_collection
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
-from app.runtime_config import runtime_button
+from app.runtime_config import runtime_button, runtime_button_style
 
 
 SUPPORT_CATEGORY_LABELS = {
@@ -242,7 +242,7 @@ def build_required_membership_keyboard(
             InlineKeyboardButton(
                 text=runtime_button(configuration, "check_membership"),
                 callback_data="membership:check",
-                style="success",
+                **({"style": runtime_button_style(configuration, "check_membership")} if runtime_button_style(configuration, "check_membership") != "default" else {}),
             )
         ]
     )

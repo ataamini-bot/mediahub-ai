@@ -1049,29 +1049,33 @@ async def _payment_request(
 ) -> dict:
     timeout = aiohttp.ClientTimeout(total=30)
 
-    async with aiohttp.ClientSession(timeout=timeout) as session:
-        async with session.request(
-            method,
-            f"{BACKEND_URL}{path}",
-            json=payload,
-            headers=_internal_headers(),
-        ) as response:
-            if response.status >= 400:
-                try:
-                    body = await response.json(content_type=None)
-                    detail = body.get("detail", body)
-                except Exception:
-                    detail = await response.text() or "Backend request failed"
+    try:
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.request(
+                method,
+                f"{BACKEND_URL}{path}",
+                json=payload,
+                headers=_internal_headers(),
+            ) as response:
+                if response.status >= 400:
+                    try:
+                        body = await response.json(content_type=None)
+                        detail = body.get("detail", body)
+                    except Exception:
+                        detail = await response.text() or "Backend request failed"
 
-                raise BackendAPIError(
-                    status_code=response.status,
-                    detail=detail,
-                )
+                    raise BackendAPIError(
+                        status_code=response.status,
+                        detail=detail,
+                    )
 
-            if response.status == 204:
-                return {}
+                if response.status == 204:
+                    return {}
 
-            return await response.json(content_type=None)
+                return await response.json(content_type=None)
+
+    except (aiohttp.ClientError, TimeoutError) as exc:
+        raise BackendAPIError(status_code=503, detail={"code": "backend_unavailable"}) from exc
 
 
 async def get_payment_configuration(
@@ -1103,11 +1107,13 @@ async def create_manual_payment(
     currency: str = "IRT",
     usdt_destination_id: int | None = None,
     txid: str | None = None,
+    order_id: str | None = None,
 ) -> dict:
     return await _payment_request(
         "POST",
         "/payments",
         payload={
+            "order_id": order_id,
             "telegram_id": telegram_id,
             "offer_code": offer_code,
             "receipt_file_id": receipt_file_id,
@@ -1123,6 +1129,27 @@ async def create_manual_payment(
             "txid": txid,
         },
     )
+
+
+async def create_payment_order(*, telegram_id: int, offer_code: str, currency: str,
+                               usdt_destination_id: int | None = None) -> dict:
+    return await _payment_request("POST", "/payments/orders", payload={
+        "telegram_id": telegram_id, "offer_code": offer_code, "currency": currency,
+        "usdt_destination_id": usdt_destination_id,
+    })
+
+
+async def get_current_payment_order(telegram_id: int) -> dict | None:
+    return await _payment_request("GET", f"/payments/orders/current?telegram_id={telegram_id}")
+
+
+async def get_payment_order(order_id: str, telegram_id: int) -> dict:
+    return await _payment_request("GET", f"/payments/orders/{order_id}?telegram_id={telegram_id}")
+
+
+async def cancel_payment_order(order_id: str, telegram_id: int) -> dict:
+    return await _payment_request("POST", f"/payments/orders/{order_id}/cancel",
+                                  payload={"telegram_id": telegram_id})
 
 
 async def set_payment_admin_message(

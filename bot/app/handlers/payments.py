@@ -33,6 +33,10 @@ from app.services.backend import (
     BackendAPIError,
     approve_manual_payment,
     create_manual_payment,
+    create_payment_order,
+    get_current_payment_order,
+    get_payment_order,
+    cancel_payment_order,
     get_admin_context,
     get_current_subscription,
     get_telegram_user,
@@ -149,6 +153,18 @@ def _format_datetime(value: str | None, language: str = "fa") -> str:
 
 
 def _payment_error_message(exc: BackendAPIError, language: str = "fa") -> str:
+    code = exc.detail.get("code") if isinstance(exc.detail, dict) else None
+    order_errors = {
+        "backend_unavailable": ("Payment service is temporarily unavailable. Try again; a saved order or submitted payment will not be duplicated.", "سرویس پرداخت موقتاً در دسترس نیست. دوباره تلاش کن؛ سفارش یا پرداخت ثبت‌شده تکراری ساخته نمی‌شود."),
+        "open_payment_order_exists": ("An unfinished purchase is saved. Open Buy subscription to resume or cancel it.", "یک خرید ناتمام ذخیره شده است. از «خرید اشتراک» آن را ادامه بده یا لغو کن."),
+        "payment_order_language": ("This order uses a different language. Switch back to that language to continue, or cancel the saved order.", "زبان این سفارش متفاوت است. برای ادامه به زبان قبلی برگرد یا سفارش ذخیره‌شده را لغو کن."),
+        "payment_order_submitted": ("This order has already been submitted. It cannot be changed or cancelled.", "پرداخت این سفارش قبلاً ثبت شده است و قابل تغییر یا لغو نیست."),
+        "payment_order_closed": ("This order was cancelled. If you already paid, contact support with the order number and payment proof.", "این سفارش لغو شده است. اگر قبلاً واریز کرده‌ای، شماره سفارش و مدرک پرداخت را برای پشتیبانی بفرست."),
+        "payment_order_not_found": ("Order not found. Open Buy subscription to load your saved purchase.", "سفارش پیدا نشد. از «خرید اشتراک» خرید ذخیره‌شده را باز کن."),
+        "payment_order_mismatch": ("Open Buy subscription to reload the saved payment details before submitting.", "برای بارگیری اطلاعات ذخیره‌شدهٔ پرداخت، «خرید اشتراک» را دوباره باز کن."),
+    }
+    if code in order_errors:
+        return order_errors[code][0 if language == "en" else 1]
     if language == "en":
         detail = exc.detail
         code = detail.get("code") if isinstance(detail, dict) else None
@@ -270,6 +286,9 @@ def _offer_details_text(offer: dict, language: str) -> str:
         if is_fa else f"{int(offer.get('duration_days') or 0)} days"
     )
     limit = offer.get("daily_download_limit")
+    limit_period = str(offer.get("download_limit_period") or "daily").strip().lower()
+    period_fa = "هفتگی" if limit_period == "weekly" else "روزانه"
+    period_en = "Weekly" if limit_period == "weekly" else "Daily"
     limit_text = (
         _tr("نامحدود") if is_fa and limit is None else
         "Unlimited" if limit is None else str(limit)
@@ -285,14 +304,14 @@ def _offer_details_text(offer: dict, language: str) -> str:
     description = html.escape(str(offer.get("description") or (_tr("توضیحی برای این پلن ثبت نشده است.") if is_fa else "No description provided.")))
     if is_fa:
         text = (
-            f"💎 <b>{html.escape(str(offer.get('label') or '—'))}</b>\n\n📝 {description}{_tr('\n\n📅 مدت: <code>')}{duration}{_tr('</code>\n📥 سقف دانلود روزانه: <code>')}{limit_text}{_tr('</code>\n📦 حداکثر حجم هر فایل: <code>')}{max_file_text}{_tr('</code>\n🎞 حداکثر کیفیت: <code>')}{quality}{_tr('</code>\n⚙️ دانلود هم\u200cزمان: <code>')}{concurrency}{_tr('</code>\n🚀 پردازش با اولویت: <code>')}{(_tr('بله') if offer.get('priority_processing') else _tr('خیر'))}{_tr('</code>\n📣 عضویت اجباری: <code>')}{(_tr('بله') if offer.get('forced_join_required') else _tr('خیر'))}{_tr('</code>\n\n💰 مبلغ: <b>')}{format_toman(offer.get('price'))}</b>"
+            f"💎 <b>{html.escape(str(offer.get('label') or '—'))}</b>\n\n📝 {description}{_tr('\n\n📅 مدت: <code>')}{duration}{_tr('</code>\n📥 سقف دانلود ' + period_fa + ': <code>')}{limit_text}{_tr('</code>\n📦 حداکثر حجم هر فایل: <code>')}{max_file_text}{_tr('</code>\n🎞 حداکثر کیفیت: <code>')}{quality}{_tr('</code>\n⚙️ دانلود هم\u200cزمان: <code>')}{concurrency}{_tr('</code>\n🚀 پردازش با اولویت: <code>')}{(_tr('بله') if offer.get('priority_processing') else _tr('خیر'))}{_tr('</code>\n📣 عضویت اجباری: <code>')}{(_tr('بله') if offer.get('forced_join_required') else _tr('خیر'))}{_tr('</code>\n\n💰 مبلغ: <b>')}{format_toman(offer.get('price'))}</b>"
         )
     else:
         text = (
             f"💎 <b>{html.escape(str(offer.get('label') or '—'))}</b>\n\n"
             f"📝 {description}\n\n"
             f"📅 Duration: <code>{duration}</code>\n"
-            f"📥 Daily downloads: <code>{limit_text}</code>\n"
+            f"📥 {period_en} downloads: <code>{limit_text}</code>\n"
             f"📦 Maximum file size: <code>{max_file_text}</code>\n"
             f"🎞 Maximum quality: <code>{quality}</code>\n"
             f"⚙️ Concurrent downloads: <code>{concurrency}</code>\n"
@@ -302,9 +321,9 @@ def _offer_details_text(offer: dict, language: str) -> str:
         )
 
     rules = (
-        "\n\nPlan changes: renewing the same plan adds duration and daily quota. An upgrade starts after approval and preserves your remaining time. A downgrade or mixed change starts after existing paid subscriptions."
+        "\n\nPlan changes: renewing the same plan adds duration and keeps its quota period. An upgrade starts after approval and preserves your remaining time. A downgrade or mixed change starts after existing paid subscriptions."
         if language == "en" else
-        "\n\nقوانین تغییر پلن: تمدید همان پلن، مدت و سهمیهٔ روزانه را جمع می‌کند. ارتقا پس از تأیید آغاز می‌شود و زمان باقی‌مانده حفظ می‌شود. تنزل یا تغییر ترکیبی پس از پایان اشتراک‌های خریداری‌شده شروع می‌شود."
+        "\n\nقوانین تغییر پلن: تمدید همان پلن، مدت و سهمیهٔ همان بازه را جمع می‌کند. ارتقا پس از تأیید آغاز می‌شود و زمان باقی‌مانده حفظ می‌شود. تنزل یا تغییر ترکیبی پس از پایان اشتراک‌های خریداری‌شده شروع می‌شود."
     )
     return text + rules
 
@@ -470,6 +489,87 @@ async def _notify_user_rejected(message: Message, result: dict) -> None:
     )
 
 
+def _saved_order_summary(order: dict, language: str):
+    order_id = str(order["id"])
+    matches_language = order["currency"] == ("USDT" if language == "en" else "IRT")
+    rows = []
+    if matches_language:
+        offer = order["offer"]
+        amount = format_usdt(offer["price"]) if language == "en" else format_toman(offer["price"])
+        text = (("🧾 <b>Unfinished purchase</b>\n" if language == "en" else "🧾 <b>خرید ناتمام</b>\n")
+                + f"{html.escape(str(offer['label']))} — {amount}\n"
+                + ("Your saved price and payment destination will be used." if language == "en" else "همان مبلغ و مقصد ذخیره‌شده نمایش داده می‌شود."))
+        rows.append([InlineKeyboardButton(text="▶️ Resume payment" if language == "en" else "▶️ ادامه پرداخت",
+                                          callback_data=f"payment:order:resume:{order_id}")])
+    else:
+        text = _payment_error_message(BackendAPIError(status_code=403, detail={"code": "payment_order_language"}), language)
+    rows.extend(build_receipt_cancel_keyboard(language, order_id).inline_keyboard)
+    return text, InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+async def _show_payment_order(message: Message, state: FSMContext, order: dict, language: str):
+    if order["status"] != "open":
+        code = "payment_order_submitted" if order["status"] == "submitted" else "payment_order_closed"
+        raise BackendAPIError(status_code=409, detail={"code": code})
+    if order["currency"] != ("USDT" if language == "en" else "IRT"):
+        raise BackendAPIError(status_code=403, detail={"code": "payment_order_language"})
+    order_id = str(order["id"])
+    offer, destination, receipt = order["offer"], order["destination"], order["receipt"]
+    await state.clear()
+    await state.set_state(PaymentStates.waiting_for_txid if order["currency"] == "USDT" else PaymentStates.waiting_for_receipt)
+    await state.update_data(order_id=order_id, offer=offer, offer_code=offer["code"], currency=order["currency"],
+        payment_card_id=destination.get("id") if order["currency"] == "IRT" else None,
+        usdt_destination_id=destination.get("id") if order["currency"] == "USDT" else None, receipt_rules=receipt)
+    text = _payment_destination_text(offer, destination, receipt, language)
+    text += (f"\n\nOrder: <code>{order_id}</code>" if language == "en" else f"\n\nسفارش: <code>{order_id}</code>")
+    keyboard = build_receipt_cancel_keyboard(language, order_id)
+    if order["currency"] == "USDT":
+        try:
+            png = build_usdt_address_qr(str(destination["address"]))
+            # Avoid exceeding Telegram's photo caption limit for long plan/network labels.
+            if len(text) <= 1024:
+                await message.answer_photo(photo=BufferedInputFile(png, filename="usdt-deposit-address.png"),
+                                           caption=text, parse_mode="HTML", reply_markup=keyboard)
+                try:
+                    await message.delete()
+                except TelegramBadRequest:
+                    pass
+                return
+            await message.answer_photo(photo=BufferedInputFile(png, filename="usdt-deposit-address.png"))
+        except Exception as exc:
+            logger.warning("Could not send checkout QR: %s", type(exc).__name__)
+    await _replace_payment_message(message, text, parse_mode="HTML", reply_markup=keyboard)
+
+
+@router.callback_query(F.data.regexp(r"^payment:order:(resume|cancel|change):"))
+async def saved_payment_order_action(callback: CallbackQuery, state: FSMContext):
+    if not isinstance(callback.message, Message):
+        return
+    language = "fa"
+    try:
+        user = await get_telegram_user(callback.from_user.id)
+        language = normalize_language(user.get("effective_language"))
+        _, _, action, order_id = callback.data.split(":", 3)
+        if action == "resume":
+            order = await get_payment_order(order_id, callback.from_user.id)
+            await _show_payment_order(callback.message, state, order, language)
+        else:
+            active_id = (await state.get_data()).get("order_id")
+            if active_id and active_id != order_id:
+                raise BackendAPIError(status_code=409, detail={"code": "payment_order_mismatch"})
+            await cancel_payment_order(order_id, callback.from_user.id)
+            await state.clear()
+            if action == "change":
+                await open_payment_offers(callback, state)
+                return
+            await _replace_payment_message(callback.message,
+                "Subscription purchase cancelled." if language == "en" else "خرید اشتراک لغو شد.",
+                reply_markup=await _user_home_inline_keyboard(callback.from_user.id))
+        await callback.answer()
+    except BackendAPIError as exc:
+        await callback.answer(_payment_error_message(exc, language), show_alert=True)
+
+
 async def send_payment_offers_menu(
     message: Message,
     state: FSMContext,
@@ -483,6 +583,11 @@ async def send_payment_offers_menu(
             else {}
         )
         language = normalize_language(user.get("effective_language"))
+        order = await get_current_payment_order(message.from_user.id)
+        if order is not None:
+            text, keyboard = _saved_order_summary(order, language)
+            await message.answer(text, parse_mode="HTML", reply_markup=keyboard)
+            return
         configuration = await get_payment_configuration(
             select_destination=False,
             language=language,
@@ -541,7 +646,8 @@ def _subscription_status_text(result: dict, language: str = "fa") -> str:
     limit = result.get("daily_download_limit")
     limit_text = _tr("♾️ نامحدود") if is_fa and limit is None else ("♾️ Unlimited" if limit is None else str(limit))
     remaining = _tr("♾️ نامحدود") if is_fa and result.get("remaining_downloads") is None else ("♾️ Unlimited" if result.get("remaining_downloads") is None else str(result.get("remaining_downloads")))
-    labels = (_tr("مدت اشتراک"), "Subscription duration", _tr("تاریخ عضویت"), "Registered", _tr("تعداد دانلودهای انجام‌شده"), "Downloads completed", _tr("محدودیت دانلود روزانه"), "Daily download limit", _tr("دانلود باقیمانده"), "Downloads remaining", _tr("روز باقی‌مانده"), "Days remaining")
+    period_weekly = str(result.get("download_limit_period") or "daily").strip().lower() == "weekly"
+    labels = (_tr("مدت اشتراک"), "Subscription duration", _tr("تاریخ عضویت"), "Registered", _tr("تعداد دانلودهای انجام‌شده"), "Downloads completed", _tr("محدودیت دانلود هفتگی" if period_weekly else "محدودیت دانلود روزانه"), f"{('Weekly' if period_weekly else 'Daily')} download limit", _tr("دانلود باقیمانده این هفته" if period_weekly else "دانلود باقیمانده"), f"Downloads remaining {'this week' if period_weekly else ''}".strip(), _tr("روز باقی‌مانده"), "Days remaining")
     return (
         (_tr("👤 <b>وضعیت اشتراک</b>\n\n") if is_fa else "👤 <b>My subscription</b>\n\n")
         + (_tr("✅ اشتراک شما فعال است.\n") if is_fa else "✅ Your subscription is active.\n")
@@ -594,6 +700,12 @@ async def open_payment_offers(
     try:
         user = await get_telegram_user(callback.from_user.id)
         language = normalize_language(user.get("effective_language"))
+        order = await get_current_payment_order(callback.from_user.id)
+        if order is not None:
+            text, keyboard = _saved_order_summary(order, language)
+            await _replace_payment_message(callback.message, text, parse_mode="HTML", reply_markup=keyboard)
+            await callback.answer()
+            return
         configuration = await get_payment_configuration(
             select_destination=False,
             language=language,
@@ -655,10 +767,7 @@ async def payment_status(callback: CallbackQuery) -> None:
 
 
 @router.callback_query(F.data == "payment:offer:continue")
-async def continue_payment_offer(
-    callback: CallbackQuery,
-    state: FSMContext,
-) -> None:
+async def continue_payment_offer(callback: CallbackQuery, state: FSMContext) -> None:
     if not isinstance(callback.message, Message):
         return
     language = "fa"
@@ -668,177 +777,52 @@ async def continue_payment_offer(
         data = await state.get_data()
         offer = data.get("offer")
         if not isinstance(offer, dict):
-            await callback.answer(
-                "Purchase expired; choose a plan again." if language == "en" else _tr("درخواست خرید منقضی شده است."),
-                show_alert=True,
-            )
+            await callback.answer("Choose a plan again." if language == "en" else "دوباره پلن را انتخاب کن.", show_alert=True)
             return
-        configuration = await get_payment_configuration(
-            select_destination=True,
-            language=language,
-        )
-        selected = _find_offer(configuration, str(data.get("offer_code") or offer.get("code")))
-        if selected is None:
-            raise BackendAPIError(status_code=404, detail={"code": "plan_not_found"})
-        currency = str(selected.get("currency") or "IRT")
-
-        if currency == "USDT":
-            destinations = configuration.get("destinations") or []
-            if not destinations:
-                raise BackendAPIError(
-                    status_code=503,
-                    detail="No active USDT destination is configured",
-                )
+        if language == "en":
+            configuration = await get_payment_configuration(select_destination=True, language="en")
+            if not configuration.get("destinations"):
+                raise BackendAPIError(status_code=503, detail="No active USDT destination is configured")
             await state.set_state(PaymentStates.selecting_usdt_destination)
-            await state.update_data(
-                offer=selected,
-                offer_code=selected["code"],
-                payment_card_id=None,
-                usdt_destination_id=None,
-                currency=currency,
-                receipt_rules=configuration["receipt"],
-            )
-            await callback.message.edit_text(
+            await state.update_data(offer_code=offer["code"], currency="USDT", usdt_destination_id=None, payment_card_id=None)
+            await _replace_payment_message(callback.message,
                 "🌐 <b>Choose the USDT transfer network</b>\n\n"
-                "The address and QR code shown next will belong to the "
-                "network you select.",
-                parse_mode="HTML",
-                reply_markup=build_usdt_destination_keyboard(destinations),
-            )
-            await callback.answer()
-            return
-
-        destination = configuration["destination"]
-        await state.set_state(PaymentStates.waiting_for_receipt)
-        await state.update_data(
-            offer=selected,
-            offer_code=selected["code"],
-            payment_card_id=destination.get("id"),
-            usdt_destination_id=None,
-            currency=currency,
-            receipt_rules=configuration["receipt"],
-        )
-        destination_text = _payment_destination_text(
-            selected,
-            destination,
-            configuration["receipt"],
-            language,
-        )
-        destination_keyboard = build_receipt_cancel_keyboard(language)
-        await callback.message.edit_text(
-            destination_text,
-            parse_mode="HTML",
-            reply_markup=destination_keyboard,
-        )
+                "The address and QR code shown next will belong to the network you select.",
+                parse_mode="HTML", reply_markup=build_usdt_destination_keyboard(configuration["destinations"]))
+        else:
+            order = await create_payment_order(telegram_id=callback.from_user.id, offer_code=offer["code"], currency="IRT")
+            await _show_payment_order(callback.message, state, order, language)
         await callback.answer()
     except BackendAPIError as exc:
-        await callback.answer(
-            "Payment system is not ready." if language == "en" else _tr("سیستم پرداخت آماده نیست."),
-            show_alert=True,
-        )
+        await callback.answer("Could not open payment." if language == "en" else "بازکردن پرداخت ممکن نشد.", show_alert=True)
         await callback.message.answer(_payment_error_message(exc, language), parse_mode="HTML")
 
 
-@router.callback_query(
-    PaymentStates.selecting_usdt_destination,
-    F.data.startswith("payment:usdt-destination:"),
-)
-async def select_usdt_destination(
-    callback: CallbackQuery,
-    state: FSMContext,
-) -> None:
+@router.callback_query(PaymentStates.selecting_usdt_destination, F.data.startswith("payment:usdt-destination:"))
+async def select_usdt_destination(callback: CallbackQuery, state: FSMContext) -> None:
     if not callback.data or not isinstance(callback.message, Message):
         return
-
-    try:
-        destination_id = int(callback.data.rsplit(":", 1)[-1])
-    except (TypeError, ValueError):
-        await callback.answer("Invalid network selection.", show_alert=True)
-        return
-
     language = "en"
     try:
+        destination_id = int(callback.data.rsplit(":", 1)[-1])
         user = await get_telegram_user(callback.from_user.id)
         language = normalize_language(user.get("effective_language"))
         if language != "en":
-            await callback.answer(_tr("این روش پرداخت فقط برای زبان انگلیسی است."), show_alert=True)
-            return
-
-        data = await state.get_data()
-        offer_code = str(data.get("offer_code") or "")
+            raise BackendAPIError(status_code=403, detail={"code": "payment_order_language"})
+        offer_code = (await state.get_data()).get("offer_code")
         if not offer_code:
-            await callback.answer(
-                "Purchase expired; choose a plan again.",
-                show_alert=True,
-            )
+            await callback.answer("Choose a plan again.", show_alert=True)
             return
-
-        configuration = await get_payment_configuration(
-            select_destination=True,
-            language="en",
-        )
-        selected = _find_offer(configuration, offer_code)
-        destination = next(
-            (
-                item
-                for item in (configuration.get("destinations") or [])
-                if int(item.get("id") or 0) == destination_id
-            ),
-            None,
-        )
-        if selected is None or destination is None:
-            raise BackendAPIError(
-                status_code=409,
-                detail="The selected USDT network is no longer available",
-            )
-
-        receipt_rules = configuration["receipt"]
-        await state.set_state(PaymentStates.waiting_for_txid)
-        await state.update_data(
-            offer=selected,
-            offer_code=selected["code"],
-            payment_card_id=None,
-            usdt_destination_id=destination_id,
-            currency="USDT",
-            receipt_rules=receipt_rules,
-        )
-        destination_text = _payment_destination_text(
-            selected,
-            destination,
-            receipt_rules,
-            "en",
-        )
-        destination_keyboard = build_receipt_cancel_keyboard("en")
-        try:
-            qr_png = build_usdt_address_qr(str(destination.get("address") or ""))
-            await callback.message.answer_photo(
-                photo=BufferedInputFile(
-                    qr_png,
-                    filename="usdt-deposit-address.png",
-                ),
-                caption=destination_text,
-                parse_mode="HTML",
-                reply_markup=destination_keyboard,
-            )
-            try:
-                await callback.message.delete()
-            except TelegramBadRequest:
-                pass
-        except Exception:
-            logger.exception("Could not generate or send the USDT address QR")
-            await callback.message.edit_text(
-                destination_text,
-                parse_mode="HTML",
-                reply_markup=destination_keyboard,
-            )
+        # The backend validates the network and commits its snapshot before
+        # either the address or its QR is sent to Telegram.
+        order = await create_payment_order(telegram_id=callback.from_user.id, offer_code=offer_code,
+                                           currency="USDT", usdt_destination_id=destination_id)
+        await _show_payment_order(callback.message, state, order, language)
         await callback.answer()
+    except (TypeError, ValueError):
+        await callback.answer("Invalid network selection.", show_alert=True)
     except BackendAPIError as exc:
-        await callback.answer(
-            "The selected network is not available. Choose again."
-            if language == "en"
-            else _tr("شبکه انتخابی در دسترس نیست."),
-            show_alert=True,
-        )
+        await callback.answer("Could not open payment." if language == "en" else "بازکردن پرداخت ممکن نشد.", show_alert=True)
         await callback.message.answer(_payment_error_message(exc, language), parse_mode="HTML")
 
 
@@ -895,14 +879,18 @@ async def cancel_payment_flow(
     callback: CallbackQuery,
     state: FSMContext,
 ) -> None:
-    await state.clear()
-
+    has_order = bool((await state.get_data()).get("order_id"))
     language = "fa"
     try:
         user = await get_telegram_user(callback.from_user.id)
         language = normalize_language(user.get("effective_language"))
     except BackendAPIError:
         pass
+    if has_order:
+        await callback.answer(_payment_error_message(BackendAPIError(status_code=409,
+            detail={"code": "payment_order_mismatch"}), language), show_alert=True)
+        return
+    await state.clear()
     if isinstance(callback.message, Message):
         await _replace_payment_message(
             callback.message,
@@ -1002,6 +990,7 @@ async def _submit_payment_from_state(
             await register_telegram_user(message)
         result = await create_manual_payment(
             telegram_id=customer_telegram_id,
+            order_id=state_data.get("order_id"),
             offer_code=offer_code,
             receipt_file_id=file_id,
             receipt_file_unique_id=unique_id,
@@ -1037,26 +1026,27 @@ async def _submit_payment_from_state(
             ),
         }
 
-        try:
-            if not routes.get("enabled") or not payment_chat_id or not payment_topic_id:
-                raise RuntimeError("Payments Topic is not configured")
-            # Text accommodates complete payment details; attachments have no
-            # duplicated action buttons and cannot overflow Telegram captions.
-            admin_message = await message.bot.send_message(text=caption, **send_kwargs)
-            await set_payment_admin_message(
-                payment_id=payment_id, admin_chat_id=payment_chat_id,
-                admin_message_id=admin_message.message_id,
-                admin_message_thread_id=payment_topic_id,
-            )
-            if file_id:
-                await getattr(message.bot, f"send_{file_type}")(
-                    **{file_type: file_id}, chat_id=payment_chat_id,
-                    message_thread_id=payment_topic_id,
+        if not result.get("already_submitted"):
+            try:
+                if not routes.get("enabled") or not payment_chat_id or not payment_topic_id:
+                    raise RuntimeError("Payments Topic is not configured")
+                # Text accommodates complete payment details; attachments have no
+                # duplicated action buttons and cannot overflow Telegram captions.
+                admin_message = await message.bot.send_message(text=caption, **send_kwargs)
+                await set_payment_admin_message(
+                    payment_id=payment_id, admin_chat_id=payment_chat_id,
+                    admin_message_id=admin_message.message_id,
+                    admin_message_thread_id=payment_topic_id,
                 )
-        except Exception as exc:
-            # Submission already committed. The finance panel remains the
-            # source of truth even when Telegram delivery is unavailable.
-            logger.warning("Payment %s Topic delivery failed: %s", payment_id, type(exc).__name__)
+                if file_id:
+                    await getattr(message.bot, f"send_{file_type}")(
+                        **{file_type: file_id}, chat_id=payment_chat_id,
+                        message_thread_id=payment_topic_id,
+                    )
+            except Exception as exc:
+                # Submission already committed. The finance panel remains the
+                # source of truth even when Telegram delivery is unavailable.
+                logger.warning("Payment %s Topic delivery failed: %s", payment_id, type(exc).__name__)
 
         await state.clear()
         await message.answer(
@@ -1110,7 +1100,7 @@ async def receive_usdt_txid(message: Message, state: FSMContext) -> None:
     await state.set_state(PaymentStates.waiting_for_usdt_screenshot)
     await message.answer(
         "✅ TxID received.\n\nYou may now send a screenshot/PDF, or submit without one.",
-        reply_markup=build_usdt_screenshot_keyboard(),
+        reply_markup=build_usdt_screenshot_keyboard((await state.get_data()).get("order_id")),
     )
 
 
@@ -1127,13 +1117,17 @@ async def receive_optional_usdt_screenshot(
 
 @router.callback_query(
     PaymentStates.waiting_for_usdt_screenshot,
-    F.data == "payment:usdt-screenshot:skip",
+    (F.data == "payment:usdt-screenshot:skip") | F.data.startswith("payment:order:submit:"),
 )
 async def skip_usdt_screenshot(
     callback: CallbackQuery,
     state: FSMContext,
 ) -> None:
     if not isinstance(callback.message, Message):
+        return
+    order_id = (await state.get_data()).get("order_id")
+    if order_id and callback.data != f"payment:order:submit:{order_id}":
+        await callback.answer("This button belongs to another purchase. Reopen Buy subscription.", show_alert=True)
         return
     await callback.answer()
     await _submit_payment_from_state(
