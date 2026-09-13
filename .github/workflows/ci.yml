@@ -67,6 +67,11 @@ jobs:
       - name: Compile Python sources
         run: python -m compileall -q backend/app backend/alembic bot/app
 
+      - name: Install FFmpeg test dependency
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ffmpeg
+
       - name: Validate and apply migrations
         working-directory: backend
         run: |
