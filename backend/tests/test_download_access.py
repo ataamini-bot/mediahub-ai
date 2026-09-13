@@ -272,7 +272,9 @@ def test_daily_quota_uses_tehran_calendar_day():
 
 def test_weekly_quota_starts_on_local_monday():
     now = datetime(2026, 9, 2, 0, 15, tzinfo=timezone.utc)
-    expected = datetime(2026, 8, 31, 20, 30, tzinfo=timezone.utc)
+    # Tehran is UTC+03:30 in this date range, so Monday 00:00 local is
+    # Sunday 20:30 UTC.
+    expected = datetime(2026, 8, 30, 20, 30, tzinfo=timezone.utc)
     assert quota_week_start_utc(now, "Asia/Tehran") == expected
     assert quota_window_start_utc("weekly", now, "Asia/Tehran") == expected
 
