@@ -1,5 +1,9 @@
 from app.admin_runtime_settings import runtime_settings_text
 from app.main import dp
+from app.keyboards.admin_experience import (
+    BUTTON_LABELS,
+    build_home_buttons_root_keyboard,
+)
 from app.keyboards.admin_settings import build_runtime_settings_keyboard
 
 
@@ -58,6 +62,38 @@ def test_settings_manager_gets_edit_buttons():
     assert "admin:setting:edit:bot.maintenance_mode" in callbacks
     assert "admin:setting:edit:payments.receipt_max_size_mb" in callbacks
     assert callbacks[-1] == "admin:open"
+
+
+def test_home_buttons_are_the_parent_for_labels_and_custom_button_management():
+    keyboard = build_runtime_settings_keyboard(
+        sample_settings(),
+        can_manage=True,
+    )
+    callbacks = [row[0].callback_data for row in keyboard.inline_keyboard]
+
+    assert callbacks[0] == "admin:homebuttons"
+    assert "admin:copy" not in callbacks
+
+    home_keyboard = build_home_buttons_root_keyboard()
+    home_callbacks = [row[0].callback_data for row in home_keyboard.inline_keyboard]
+    assert home_callbacks == [
+        "admin:copy",
+        "admin:homebuttons:list",
+        "admin:settings",
+    ]
+
+
+def test_button_editor_contains_every_builtin_home_button():
+    assert {
+        "buy",
+        "subscription",
+        "support",
+        "language",
+        "convert",
+        "tutorial",
+        "faq",
+        "admin",
+    }.issubset(BUTTON_LABELS.keys())
 
 
 def test_settings_viewer_only_gets_back_button():

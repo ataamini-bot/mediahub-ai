@@ -1,3 +1,7 @@
+import asyncio
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
+
 from pathlib import Path
 
 from app.keyboards.conversion import (
@@ -5,6 +9,7 @@ from app.keyboards.conversion import (
     build_conversion_format_keyboard,
 )
 from app.keyboards.payment import build_home_keyboard, build_home_reply_keyboard
+from app.handlers.conversion import _download_telegram_file
 from app.utils.media_conversion import (
     AUDIO_FORMATS,
     VIDEO_FORMATS,
@@ -72,3 +77,68 @@ def test_bot_can_read_uploads_exposed_by_the_local_telegram_api():
     compose = compose_path.read_text(encoding="utf-8")
 
     assert "telegram_api_data:/var/lib/telegram-bot-api:ro" in compose
+
+
+def test_local_bot_api_upload_is_copied_from_the_absolute_file_path(tmp_path):
+    source = tmp_path / "telegram-api" / "voice.ogg"
+    source.parent.mkdir()
+    source.write_bytes(b"audio-bytes")
+    destination = tmp_path / "downloads" / "incoming" / "upload.ogg"
+
+    bot = SimpleNamespace(
+        token="123:token",
+        session=SimpleNamespace(
+            api=SimpleNamespace(
+                is_local=True,
+                wrap_local_file=SimpleNamespace(to_local=lambda value: value),
+            )
+        ),
+        get_file=AsyncMock(return_value=SimpleNamespace(file_path=str(source))),
+        download_file=AsyncMock(side_effect=AssertionError("local path should be copied")),
+    )
+
+    source_kind = asyncio.run(_download_telegram_file(bot, "file-id", destination))
+
+    assert source_kind == "local-path"
+    assert destination.read_bytes() == b"audio-bytes"
+    bot.download_file.assert_not_awaited()
+
+
+def test_upload_reader_falls_back_to_bot_api_file_endpoint(tmp_path):
+    destination = tmp_path / "downloads" / "incoming" / "upload.mp3"
+
+    class Stream:
+        def __init__(self):
+            self.closed = False
+
+        def __aiter__(self):
+            async def chunks():
+                yield b"audio-"
+                yield b"bytes"
+
+            return chunks()
+
+        async def aclose(self):
+            self.closed = True
+
+    stream = Stream()
+    session = SimpleNamespace(
+        api=SimpleNamespace(
+            is_local=True,
+            wrap_local_file=SimpleNamespace(to_local=lambda value: value),
+            file_url=lambda token, path: f"http://telegram-api/file/bot{token}/{path}",
+        ),
+        stream_content=lambda **_kwargs: stream,
+    )
+    bot = SimpleNamespace(
+        token="123:token",
+        session=session,
+        get_file=AsyncMock(return_value=SimpleNamespace(file_path="/missing/audio.mp3")),
+        download_file=AsyncMock(side_effect=FileNotFoundError("not mounted")),
+    )
+
+    source_kind = asyncio.run(_download_telegram_file(bot, "file-id", destination))
+
+    assert source_kind == "file-endpoint"
+    assert destination.read_bytes() == b"audio-bytes"
+    assert stream.closed is True

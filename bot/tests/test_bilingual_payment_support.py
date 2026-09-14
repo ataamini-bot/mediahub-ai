@@ -317,7 +317,7 @@ def test_cancel_replaces_usdt_qr_photo_and_clears_state(monkeypatch):
     )
     monkeypatch.setattr(
         payments,
-        "_user_home_inline_keyboard",
+        "_user_home_reply_keyboard",
         AsyncMock(return_value=None),
     )
 

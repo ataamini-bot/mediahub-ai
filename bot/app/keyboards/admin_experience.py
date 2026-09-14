@@ -19,6 +19,7 @@ BUTTON_LABELS = {
     "subscription": "وضعیت اشتراک",
     "language": "تغییر زبان",
     "support": "پشتیبانی",
+    "convert": "تبدیل فایل",
     "tutorial": "آموزش استفاده",
     "faq": "سوالات متداول",
     "admin": "پنل مدیریت",
@@ -41,7 +42,34 @@ def build_copy_root_keyboard() -> InlineKeyboardMarkup:
                 InlineKeyboardButton(text=_tr("🇮🇷 فارسی"), callback_data="admin:copy:lang:fa"),
                 InlineKeyboardButton(text="🇬🇧 English", callback_data="admin:copy:lang:en"),
             ],
-            [InlineKeyboardButton(text=_tr("🔙 تنظیمات ربات"), callback_data="admin:settings")],
+            [InlineKeyboardButton(text=_tr("🔙 دکمه‌های صفحه اصلی"), callback_data="admin:homebuttons")],
+        ]
+    )
+
+
+def build_home_buttons_root_keyboard() -> InlineKeyboardMarkup:
+    """Show the two admin tools that belong to the home-button section."""
+
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text=_tr("📝 متن‌ها و عنوان دکمه‌ها"),
+                    callback_data="admin:copy",
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text=_tr("🛠 مدیریت دکمه‌های صفحه اصلی"),
+                    callback_data="admin:homebuttons:list",
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text=_tr("🔙 تنظیمات ربات"),
+                    callback_data="admin:settings",
+                )
+            ],
         ]
     )
 
@@ -169,7 +197,7 @@ def build_home_buttons_admin_keyboard(buttons: list[dict]) -> InlineKeyboardMark
     rows.extend(
         [
             [InlineKeyboardButton(text=_tr("➕ افزودن دکمه"), callback_data="admin:homebutton:add")],
-            [InlineKeyboardButton(text=_tr("🔙 تنظیمات ربات"), callback_data="admin:settings")],
+            [InlineKeyboardButton(text=_tr("🔙 دکمه‌های صفحه اصلی"), callback_data="admin:homebuttons")],
         ]
     )
     return InlineKeyboardMarkup(inline_keyboard=rows)
@@ -213,7 +241,7 @@ def build_home_button_detail_keyboard(button: dict) -> InlineKeyboardMarkup:
                     style="danger",
                 )
             ],
-            [InlineKeyboardButton(text=_tr("🔙 فهرست دکمه‌ها"), callback_data="admin:homebuttons")],
+            [InlineKeyboardButton(text=_tr("🔙 فهرست دکمه‌ها"), callback_data="admin:homebuttons:list")],
         ]
     )
 
@@ -238,7 +266,7 @@ def build_home_action_keyboard(*, button_id: int | None = None) -> InlineKeyboar
         ]
         for label, action in actions
     ]
-    rows.append([InlineKeyboardButton(text=_tr("انصراف"), callback_data="admin:homebuttons")])
+    rows.append([InlineKeyboardButton(text=_tr("انصراف"), callback_data="admin:homebuttons:list")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -266,7 +294,7 @@ def build_home_style_keyboard(*, button_id: int | None = None) -> InlineKeyboard
                     style="danger",
                 ),
             ],
-            [InlineKeyboardButton(text=_tr("انصراف"), callback_data="admin:homebuttons")],
+            [InlineKeyboardButton(text=_tr("انصراف"), callback_data="admin:homebuttons:list")],
         ]
     )
 

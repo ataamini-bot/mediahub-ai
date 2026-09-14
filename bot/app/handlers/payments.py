@@ -11,12 +11,19 @@ from aiogram import F, Router
 from aiogram.exceptions import TelegramBadRequest
 from app.services.topic_delivery import notification_routes
 from aiogram.fsm.context import FSMContext
-from aiogram.types import BufferedInputFile, CallbackQuery, ForceReply, Message, InlineKeyboardButton, InlineKeyboardMarkup
+from aiogram.types import (
+    BufferedInputFile,
+    CallbackQuery,
+    ForceReply,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    Message,
+    ReplyKeyboardMarkup,
+)
 
 from app.keyboards.payment import (
     build_admin_payment_keyboard,
     build_payment_approval_confirmation_keyboard,
-    build_home_keyboard,
     build_home_reply_keyboard,
     build_payment_offer_detail_keyboard,
     build_payment_offers_keyboard,
@@ -82,6 +89,24 @@ async def _replace_payment_message(
     reply_markup=None,
 ) -> None:
     """Replace a payment screen whether its current message is text or media."""
+    # Telegram does not allow ReplyKeyboardMarkup on editMessageText. Home
+    # navigation therefore needs a fresh message (and the old payment/QR
+    # screen removed) rather than an inline duplicate in the chat.
+    if isinstance(reply_markup, ReplyKeyboardMarkup):
+        await message.answer(
+            text,
+            parse_mode=parse_mode,
+            reply_markup=reply_markup,
+        )
+        try:
+            await message.delete()
+        except TelegramBadRequest:
+            try:
+                await message.edit_reply_markup(reply_markup=None)
+            except TelegramBadRequest:
+                pass
+        return
+
     if message.text is not None:
         await message.edit_text(
             text,
@@ -111,20 +136,6 @@ async def _user_home_reply_keyboard(user: dict):
     configuration = await runtime_configuration(language)
     return build_home_reply_keyboard(
         language=language,
-        include_admin=bool(user.get("is_admin")),
-        configuration=configuration,
-    )
-
-
-async def _user_home_inline_keyboard(telegram_id: int):
-    try:
-        user = await get_telegram_user(telegram_id)
-    except BackendAPIError:
-        user = {"effective_language": "fa", "is_admin": False}
-    language = normalize_language(user.get("effective_language"))
-    configuration = await runtime_configuration(language)
-    return build_home_keyboard(
-        language,
         include_admin=bool(user.get("is_admin")),
         configuration=configuration,
     )
@@ -546,6 +557,7 @@ async def saved_payment_order_action(callback: CallbackQuery, state: FSMContext)
     if not isinstance(callback.message, Message):
         return
     language = "fa"
+    user = {"effective_language": "fa", "is_admin": False}
     try:
         user = await get_telegram_user(callback.from_user.id)
         language = normalize_language(user.get("effective_language"))
@@ -564,7 +576,7 @@ async def saved_payment_order_action(callback: CallbackQuery, state: FSMContext)
                 return
             await _replace_payment_message(callback.message,
                 "Subscription purchase cancelled." if language == "en" else "خرید اشتراک لغو شد.",
-                reply_markup=await _user_home_inline_keyboard(callback.from_user.id))
+                reply_markup=await _user_home_reply_keyboard(user))
         await callback.answer()
     except BackendAPIError as exc:
         await callback.answer(_payment_error_message(exc, language), show_alert=True)
@@ -747,12 +759,16 @@ async def payment_status(callback: CallbackQuery) -> None:
         user = await get_telegram_user(callback.from_user.id)
         language = normalize_language(user.get("effective_language"))
 
-        keyboard = await _user_home_inline_keyboard(callback.from_user.id)
+        # Main navigation lives in the persistent ReplyKeyboard. Only the
+        # context-specific scheduled-plans action remains inline here.
+        keyboard = None
         if result.get("scheduled"):
-            keyboard.inline_keyboard.insert(0, [InlineKeyboardButton(
-                text="📅 Scheduled plans" if language == "en" else "📅 اشتراک‌های زمان‌بندی‌شده",
-                callback_data="subscription:schedule:1",
-            )])
+            keyboard = InlineKeyboardMarkup(inline_keyboard=[[
+                InlineKeyboardButton(
+                    text="📅 Scheduled plans" if language == "en" else "📅 اشتراک‌های زمان‌بندی‌شده",
+                    callback_data="subscription:schedule:1",
+                )
+            ]])
         await callback.message.edit_text(
             _subscription_status_text(result, language),
             parse_mode="HTML",
@@ -881,6 +897,7 @@ async def cancel_payment_flow(
 ) -> None:
     has_order = bool((await state.get_data()).get("order_id"))
     language = "fa"
+    user = {"effective_language": "fa", "is_admin": False}
     try:
         user = await get_telegram_user(callback.from_user.id)
         language = normalize_language(user.get("effective_language"))
@@ -895,7 +912,7 @@ async def cancel_payment_flow(
         await _replace_payment_message(
             callback.message,
             "Subscription purchase cancelled." if language == "en" else _tr("خرید اشتراک لغو شد."),
-            reply_markup=await _user_home_inline_keyboard(callback.from_user.id),
+            reply_markup=await _user_home_reply_keyboard(user),
         )
 
     await callback.answer("Cancelled." if language == "en" else _tr("لغو شد."))

@@ -161,9 +161,17 @@ def build_home_reply_keyboard(
         ],
     ]
 
-    customs = [c for c in config.get("custom_buttons", []) if isinstance(c, dict) and c.get("is_active", True)]
+    customs = [
+        c
+        for c in config.get("custom_buttons", [])
+        if isinstance(c, dict) and c.get("is_active", True)
+    ]
     custom_row: list[KeyboardButton] = []
-    for custom in customs[:6]:
+    # Reply keyboards scroll vertically in Telegram. Keep every active
+    # custom button here instead of replacing the seventh one with an
+    # inline "More options" home menu, which created a duplicate main menu
+    # inside the chat.
+    for custom in customs:
         label = str(custom.get(f"label_{config.get('language', language)}") or "").strip()
         if not label:
             continue
@@ -172,9 +180,6 @@ def build_home_reply_keyboard(
             rows.append(custom_row); custom_row = []
     if custom_row:
         rows.append(custom_row)
-    if len(customs) > 6:
-        rows.append([_reply_button("🧩 More options" if language == "en" else "🧩 گزینه‌های بیشتر")])
-
     if include_admin:
         rows.append(
             [_reply_button(runtime_button(config, "admin"), runtime_button_style(config, "admin"))]

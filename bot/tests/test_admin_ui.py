@@ -1,5 +1,6 @@
 import asyncio
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 from app.handlers import admin as admin_handler
 from app.handlers.admin import (
@@ -184,6 +185,71 @@ def test_unauthorized_admin_command_is_silent(monkeypatch):
     )
 
     assert answers == []
+
+
+def test_admin_panel_reinstalls_the_persistent_bottom_menu(monkeypatch):
+    async def fake_context(_telegram_id):
+        return {
+            "is_admin": True,
+            "is_superadmin": True,
+            "permissions": [],
+            "roles": [],
+        }
+
+    restore_menu = AsyncMock()
+    monkeypatch.setattr(admin_handler, "_context_or_none", fake_context)
+    monkeypatch.setattr(admin_handler, "_send_persistent_home_menu", restore_menu)
+    message = SimpleNamespace(
+        from_user=SimpleNamespace(id=123456789),
+        answer=AsyncMock(),
+    )
+    state = SimpleNamespace(clear=AsyncMock())
+
+    opened = asyncio.run(
+        admin_handler.show_admin_panel_message(
+            message,
+            state,
+            register_user=False,
+        )
+    )
+
+    assert opened is True
+    assert message.answer.await_args.kwargs["reply_markup"].inline_keyboard
+    restore_menu.assert_awaited_once_with(
+        message,
+        123456789,
+        include_admin=True,
+    )
+
+
+def test_closing_admin_panel_removes_inline_controls_and_restores_menu(monkeypatch):
+    async def fake_context(_telegram_id):
+        return {"is_admin": True}
+
+    restore_menu = AsyncMock()
+    monkeypatch.setattr(admin_handler, "_context_or_none", fake_context)
+    monkeypatch.setattr(admin_handler, "_send_persistent_home_menu", restore_menu)
+    monkeypatch.setattr(admin_handler, "Message", SimpleNamespace)
+    message = SimpleNamespace(
+        edit_text=AsyncMock(),
+        edit_reply_markup=AsyncMock(),
+    )
+    callback = SimpleNamespace(
+        from_user=SimpleNamespace(id=123456789),
+        message=message,
+        answer=AsyncMock(),
+    )
+    state = SimpleNamespace(clear=AsyncMock())
+
+    asyncio.run(admin_handler.close_admin_panel(callback, state))
+
+    assert message.edit_text.await_args.kwargs["reply_markup"] is None
+    restore_menu.assert_awaited_once_with(
+        message,
+        123456789,
+        include_admin=True,
+    )
+    callback.answer.assert_awaited_once()
 
 
 def test_plan_list_supports_unlimited_custom_plans():

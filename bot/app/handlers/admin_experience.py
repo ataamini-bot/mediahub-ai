@@ -24,9 +24,10 @@ from app.keyboards.admin_experience import (
     build_home_button_delete_keyboard,
     build_home_button_detail_keyboard,
     build_home_buttons_admin_keyboard,
+    build_home_buttons_root_keyboard,
     build_home_style_keyboard,
 )
-from app.keyboards.payment import build_home_keyboard, build_home_reply_keyboard
+from app.keyboards.payment import build_home_reply_keyboard
 from app.runtime_config import (
     clear_runtime_configuration_cache,
     runtime_configuration,
@@ -127,9 +128,9 @@ async def _refresh_saved_style_for_admin(
 
     Telegram reply keyboards belong to an already-sent message. Updating the
     setting cannot mutate that old markup, so a fresh markup must be sent to
-    the current chat. If the administrator is editing the other language, an
-    inline preview is used instead of unexpectedly changing their persistent
-    menu language.
+    the current chat. If the administrator is editing the other language,
+    leave this chat's persistent menu unchanged rather than creating an
+    inline duplicate of the main menu.
     """
     configuration = dict(
         await runtime_configuration(edited_language, refresh=True)
@@ -156,14 +157,13 @@ async def _refresh_saved_style_for_admin(
             configuration=configuration,
         )
     else:
+        # Do not preview a second inline copy of the main menu. The current
+        # chat keeps its own persistent bottom keyboard unchanged; the other
+        # language is refreshed when that language is selected.
         text = _tr(
-            "✅ رنگ ذخیره شد. پیش‌نمایش زبان ویرایش‌شده را اینجا می‌بینید."
+            "✅ رنگ ذخیره شد. منوی زبان دیگر هنگام انتخاب آن به‌روزرسانی می‌شود."
         )
-        markup = build_home_keyboard(
-            edited_language,
-            include_admin=True,
-            configuration=configuration,
-        )
+        markup = None
 
     if isinstance(callback.message, Message):
         await callback.message.answer(text, reply_markup=markup)
@@ -172,7 +172,7 @@ async def _refresh_saved_style_for_admin(
 async def _show_home_buttons(message: Message, actor_telegram_id: int) -> None:
     buttons = await list_home_buttons(actor_telegram_id)
     await message.edit_text(
-        _tr("🧩 <b>دکمه‌های سفارشی صفحه اصلی</b>\n\n"
+        _tr("🧩 <b>دکمه‌های صفحه اصلی</b>\n\n"
         "دکمه‌های فعال در منوی کاربران نمایش داده می‌شوند. "
         "عملکرد هر دکمه می‌تواند لینک، متن یا یکی از بخش‌های ربات باشد."),
         parse_mode="HTML",
@@ -209,7 +209,7 @@ def _home_button_text(button: dict) -> str:
     }
     value = str(button.get("action_value") or "—")
     return (
-        f"{_tr('🧩 <b>مشخصات دکمه سفارشی</b>\n\nعنوان فارسی: <b>')}{html.escape(str(button.get('label_fa') or '—'))}{_tr('</b>\nعنوان انگلیسی: <b>')}{html.escape(str(button.get('label_en') or '—'))}{_tr('</b>\nعملکرد: <b>')}{actions.get(str(button.get('action_type')), _tr('نامشخص'))}{_tr('</b>\nمقدار: <code>')}{html.escape(value[:500])}{_tr('</code>\nرنگ: <b>')}{styles.get(str(button.get('style')), _tr('معمولی'))}{_tr('</b>\nوضعیت: <b>')}{(_tr('فعال ✅') if button.get('is_active') else _tr('غیرفعال ⛔️'))}</b>"
+        f"{_tr('🧩 <b>مشخصات دکمه صفحه اصلی</b>\n\nعنوان فارسی: <b>')}{html.escape(str(button.get('label_fa') or '—'))}{_tr('</b>\nعنوان انگلیسی: <b>')}{html.escape(str(button.get('label_en') or '—'))}{_tr('</b>\nعملکرد: <b>')}{actions.get(str(button.get('action_type')), _tr('نامشخص'))}{_tr('</b>\nمقدار: <code>')}{html.escape(value[:500])}{_tr('</code>\nرنگ: <b>')}{styles.get(str(button.get('style')), _tr('معمولی'))}{_tr('</b>\nوضعیت: <b>')}{(_tr('فعال ✅') if button.get('is_active') else _tr('غیرفعال ⛔️'))}</b>"
     )
 
 
@@ -497,7 +497,27 @@ async def save_copy_value(message: Message, state: FSMContext) -> None:
 
 
 @router.callback_query(F.data == "admin:homebuttons")
-async def home_buttons(callback: CallbackQuery, state: FSMContext) -> None:
+async def home_buttons_root(callback: CallbackQuery, state: FSMContext) -> None:
+    if not isinstance(callback.message, Message):
+        return
+    if await _context(callback.from_user.id, "settings.manage") is None:
+        await callback.answer(_tr("دسترسی مدیریت دکمه‌ها را ندارید."), show_alert=True)
+        return
+    await state.clear()
+    await callback.message.edit_text(
+        _tr(
+            "🧩 <b>دکمه‌های صفحه اصلی</b>\n\n"
+            "از این بخش می‌توانید عنوان و رنگ دکمه‌های اصلی را ویرایش کنید "
+            "یا دکمه‌های صفحه اصلی را مدیریت کنید."
+        ),
+        parse_mode="HTML",
+        reply_markup=build_home_buttons_root_keyboard(),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data == "admin:homebuttons:list")
+async def home_buttons_list(callback: CallbackQuery, state: FSMContext) -> None:
     if not isinstance(callback.message, Message):
         return
     if await _context(callback.from_user.id, "settings.manage") is None:
@@ -521,7 +541,7 @@ async def add_home_button(callback: CallbackQuery, state: FSMContext) -> None:
     await state.clear()
     await state.set_state(AdminExperienceStates.waiting_for_home_label_fa)
     await callback.message.edit_text(
-        _tr("➕ <b>افزودن دکمه سفارشی</b>\n\nعنوان فارسی دکمه را بفرستید (حداکثر ۶۴ نویسه)."),
+        _tr("➕ <b>افزودن دکمه صفحه اصلی</b>\n\nعنوان فارسی دکمه را بفرستید (حداکثر ۶۴ نویسه)."),
         parse_mode="HTML",
         reply_markup=build_home_buttons_admin_keyboard([]),
     )

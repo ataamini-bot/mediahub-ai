@@ -4,6 +4,7 @@ import re
 from decimal import Decimal, InvalidOperation
 
 from aiogram import F, Router
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command, StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, ForceReply, Message
@@ -31,7 +32,14 @@ from app.keyboards.admin import (
     build_plan_quality_keyboard,
     build_role_picker_keyboard,
 )
-from app.keyboards.payment import build_home_keyboard, format_toman, format_usdt
+from app.keyboards.payment import (
+    build_home_reply_keyboard,
+    format_toman,
+    format_usdt,
+)
+from app.i18n import normalize_language, translate
+from app.middleware.interface import ui_language
+from app.runtime_config import runtime_configuration
 from app.keyboards.admin_settings import build_runtime_settings_keyboard
 from app.services.backend import (
     BackendAPIError,
@@ -89,6 +97,41 @@ async def _context_or_none(telegram_id: int) -> dict | None:
         return None
 
     return context if context.get("is_admin") else None
+
+
+async def _send_persistent_home_menu(
+    message: Message,
+    telegram_id: int,
+    *,
+    include_admin: bool,
+) -> None:
+    """Restore the chat-level home keyboard after an admin screen.
+
+    Admin actions remain context-specific inline controls (they carry
+    callback data), but the user's main navigation is always the persistent
+    keyboard beside the input field. Sending it as a fresh message is
+    necessary because Telegram cannot attach a ReplyKeyboardMarkup while
+    editing an existing inline-keyboard message.
+    """
+    try:
+        from app.services.backend import get_telegram_user
+
+        user = await get_telegram_user(telegram_id)
+        language = normalize_language(
+            user.get("effective_language") or ui_language.get()
+        )
+    except Exception:
+        language = normalize_language(ui_language.get())
+
+    configuration = await runtime_configuration(language)
+    await message.answer(
+        translate(language, "home.ready"),
+        reply_markup=build_home_reply_keyboard(
+            language,
+            include_admin=include_admin,
+            configuration=configuration,
+        ),
+    )
 
 
 def _backend_error_text(exc: BackendAPIError) -> str:
@@ -500,6 +543,14 @@ async def show_admin_panel_message(
             is_superadmin=bool(context.get("is_superadmin")),
         ),
     )
+    # Keep the home navigation in Telegram's bottom keyboard as in the
+    # screenshot-3 layout, including when an administrator opens the panel
+    # directly with /admin before /start has been sent in this chat.
+    await _send_persistent_home_menu(
+        message,
+        message.from_user.id,
+        include_admin=True,
+    )
     return True
 
 
@@ -531,6 +582,11 @@ async def open_admin_panel(
             permissions,
             is_superadmin=bool(context.get("is_superadmin")),
         ),
+    )
+    await _send_persistent_home_menu(
+        callback.message,
+        callback.from_user.id,
+        include_admin=True,
     )
     await callback.answer()
 
@@ -2387,11 +2443,22 @@ async def close_admin_panel(
     await state.clear()
 
     if isinstance(callback.message, Message):
-        await callback.message.edit_text(
-            _tr("پنل مدیریت بسته شد."),
-            reply_markup=build_home_keyboard(
-                include_admin=context is not None,
-            ),
+        try:
+            # Remove the old admin inline controls. The replacement home
+            # keyboard is sent below as a real ReplyKeyboardMarkup.
+            await callback.message.edit_text(
+                _tr("پنل مدیریت بسته شد."),
+                reply_markup=None,
+            )
+        except TelegramBadRequest:
+            try:
+                await callback.message.edit_reply_markup(reply_markup=None)
+            except TelegramBadRequest:
+                pass
+        await _send_persistent_home_menu(
+            callback.message,
+            callback.from_user.id,
+            include_admin=context is not None,
         )
 
     await callback.answer()

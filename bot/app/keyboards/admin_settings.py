@@ -22,13 +22,7 @@ def build_runtime_settings_keyboard(
             [
                 [
                     InlineKeyboardButton(
-                        text=_tr("📝 متن‌ها و عنوان دکمه‌ها"),
-                        callback_data="admin:copy",
-                    )
-                ],
-                [
-                    InlineKeyboardButton(
-                        text=_tr("🧩 دکمه‌های سفارشی صفحه اصلی"),
+                        text=_tr("🧩 دکمه‌های صفحه اصلی"),
                         callback_data="admin:homebuttons",
                     )
                 ],

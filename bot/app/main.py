@@ -13,10 +13,12 @@ from aiogram.filters import BaseFilter, CommandStart, StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.storage.redis import RedisStorage
 from aiogram.types import (
+    BotCommand,
     CallbackQuery,
     FSInputFile,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
+    MenuButtonCommands,
     Message,
 )
 
@@ -2621,6 +2623,15 @@ async def start_handler(
                 "start.registration_error",
             ),
             parse_mode="HTML",
+            # Keep the menu recoverable even when registration temporarily
+            # fails. Telegram keeps this keyboard persistent for the chat.
+            reply_markup=build_home_reply_keyboard(
+                normalize_language(
+                    message.from_user.language_code
+                    if message.from_user
+                    else None
+                )
+            ),
         )
 
 
@@ -4423,6 +4434,31 @@ async def download_handler(
 # Main
 # ============================================================
 
+async def configure_telegram_menu_button(bot: Bot) -> None:
+    """Expose /menu from Telegram's supported input-area menu button.
+
+    Existing commands configured for the bot are retained.  A transient Bot
+    API failure must never prevent the polling process from starting.
+    """
+    try:
+        commands = await bot.get_my_commands()
+        if not any(command.command == "menu" for command in commands):
+            await bot.set_my_commands(
+                [
+                    *commands,
+                    BotCommand(
+                        command="menu",
+                        description="Open main menu / باز کردن منوی اصلی",
+                    ),
+                ]
+            )
+        await bot.set_chat_menu_button(menu_button=MenuButtonCommands())
+    except Exception as exc:
+        print(
+            "Could not configure the Telegram menu button: "
+            f"{type(exc).__name__}: {exc}"
+        )
+
 async def main():
 
     if not TOKEN:
@@ -4456,6 +4492,12 @@ async def main():
     )
 
     try:
+
+        # Telegram owns the area beside Attach, so a bot cannot put an
+        # arbitrary ReplyKeyboard button there. Its supported equivalent is
+        # the command-menu button: /menu restores the persistent bottom menu
+        # after a user has manually collapsed it.
+        await configure_telegram_menu_button(bot)
 
         await dp.start_polling(
             bot

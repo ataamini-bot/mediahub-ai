@@ -2,11 +2,16 @@
 
 from __future__ import annotations
 
+import asyncio
 import html
+import logging
 import os
+import shutil
 import uuid
 from pathlib import Path
+from urllib.parse import unquote, urlparse
 
+import aiofiles
 from aiogram import F, Router
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
@@ -33,6 +38,9 @@ from app.utils.media_conversion import (
 router = Router(name="conversion")
 router.message.filter(F.chat.type == "private")
 router.callback_query.filter(F.message.chat.type == "private")
+
+
+logger = logging.getLogger(__name__)
 
 
 DOWNLOAD_DIR = Path(os.getenv("DOWNLOAD_DIR", "/app/downloads"))
@@ -82,6 +90,146 @@ def _safe_suffix(name: str) -> str:
     if suffix_value and all(char in "abcdefghijklmnopqrstuvwxyz0123456789" for char in suffix_value):
         return suffix
     return ".bin"
+
+
+def _local_file_candidates(bot: object, file_path: str) -> tuple[Path, ...]:
+    """Return paths that can represent a Local Bot API file in this container.
+
+    Local Bot API returns an absolute ``file_path`` from ``getFile``.  The
+    normal aiogram downloader handles this path, but an explicit candidate
+    list lets us support deployments where the server and Bot use equivalent
+    volume paths or where a custom ``FilesPathWrapper`` is configured.
+    """
+
+    api = getattr(getattr(bot, "session", None), "api", None)
+    candidates: list[Path] = []
+    raw_path = str(file_path or "").strip()
+    if not raw_path:
+        return ()
+
+    parsed = urlparse(raw_path)
+    if parsed.scheme == "file":
+        raw_path = unquote(parsed.path)
+
+    wrapper = getattr(api, "wrap_local_file", None)
+    if wrapper is not None:
+        try:
+            wrapped = wrapper.to_local(raw_path)
+        except (TypeError, ValueError, OSError):
+            wrapped = None
+        if wrapped:
+            candidates.append(Path(str(wrapped)))
+
+    raw = Path(raw_path)
+    candidates.append(raw)
+    if not raw.is_absolute():
+        candidates.append(Path("/var/lib/telegram-bot-api") / raw)
+
+    unique: list[Path] = []
+    seen: set[str] = set()
+    for candidate in candidates:
+        key = str(candidate)
+        if key not in seen:
+            seen.add(key)
+            unique.append(candidate)
+    return tuple(unique)
+
+
+def _copy_local_file(source: Path, destination: Path) -> None:
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    if source.resolve() == destination.resolve():
+        return
+    shutil.copyfile(source, destination)
+
+
+async def _download_via_file_endpoint(
+    bot: object,
+    file_path: str,
+    destination: Path,
+    *,
+    timeout: int = 3600,
+) -> None:
+    """Stream a file through the configured Bot API endpoint.
+
+    This is a fallback for Local Bot API installations where the absolute
+    path returned by ``getFile`` is not mounted at the same path in the Bot
+    container.  It also keeps the normal remote Bot API path working.
+    """
+
+    session = getattr(bot, "session", None)
+    api = getattr(session, "api", None)
+    if session is None or api is None or not hasattr(session, "stream_content"):
+        raise RuntimeError("Telegram file endpoint is unavailable")
+
+    token = str(getattr(bot, "token", "") or "")
+    if not token:
+        raise RuntimeError("Telegram bot token is unavailable")
+    url = api.file_url(token, file_path)
+    stream = session.stream_content(
+        url=url,
+        timeout=timeout,
+        chunk_size=1024 * 1024,
+        raise_for_status=True,
+    )
+    try:
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        async with aiofiles.open(destination, "wb") as output:
+            async for chunk in stream:
+                await output.write(chunk)
+    finally:
+        close_stream = getattr(stream, "aclose", None)
+        if callable(close_stream):
+            await close_stream()
+
+
+async def _download_telegram_file(
+    bot: object,
+    file_id: str,
+    destination: Path,
+    *,
+    timeout: int = 3600,
+) -> str:
+    """Download an incoming Telegram media file into ``destination``.
+
+    Returns a short source label for diagnostics.  Local files are copied
+    directly when possible; the Bot API endpoint is used as a safe fallback.
+    """
+
+    file_info = await bot.get_file(file_id)
+    file_path = str(getattr(file_info, "file_path", "") or "").strip()
+    if not file_path:
+        raise RuntimeError("Telegram did not return a file path")
+
+    api = getattr(getattr(bot, "session", None), "api", None)
+    if bool(getattr(api, "is_local", False)):
+        for candidate in _local_file_candidates(bot, file_path):
+            try:
+                if candidate.is_file():
+                    await asyncio.to_thread(_copy_local_file, candidate, destination)
+                    return "local-path"
+            except (OSError, ValueError) as exc:
+                logger.warning("Local Telegram file copy failed for %s: %s", candidate, exc)
+
+    # ``download_file`` preserves aiogram's normal behavior for remote Bot
+    # API servers and for local servers whose path wrapper can resolve the
+    # returned file path.
+    download_file = getattr(bot, "download_file", None)
+    if callable(download_file):
+        try:
+            await download_file(file_path, destination=destination, timeout=timeout)
+            if destination.is_file() and destination.stat().st_size > 0:
+                return "download-file"
+        except Exception as exc:
+            logger.warning("Telegram download_file failed for %s: %s", file_path, exc)
+            destination.unlink(missing_ok=True)
+
+    await _download_via_file_endpoint(
+        bot,
+        file_path,
+        destination,
+        timeout=timeout,
+    )
+    return "file-endpoint"
 
 
 def cleanup_staged_upload(data: dict | None) -> None:
@@ -197,10 +345,18 @@ async def receive_conversion_media(message: Message, state: FSMContext) -> None:
     stored_name = f"upload-{uuid.uuid4().hex}{_safe_suffix(original_name)}"
     input_path = incoming_dir / stored_name
     try:
-        await message.bot.download(
+        source = await _download_telegram_file(
+            message.bot,
             item.file_id,
-            destination=input_path,
+            input_path,
             timeout=3600,
+        )
+        logger.info(
+            "Conversion upload staged: user=%s name=%s source=%s size=%s",
+            message.from_user.id,
+            stored_name,
+            source,
+            input_path.stat().st_size if input_path.is_file() else 0,
         )
         if not input_path.is_file() or input_path.stat().st_size <= 0:
             raise RuntimeError("Telegram returned an empty file")
@@ -251,7 +407,13 @@ async def receive_conversion_media(message: Message, state: FSMContext) -> None:
         except OSError:
             pass
         await message.answer(str(exc) if language == "en" else "این فایل قابل تبدیل نیست.")
-    except Exception:
+    except Exception as exc:
+        logger.exception(
+            "Conversion upload could not be read: user=%s file_id=%s name=%s",
+            message.from_user.id,
+            getattr(item, "file_id", ""),
+            original_name,
+        )
         try:
             input_path.unlink(missing_ok=True)
         except OSError:

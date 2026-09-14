@@ -1,6 +1,6 @@
 from app.localization import tr as _tr, localized_collection as _localized_collection
 from aiogram import F, Router
-from aiogram.filters import BaseFilter
+from aiogram.filters import BaseFilter, Command
 from aiogram.fsm.context import FSMContext
 from aiogram.types import Message
 
@@ -17,7 +17,7 @@ from app.handlers.experience import (
 )
 from app.i18n import HOME_BUTTON_ACTIONS, normalize_language, translate
 from app.keyboards.language import build_language_keyboard
-from app.keyboards.payment import build_home_reply_keyboard, build_home_keyboard
+from app.keyboards.payment import build_home_reply_keyboard
 from app.services.backend import register_telegram_user
 from app.runtime_config import (
     action_for_runtime_text,
@@ -40,6 +40,37 @@ class RuntimeHomeButtonFilter(BaseFilter):
             return {"runtime_home_action": {"action": legacy}}
         action = action_for_runtime_text(text, await all_runtime_configurations())
         return {"runtime_home_action": action} if action is not None else False
+
+
+@router.message(Command("menu"))
+async def restore_main_menu(
+    message: Message,
+    state: FSMContext,
+) -> None:
+    """Restore the persistent bottom menu from Telegram's command button."""
+    fallback_language = normalize_language(
+        message.from_user.language_code if message.from_user else None
+    )
+    include_admin = False
+
+    try:
+        user = await register_telegram_user(message)
+        language = normalize_language(user.get("effective_language"))
+        include_admin = bool(user.get("is_admin"))
+    except Exception:
+        language = fallback_language
+
+    await cleanup_staged_state(state)
+    await state.clear()
+    configuration = await runtime_configuration(language)
+    await message.answer(
+        translate(language, "home.ready"),
+        reply_markup=build_home_reply_keyboard(
+            language,
+            include_admin=include_admin,
+            configuration=configuration,
+        ),
+    )
 
 
 @router.message(F.text, RuntimeHomeButtonFilter())
@@ -73,7 +104,17 @@ async def persistent_home_button(
     if action == "more":
         await cleanup_staged_state(state)
         await state.clear()
-        await message.answer(translate(language, "home.ready"), reply_markup=build_home_keyboard(language, include_admin=include_admin, configuration=configuration))
+        # Legacy keyboards used an inline "More options" button. Re-send the
+        # persistent ReplyKeyboard so old clients converge to the bottom-menu
+        # layout instead of creating a second main menu in the chat.
+        await message.answer(
+            translate(language, "home.ready"),
+            reply_markup=build_home_reply_keyboard(
+                language,
+                include_admin=include_admin,
+                configuration=configuration,
+            ),
+        )
         return
 
     if action == "buy":
