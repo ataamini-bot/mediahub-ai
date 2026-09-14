@@ -113,6 +113,7 @@ services:
       BACKEND_URL: http://backend:8000
       DOWNLOAD_DIR: /app/downloads
       TELEGRAM_BOT_API: http://telegram-api:8081
+      TELEGRAM_BOT_API_DATA_DIR: /var/lib/telegram-bot-api
 
     depends_on:
       backend:

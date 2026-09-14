@@ -9,7 +9,8 @@ from app.keyboards.conversion import (
     build_conversion_format_keyboard,
 )
 from app.keyboards.payment import build_home_keyboard, build_home_reply_keyboard
-from app.handlers.conversion import _download_telegram_file
+from app.handlers import conversion
+from app.handlers.conversion import _download_telegram_file, _local_file_candidates
 from app.utils.media_conversion import (
     AUDIO_FORMATS,
     VIDEO_FORMATS,
@@ -104,6 +105,22 @@ def test_local_bot_api_upload_is_copied_from_the_absolute_file_path(tmp_path):
     bot.download_file.assert_not_awaited()
 
 
+def test_local_bot_api_file_uri_is_resolved_inside_the_shared_volume(tmp_path):
+    source = tmp_path / "telegram-api" / "voice.ogg"
+    source.parent.mkdir()
+    source.write_bytes(b"audio-bytes")
+    bot = SimpleNamespace(
+        session=SimpleNamespace(
+            api=SimpleNamespace(
+                is_local=True,
+                wrap_local_file=SimpleNamespace(to_local=lambda value: value),
+            )
+        )
+    )
+
+    assert _local_file_candidates(bot, source.as_uri()) == (source,)
+
+
 def test_upload_reader_falls_back_to_bot_api_file_endpoint(tmp_path):
     destination = tmp_path / "downloads" / "incoming" / "upload.mp3"
 
@@ -142,3 +159,40 @@ def test_upload_reader_falls_back_to_bot_api_file_endpoint(tmp_path):
     assert source_kind == "file-endpoint"
     assert destination.read_bytes() == b"audio-bytes"
     assert stream.closed is True
+
+
+def test_local_upload_reader_uses_cloud_as_a_last_resort(tmp_path, monkeypatch):
+    destination = tmp_path / "downloads" / "incoming" / "upload.mp3"
+    monkeypatch.setattr(conversion, "LOCAL_FILE_READ_ATTEMPTS", 1)
+
+    async def unavailable_local_endpoint(*_args, **_kwargs):
+        raise FileNotFoundError("not exposed by the local API")
+
+    async def cloud_copy(*_args, **_kwargs):
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_bytes(b"audio-bytes")
+
+    monkeypatch.setattr(conversion, "_download_via_file_endpoint", unavailable_local_endpoint)
+    monkeypatch.setattr(conversion, "_download_via_telegram_cloud", cloud_copy)
+    bot = SimpleNamespace(
+        token="123:token",
+        session=SimpleNamespace(
+            api=SimpleNamespace(
+                is_local=True,
+                wrap_local_file=SimpleNamespace(to_local=lambda value: value),
+            )
+        ),
+        get_file=AsyncMock(return_value=SimpleNamespace(file_path="/missing/audio.mp3")),
+    )
+
+    source_kind = asyncio.run(
+        _download_telegram_file(
+            bot,
+            "file-id",
+            destination,
+            expected_size=len(b"audio-bytes"),
+        )
+    )
+
+    assert source_kind == "telegram-cloud"
+    assert destination.read_bytes() == b"audio-bytes"

@@ -12,7 +12,9 @@ from pathlib import Path
 from urllib.parse import unquote, urlparse
 
 import aiofiles
-from aiogram import F, Router
+from aiogram import Bot, F, Router
+from aiogram.client.session.aiohttp import AiohttpSession
+from aiogram.client.telegram import TelegramAPIServer
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
@@ -46,6 +48,23 @@ logger = logging.getLogger(__name__)
 DOWNLOAD_DIR = Path(os.getenv("DOWNLOAD_DIR", "/app/downloads"))
 MAX_UPLOAD_BYTES = 1900 * 1024 * 1024
 UPLOAD_PREFIX = "upload://"
+LOCAL_BOT_API_DATA_DIR = Path(
+    os.getenv("TELEGRAM_BOT_API_DATA_DIR", "/var/lib/telegram-bot-api")
+)
+
+
+def _positive_int_setting(name: str, default: int) -> int:
+    try:
+        return max(1, int(os.getenv(name, str(default))))
+    except (TypeError, ValueError):
+        return default
+
+
+LOCAL_FILE_READ_ATTEMPTS = _positive_int_setting(
+    "TELEGRAM_LOCAL_FILE_READ_ATTEMPTS",
+    4,
+)
+LOCAL_FILE_READ_DELAY_SECONDS = 0.5
 
 
 def _is_english() -> bool:
@@ -123,7 +142,7 @@ def _local_file_candidates(bot: object, file_path: str) -> tuple[Path, ...]:
     raw = Path(raw_path)
     candidates.append(raw)
     if not raw.is_absolute():
-        candidates.append(Path("/var/lib/telegram-bot-api") / raw)
+        candidates.append(LOCAL_BOT_API_DATA_DIR / raw)
 
     unique: list[Path] = []
     seen: set[str] = set()
@@ -140,6 +159,62 @@ def _copy_local_file(source: Path, destination: Path) -> None:
     if source.resolve() == destination.resolve():
         return
     shutil.copyfile(source, destination)
+
+
+def _file_is_complete(path: Path, expected_size: int | None = None) -> bool:
+    """Return whether a staged file is non-empty and, when known, complete."""
+
+    try:
+        size = path.stat().st_size if path.is_file() else 0
+    except OSError:
+        return False
+    if size <= 0:
+        return False
+    return expected_size is None or size >= expected_size
+
+
+def _expected_size(value: object) -> int | None:
+    try:
+        size = int(value) if value is not None else None
+    except (TypeError, ValueError):
+        return None
+    return size if size is not None and size > 0 else None
+
+
+async def _copy_local_telegram_file(
+    bot: object,
+    file_path: str,
+    destination: Path,
+    *,
+    expected_size: int | None = None,
+) -> bool:
+    """Copy a Local Bot API file after it becomes visible in the shared volume.
+
+    The local server can report a file path a moment before the corresponding
+    file is visible to another container.  Retrying the shared, read-only
+    volume avoids treating that short propagation window as a failed upload.
+    """
+
+    candidates = _local_file_candidates(bot, file_path)
+    for attempt in range(LOCAL_FILE_READ_ATTEMPTS):
+        for candidate in candidates:
+            try:
+                if not _file_is_complete(candidate, expected_size):
+                    continue
+                await asyncio.to_thread(_copy_local_file, candidate, destination)
+                if _file_is_complete(destination, expected_size):
+                    return True
+                destination.unlink(missing_ok=True)
+            except (OSError, ValueError) as exc:
+                logger.warning(
+                    "Local Telegram file copy failed for %s: %s",
+                    candidate,
+                    exc,
+                )
+                destination.unlink(missing_ok=True)
+        if attempt + 1 < LOCAL_FILE_READ_ATTEMPTS:
+            await asyncio.sleep(LOCAL_FILE_READ_DELAY_SECONDS)
+    return False
 
 
 async def _download_via_file_endpoint(
@@ -182,12 +257,52 @@ async def _download_via_file_endpoint(
             await close_stream()
 
 
+async def _download_via_telegram_cloud(
+    bot: object,
+    file_id: str,
+    destination: Path,
+    *,
+    timeout: int = 3600,
+) -> None:
+    """Use Telegram's public file endpoint only as a Local API fallback.
+
+    A normal Local Bot API upload is read from the shared volume first, which
+    preserves the Local API's large-file support.  This fallback is useful if
+    a small upload is unavailable from that volume due to a container-specific
+    path issue.  It talks only to Telegram's official Bot API with the bot's
+    existing token and never exposes that token in messages or logs.
+    """
+
+    token = str(getattr(bot, "token", "") or "")
+    if not token:
+        raise RuntimeError("Telegram bot token is unavailable")
+
+    cloud_session = AiohttpSession(
+        api=TelegramAPIServer.from_base("https://api.telegram.org"),
+        timeout=timeout,
+    )
+    cloud_bot = Bot(token=token, session=cloud_session)
+    try:
+        cloud_file = await cloud_bot.get_file(file_id)
+        cloud_path = str(getattr(cloud_file, "file_path", "") or "").strip()
+        if not cloud_path:
+            raise RuntimeError("Telegram cloud did not return a file path")
+        await cloud_bot.download_file(
+            cloud_path,
+            destination=destination,
+            timeout=timeout,
+        )
+    finally:
+        await cloud_session.close()
+
+
 async def _download_telegram_file(
     bot: object,
     file_id: str,
     destination: Path,
     *,
     timeout: int = 3600,
+    expected_size: int | None = None,
 ) -> str:
     """Download an incoming Telegram media file into ``destination``.
 
@@ -201,35 +316,70 @@ async def _download_telegram_file(
         raise RuntimeError("Telegram did not return a file path")
 
     api = getattr(getattr(bot, "session", None), "api", None)
-    if bool(getattr(api, "is_local", False)):
-        for candidate in _local_file_candidates(bot, file_path):
-            try:
-                if candidate.is_file():
-                    await asyncio.to_thread(_copy_local_file, candidate, destination)
-                    return "local-path"
-            except (OSError, ValueError) as exc:
-                logger.warning("Local Telegram file copy failed for %s: %s", candidate, exc)
+    is_local = bool(getattr(api, "is_local", False))
+    expected_size = _expected_size(expected_size)
+    if expected_size is None:
+        expected_size = _expected_size(getattr(file_info, "file_size", None))
+
+    if is_local and await _copy_local_telegram_file(
+        bot,
+        file_path,
+        destination,
+        expected_size=expected_size,
+    ):
+        return "local-path"
 
     # ``download_file`` preserves aiogram's normal behavior for remote Bot
-    # API servers and for local servers whose path wrapper can resolve the
-    # returned file path.
+    # API servers.  In Local Bot API mode it merely tries the same host path
+    # already retried above, so proceed directly to the two network fallbacks.
     download_file = getattr(bot, "download_file", None)
-    if callable(download_file):
+    if not is_local and callable(download_file):
         try:
             await download_file(file_path, destination=destination, timeout=timeout)
-            if destination.is_file() and destination.stat().st_size > 0:
+            if _file_is_complete(destination, expected_size):
                 return "download-file"
+            destination.unlink(missing_ok=True)
         except Exception as exc:
             logger.warning("Telegram download_file failed for %s: %s", file_path, exc)
             destination.unlink(missing_ok=True)
 
-    await _download_via_file_endpoint(
-        bot,
-        file_path,
-        destination,
-        timeout=timeout,
-    )
-    return "file-endpoint"
+    try:
+        await _download_via_file_endpoint(
+            bot,
+            file_path,
+            destination,
+            timeout=min(timeout, 90),
+        )
+        if _file_is_complete(destination, expected_size):
+            return "file-endpoint"
+        destination.unlink(missing_ok=True)
+        raise RuntimeError("Telegram file endpoint returned an incomplete file")
+    except Exception as endpoint_error:
+        destination.unlink(missing_ok=True)
+        if not is_local:
+            raise RuntimeError("Telegram file endpoint download failed") from endpoint_error
+        logger.warning(
+            "Local Telegram file endpoint fallback failed for %s: %s",
+            file_path,
+            type(endpoint_error).__name__,
+        )
+
+    try:
+        await _download_via_telegram_cloud(
+            bot,
+            file_id,
+            destination,
+            timeout=min(timeout, 90),
+        )
+        if _file_is_complete(destination, expected_size):
+            return "telegram-cloud"
+        destination.unlink(missing_ok=True)
+        raise RuntimeError("Telegram cloud returned an incomplete file")
+    except Exception as cloud_error:
+        destination.unlink(missing_ok=True)
+        raise RuntimeError(
+            "Telegram media download failed through local and cloud fallbacks"
+        ) from cloud_error
 
 
 def cleanup_staged_upload(data: dict | None) -> None:
@@ -350,6 +500,7 @@ async def receive_conversion_media(message: Message, state: FSMContext) -> None:
             item.file_id,
             input_path,
             timeout=3600,
+            expected_size=declared_size,
         )
         logger.info(
             "Conversion upload staged: user=%s name=%s source=%s size=%s",
