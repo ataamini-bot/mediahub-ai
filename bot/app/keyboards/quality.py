@@ -18,6 +18,8 @@ def build_quality_keyboard(
     ],
     token: str,
     audio_token: str | None = None,
+    cover_token: str | None = None,
+    description_token: str | None = None,
     language: str = "fa",
 ) -> InlineKeyboardMarkup:
 
@@ -101,6 +103,45 @@ def build_quality_keyboard(
                 callback_data=f"audio:open:{audio_token}",
             )
         ])
+
+    media_actions: list[
+        InlineKeyboardButton
+    ] = []
+
+    if cover_token:
+        media_actions.append(
+            InlineKeyboardButton(
+                text=(
+                    "🖼 Extract cover"
+                    if language == "en"
+                    else "🖼 استخراج کاور"
+                ),
+                callback_data=(
+                    f"media:cover:"
+                    f"{cover_token}"
+                ),
+            )
+        )
+
+    if description_token:
+        media_actions.append(
+            InlineKeyboardButton(
+                text=(
+                    "📝 Description"
+                    if language == "en"
+                    else "📝 توضیحات"
+                ),
+                callback_data=(
+                    f"media:description:"
+                    f"{description_token}"
+                ),
+            )
+        )
+
+    if media_actions:
+        buttons.append(
+            media_actions
+        )
 
     return InlineKeyboardMarkup(
         inline_keyboard=buttons

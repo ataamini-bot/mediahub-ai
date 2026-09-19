@@ -286,6 +286,7 @@ def _parse_gallery_dl(source_url: str, platform: str) -> dict[str, Any] | None:
                 "index": index,
                 "id": f"{item_id}-{index}" if item_id is not None else str(index),
                 "title": title,
+                "description": title,
                 "duration": duration,
                 "thumbnail": thumbnail,
                 "formats": [],
@@ -313,6 +314,7 @@ def _parse_gallery_dl(source_url: str, platform: str) -> dict[str, Any] | None:
     return {
         "source_url": source_url,
         "title": title,
+        "description": title,
         "duration": None,
         "thumbnail": entries[0].get("thumbnail"),
         "formats": [],
@@ -503,6 +505,7 @@ def _extract_threads_entries(source_url: str) -> list[dict[str, Any]]:
                     "index": index,
                     "id": str(index),
                     "title": "Threads post",
+                    "description": None,
                     "duration": None,
                     "thumbnail": media_url if media_type == "image" else None,
                     "formats": [],
@@ -609,6 +612,7 @@ def _single_entry_info(
     return {
         "source_url": source_url,
         "title": entry.get("title") or title,
+        "description": entry.get("description") or entry.get("title") or title,
         "duration": entry.get("duration"),
         "thumbnail": entry.get("thumbnail"),
         "formats": entry.get("formats") or [],
@@ -672,6 +676,7 @@ def _threads_info(source_url: str, playlist_index: int | None) -> dict[str, Any]
     return {
         "source_url": source_url,
         "title": "Threads post",
+        "description": None,
         "duration": None,
         "thumbnail": next(
             (entry["thumbnail"] for entry in entries if entry.get("thumbnail")),

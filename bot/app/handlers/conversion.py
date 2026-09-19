@@ -682,9 +682,9 @@ async def choose_conversion_format(callback: CallbackQuery, state: FSMContext) -
         job_id = int(job["id"])
         await status_message.edit_text(
             (
-                f"✅ <b>Conversion queued</b>\n\n🆔 Job ID: <code>{job_id}</code>\n🎯 Output: <code>{normalized.upper()}</code>\n📊 Status: <code>pending</code>"
+                f"⏳ <b>Conversion queued</b>\n\n🎯 Output: <b>{normalized.upper()}</b>\n📊 Status: <b>pending</b>"
                 if language == "en"
-                else f"✅ <b>درخواست تبدیل ایجاد شد</b>\n\n🆔 Job ID: <code>{job_id}</code>\n🎯 خروجی: <code>{normalized.upper()}</code>\n📊 وضعیت: <code>pending</code>"
+                else f"⏳ <b>درخواست تبدیل در صف است</b>\n\n🎯 خروجی: <b>{normalized.upper()}</b>\n📊 وضعیت: <b>pending</b>"
             ),
             parse_mode="HTML",
             reply_markup=build_active_download_keyboard(job_id),

@@ -1,9 +1,14 @@
 from app.localization import tr as _tr, localized_collection as _localized_collection
 import asyncio
+import aiohttp
 import html
+import ipaddress
+import mimetypes
 import os
 import re
+import socket
 from pathlib import Path
+from urllib.parse import urljoin, urlparse
 
 
 from aiogram import Bot, Dispatcher, F
@@ -25,6 +30,7 @@ from aiogram.types import (
 
 from app.keyboards.download import (
     build_active_download_keyboard,
+    build_completed_download_keyboard,
     build_paused_download_keyboard,
 )
 
@@ -1036,19 +1042,219 @@ def format_eta(
 # Progress text
 # ============================================================
 
+
+def _quality_height(
+    quality: str,
+) -> int | None:
+
+    match = re.search(
+        r"(\d{3,4})p",
+        str(
+            quality
+            or ""
+        ).lower(),
+    )
+
+    if not match:
+
+        return None
+
+    try:
+
+        return int(
+            match.group(
+                1
+            )
+        )
+
+    except ValueError:
+
+        return None
+
+
+def _media_fps_for_quality(
+    quality: str,
+    media_info: dict | None,
+) -> float | None:
+
+    if not isinstance(
+        media_info,
+        dict,
+    ):
+
+        return None
+
+    requested_height = _quality_height(
+        quality
+    )
+
+    if requested_height is None:
+
+        return None
+
+    candidates: list[
+        float
+    ] = []
+
+    for item in (
+        media_info.get(
+            "formats"
+        )
+        or []
+    ):
+
+        if not isinstance(
+            item,
+            dict,
+        ) or not item.get(
+            "has_video"
+        ):
+
+            continue
+
+        item_height = _get_format_quality(
+            item
+        )
+
+        if item_height != requested_height:
+
+            continue
+
+        try:
+
+            fps = float(
+                item.get(
+                    "fps"
+                )
+                or 0
+            )
+
+        except (
+            TypeError,
+            ValueError,
+        ):
+
+            continue
+
+        if fps > 0:
+
+            candidates.append(
+                fps
+            )
+
+    return max(
+        candidates,
+        default=None,
+    )
+
+
+def _quality_label_with_fps(
+    quality: str,
+    media_info: dict | None = None,
+) -> str:
+
+    label = str(
+        quality
+        or _tr("نامشخص")
+    )
+
+    fps = _media_fps_for_quality(
+        label,
+        media_info,
+    )
+
+    if fps is None:
+
+        return label
+
+    fps_label = (
+        str(
+            int(
+                fps
+            )
+        )
+        if fps.is_integer()
+        else f"{fps:.2f}".rstrip(
+            "0"
+        ).rstrip(
+            "."
+        )
+    )
+
+    return (
+        f"{label} • {fps_label} FPS"
+    )
+
+
+def _progress_bar(
+    progress: int,
+    width: int = 10,
+) -> str:
+
+    safe_progress = max(
+        0,
+        min(
+            int(
+                progress
+            ),
+            100,
+        ),
+    )
+
+    filled = min(
+        width,
+        max(
+            0,
+            int(
+                safe_progress * width / 100
+            ),
+        ),
+    )
+
+    return (
+        "█" * filled
+        + "░" * (
+            width - filled
+        )
+    )
+
+
 def build_progress_text(
     job_id: int,
     quality: str,
     job: dict,
     paused: bool = False,
+    media_info: dict | None = None,
 ) -> str:
 
-    progress = int(
-        job.get(
-            "progress",
-            0,
+    # ``job_id`` remains in the function signature for existing callers,
+    # but deliberately never appears in user-facing progress text.  It is
+    # exposed only by the completed-file Details control.
+    del job_id
+
+    try:
+
+        progress = int(
+            job.get(
+                "progress",
+                0,
+            )
+            or 0
         )
-        or 0
+
+    except (
+        TypeError,
+        ValueError,
+    ):
+
+        progress = 0
+
+    progress = max(
+        0,
+        min(
+            progress,
+            100,
+        ),
     )
 
     downloaded_bytes = (
@@ -1174,39 +1380,38 @@ def build_progress_text(
         )
     )
 
-    if paused:
+    english = ui_language.get() == "en"
+    quality_label = html.escape(
+        _quality_label_with_fps(
+            quality,
+            media_info,
+        )
+    )
 
-        lines = [
-            _tr("⏸ <b>دانلود متوقف شده است</b>"),
-            "",
-            (
-                f"🆔 Job ID: "
-                f"<code>{job_id}</code>"
-            ),
-            (
-                f"{_tr('🎬 کیفیت: <code>')}{quality}</code>"
-            ),
-            (
-                f"{_tr('📊 پیشرفت: <code>')}{progress}%</code>"
-            ),
-        ]
-
-    else:
-
-        lines = [
-            _tr("⬇️ <b>در حال دانلود...</b>"),
-            "",
-            (
-                f"🆔 Job ID: "
-                f"<code>{job_id}</code>"
-            ),
-            (
-                f"{_tr('🎬 کیفیت: <code>')}{quality}</code>"
-            ),
-            (
-                f"{_tr('📊 پیشرفت: <code>')}{progress}%</code>"
-            ),
-        ]
+    lines = [
+        (
+            "⏸ <b>Download paused</b>"
+            if paused
+            else "⬇️ <b>Downloading...</b>"
+        )
+        if english
+        else (
+            "⏸ <b>دانلود متوقف شده است</b>"
+            if paused
+            else "⬇️ <b>در حال دانلود...</b>"
+        ),
+        "",
+        (
+            f"🎞 Quality: <b>{quality_label}</b>"
+            if english
+            else f"🎞 کیفیت: <b>{quality_label}</b>"
+        ),
+        (
+            f"📊 Progress: {_progress_bar(progress)} {progress}%"
+            if english
+            else f"📊 پیشرفت: {_progress_bar(progress)} {progress}%"
+        ),
+    ]
 
     if (
         downloaded_label
@@ -1238,7 +1443,9 @@ def build_progress_text(
 
             lines.append(
                 (
-                    f"{_tr('📦 دریافت شده: <code>')}{downloaded_label}</code>"
+                    f"📦 Size: <b>{downloaded_label}</b>"
+                    if english
+                    else f"📦 حجم: <b>{downloaded_label}</b>"
                 )
             )
 
@@ -1246,7 +1453,9 @@ def build_progress_text(
 
             lines.append(
                 (
-                    f"{_tr('📦 دانلود شده: <code>')}{downloaded_label}{_tr(' از ')}{total_label}</code>"
+                    f"📦 Size: <b>{downloaded_label} / {total_label}</b>"
+                    if english
+                    else f"📦 حجم: <b>{downloaded_label} / {total_label}</b>"
                 )
             )
 
@@ -1254,7 +1463,9 @@ def build_progress_text(
 
         lines.append(
             (
-                f"{_tr('📦 دانلود شده: <code>')}{downloaded_label}</code>"
+                f"📦 Size: <b>{downloaded_label}</b>"
+                if english
+                else f"📦 حجم: <b>{downloaded_label}</b>"
             )
         )
 
@@ -1262,7 +1473,9 @@ def build_progress_text(
 
         lines.append(
             (
-                f"{_tr('📦 حجم کل: <code>')}{total_label}</code>"
+                f"📦 Size: <b>— / {total_label}</b>"
+                if english
+                else f"📦 حجم: <b>— / {total_label}</b>"
             )
         )
 
@@ -1272,7 +1485,9 @@ def build_progress_text(
 
             lines.append(
                 (
-                    f"{_tr('🚀 سرعت: <code>')}{speed_label}</code>"
+                    f"🚀 Speed: <b>{speed_label}</b>"
+                    if english
+                    else f"🚀 سرعت: <b>{speed_label}</b>"
                 )
             )
 
@@ -1280,7 +1495,9 @@ def build_progress_text(
 
             lines.append(
                 (
-                    f"{_tr('⏳ زمان باقی\u200cمانده: <code>')}{eta_label}</code>"
+                    f"⏱ Remaining: ~<b>{eta_label}</b>"
+                    if english
+                    else f"⏱ باقی\u200cمانده: ~<b>{eta_label}</b>"
                 )
             )
 
@@ -1290,13 +1507,14 @@ def build_progress_text(
             [
                 "",
                 (
-                    _tr("🕕 فایل نیمه‌کاره تا "
-                    "<b>۶ ساعت</b> "
-                    "نگهداری می‌شود.")
+                    "🕕 The partial file is retained for <b>6 hours</b>."
+                    if english
+                    else "🕕 فایل نیمه‌کاره تا <b>۶ ساعت</b> نگهداری می‌شود."
                 ),
                 (
-                    _tr("پس از آن برای آزادسازی "
-                    "فضای سرور حذف خواهد شد.")
+                    "It is then removed to free server space."
+                    if english
+                    else "پس از آن برای آزادسازی فضای سرور حذف خواهد شد."
                 ),
             ]
         )
@@ -1305,6 +1523,325 @@ def build_progress_text(
         "\n".join(
             lines
         )
+    )
+
+
+def _format_media_duration(
+    value: object,
+) -> str | None:
+
+    try:
+
+        seconds = int(
+            float(
+                value
+            )
+        )
+
+    except (
+        TypeError,
+        ValueError,
+    ):
+
+        return None
+
+    if seconds <= 0:
+
+        return None
+
+    hours, remainder = divmod(
+        seconds,
+        3600,
+    )
+    minutes, seconds = divmod(
+        remainder,
+        60,
+    )
+
+    if hours:
+
+        return (
+            f"{hours:02d}:"
+            f"{minutes:02d}:"
+            f"{seconds:02d}"
+        )
+
+    return (
+        f"{minutes:02d}:"
+        f"{seconds:02d}"
+    )
+
+
+def _source_label(
+    source_url: object,
+) -> str:
+
+    try:
+
+        hostname = (
+            urlparse(
+                str(
+                    source_url
+                    or ""
+                )
+            ).hostname
+            or ""
+        ).lower()
+
+    except Exception:
+
+        hostname = ""
+
+    known_sources = (
+        ("instagram", "Instagram"),
+        ("youtu", "YouTube"),
+        ("tiktok", "TikTok"),
+        ("twitter", "X"),
+        ("x.com", "X"),
+        ("facebook", "Facebook"),
+        ("fb.watch", "Facebook"),
+        ("pinterest", "Pinterest"),
+        ("threads", "Threads"),
+        ("vimeo", "Vimeo"),
+        ("dailymotion", "Dailymotion"),
+    )
+
+    for marker, label in known_sources:
+
+        if marker in hostname:
+
+            return label
+
+    if hostname.startswith(
+        "www."
+    ):
+
+        hostname = hostname[4:]
+
+    return hostname or (
+        "Unknown"
+        if ui_language.get() == "en"
+        else "نامشخص"
+    )
+
+
+def _completed_file_caption(
+    filename: str,
+    size_label: str,
+    job: dict,
+    media_info: dict | None = None,
+) -> str:
+
+    english = ui_language.get() == "en"
+    quality = str(
+        job.get(
+            "quality"
+        )
+        or ""
+    )
+
+    if not quality:
+
+        output_format = str(
+            job.get(
+                "output_format"
+            )
+            or ""
+        ).upper()
+
+        media_type = str(
+            job.get(
+                "media_type"
+            )
+            or ""
+        ).lower()
+
+        if media_type == "audio" and output_format:
+
+            quality = f"audio/{output_format}"
+
+        elif media_type == "convert" and output_format:
+
+            quality = (
+                f"Convert to {output_format}"
+                if english
+                else f"تبدیل به {output_format}"
+            )
+
+        else:
+
+            quality = (
+                "Original"
+                if english
+                else "اصلی"
+            )
+
+    format_label = (
+        Path(
+            filename
+        ).suffix.lstrip(
+            "."
+        ).upper()
+        or str(
+            job.get(
+                "output_format"
+            )
+            or ""
+        ).upper()
+        or "FILE"
+    )
+
+    lines = [
+        f"📥 <b>{html.escape(filename)}</b>",
+        "",
+        (
+            "✅ Download completed successfully"
+            if english
+            else "✅ دانلود با موفقیت انجام شد"
+        ),
+        "",
+        (
+            f"📦 Size: <b>{size_label}</b>"
+            if english
+            else f"📦 حجم: <b>{size_label}</b>"
+        ),
+        (
+            f"🎞 Quality: <b>{html.escape(_quality_label_with_fps(quality, media_info))}</b>"
+            if english
+            else f"🎞 کیفیت: <b>{html.escape(_quality_label_with_fps(quality, media_info))}</b>"
+        ),
+    ]
+
+    duration = _format_media_duration(
+        (
+            media_info
+            or {}
+        ).get(
+            "duration"
+        )
+    )
+
+    if duration:
+
+        lines.append(
+            (
+                f"⏱ Duration: <b>{duration}</b>"
+                if english
+                else f"⏱ مدت: <b>{duration}</b>"
+            )
+        )
+
+    lines.extend(
+        [
+            (
+                f"📁 Format: <b>{format_label}</b>"
+                if english
+                else f"📁 فرمت: <b>{format_label}</b>"
+            ),
+            (
+                f"🔗 Source: <b>{html.escape(_source_label(job.get('source_url')))}</b>"
+                if english
+                else f"🔗 منبع: <b>{html.escape(_source_label(job.get('source_url')))}</b>"
+            ),
+        ]
+    )
+
+    return "\n".join(
+        lines
+    )
+
+
+def _queued_download_text(
+    quality: str,
+    media_info: dict | None = None,
+) -> str:
+
+    quality_label = html.escape(
+        _quality_label_with_fps(
+            quality,
+            media_info,
+        )
+    )
+
+    if ui_language.get() == "en":
+
+        return (
+            "⏳ <b>Download queued</b>\n\n"
+            f"🎞 Quality: <b>{quality_label}</b>\n"
+            "📊 Status: <b>pending</b>"
+        )
+
+    return (
+        "⏳ <b>درخواست در صف دانلود است</b>\n\n"
+        f"🎞 کیفیت: <b>{quality_label}</b>\n"
+        "📊 وضعیت: <b>pending</b>"
+    )
+
+
+def _download_details_text(
+    job: dict,
+) -> str:
+
+    job_id = str(
+        job.get(
+            "id"
+        )
+        or "—"
+    )
+    quality = str(
+        job.get(
+            "quality"
+        )
+        or job.get(
+            "output_format"
+        )
+        or (
+            "Unknown"
+            if ui_language.get() == "en"
+            else "نامشخص"
+        )
+    )
+    status = str(
+        job.get(
+            "status"
+        )
+        or "—"
+    )
+    format_label = str(
+        job.get(
+            "output_format"
+        )
+        or Path(
+            str(
+                job.get(
+                    "file_path"
+                )
+                or ""
+            )
+        ).suffix.lstrip(
+            "."
+        )
+        or "—"
+    ).upper()
+
+    if ui_language.get() == "en":
+
+        return (
+            "📋 <b>Download details</b>\n\n"
+            f"🆔 Job ID: <code>{html.escape(job_id)}</code>\n"
+            f"📊 Status: <b>{html.escape(status)}</b>\n"
+            f"🎞 Quality: <b>{html.escape(quality)}</b>\n"
+            f"📁 Format: <b>{html.escape(format_label)}</b>\n"
+            f"🔗 Source: <b>{html.escape(_source_label(job.get('source_url')))}</b>"
+        )
+
+    return (
+        "📋 <b>جزئیات دانلود</b>\n\n"
+        f"🆔 Job ID: <code>{html.escape(job_id)}</code>\n"
+        f"📊 وضعیت: <b>{html.escape(status)}</b>\n"
+        f"🎞 کیفیت: <b>{html.escape(quality)}</b>\n"
+        f"📁 فرمت: <b>{html.escape(format_label)}</b>\n"
+        f"🔗 منبع: <b>{html.escape(_source_label(job.get('source_url')))}</b>"
     )
 
 
@@ -2068,6 +2605,7 @@ def build_smaller_quality_keyboard(
         int | None,
     ],
     playlist_index: int | None = None,
+    media_info: dict | None = None,
 ) -> InlineKeyboardMarkup | None:
 
     quality_options: list[
@@ -2120,6 +2658,7 @@ def build_smaller_quality_keyboard(
             playlist_index=(
                 playlist_index
             ),
+            media_info=media_info,
         )
     )
 
@@ -2130,6 +2669,8 @@ def build_smaller_quality_keyboard(
             ),
             token=token,
             audio_token=token,
+            cover_token=token,
+            description_token=token,
             language=ui_language.get(),
         )
     )
@@ -2142,6 +2683,7 @@ async def wait_for_download(
     job_id: int,
     message: Message,
     quality: str,
+    media_info: dict | None = None,
 ) -> dict:
 
     elapsed = 0
@@ -2237,8 +2779,9 @@ async def wait_for_download(
 
                 await safe_edit_message(
                     message,
-                    (
-                        f"{_tr('⏳ <b>درخواست در صف دانلود است</b>\n\n🆔 Job ID: <code>')}{job_id}{_tr('</code>\n🎬 کیفیت: <code>')}{quality}{_tr('</code>\n📊 وضعیت: <code>pending</code>')}"
+                    _queued_download_text(
+                        quality,
+                        media_info,
                     ),
                     reply_markup=(
                         build_active_download_keyboard(
@@ -2268,6 +2811,7 @@ async def wait_for_download(
                         quality=quality,
                         job=job,
                         paused=False,
+                        media_info=media_info,
                     ),
                     reply_markup=(
                         build_active_download_keyboard(
@@ -2297,6 +2841,7 @@ async def wait_for_download(
                         quality=quality,
                         job=job,
                         paused=True,
+                        media_info=media_info,
                     ),
                     reply_markup=(
                         build_paused_download_keyboard(
@@ -2334,13 +2879,23 @@ async def wait_for_download(
             if downloaded_label:
 
                 extra = (
-                    f"{_tr('\n📦 دانلود شده تا زمان لغو: <code>')}{downloaded_label}</code>"
+                    (
+                        f"\n📦 Downloaded before cancellation: <b>{downloaded_label}</b>"
+                        if ui_language.get() == "en"
+                        else f"\n📦 دانلود شده تا زمان لغو: <b>{downloaded_label}</b>"
+                    )
                 )
 
             await safe_edit_message(
                 message,
                 (
-                    f"{_tr('❌ <b>دانلود لغو شد</b>\n\n🆔 Job ID: <code>')}{job_id}{_tr('</code>\n📊 پیشرفت هنگام لغو: <code>')}{progress}%</code>{extra}{_tr('\n\n🗑 فایل\u200cهای موقت از سرور حذف شدند.')}"
+                    "❌ <b>Download cancelled</b>\n\n"
+                    f"📊 Progress at cancellation: <b>{progress}%</b>"
+                    f"{extra}\n\n🗑 Temporary files were removed from the server."
+                    if ui_language.get() == "en"
+                    else "❌ <b>دانلود لغو شد</b>\n\n"
+                    f"📊 پیشرفت هنگام لغو: <b>{progress}%</b>"
+                    f"{extra}\n\n🗑 فایل‌های موقت از سرور حذف شدند."
                 ),
                 reply_markup=None,
             )
@@ -2355,7 +2910,13 @@ async def wait_for_download(
             await safe_edit_message(
                 message,
                 (
-                    f"{_tr('⌛ <b>دانلود منقضی شد</b>\n\n🆔 Job ID: <code>')}{job_id}{_tr('</code>\n\nبیش از ۶ ساعت از توقف دانلود گذشته بود.\n🗑 فایل موقت برای آزادسازی فضای سرور حذف شد.')}"
+                    "⌛ <b>Download expired</b>\n\n"
+                    "The download was paused for more than 6 hours.\n"
+                    "🗑 The partial file was removed to free server space."
+                    if ui_language.get() == "en"
+                    else "⌛ <b>دانلود منقضی شد</b>\n\n"
+                    "بیش از ۶ ساعت از توقف دانلود گذشته بود.\n"
+                    "🗑 فایل موقت برای آزادسازی فضای سرور حذف شد."
                 ),
                 reply_markup=None,
             )
@@ -2400,6 +2961,7 @@ async def send_downloaded_file(
     message: Message,
     status_message: Message,
     job: dict,
+    media_info: dict | None = None,
 ) -> None:
 
     job_id = (
@@ -2473,7 +3035,13 @@ async def send_downloaded_file(
     await safe_edit_message(
         status_message,
         (
-            f"{_tr('✅ <b>دانلود کامل شد</b>\n\n🆔 Job ID: <code>')}{job_id}{_tr('</code>\n📦 حجم فایل: <code>')}{size_label}{_tr('</code>\n\n📤 <b>در حال ارسال فایل به تلگرام...</b>')}"
+            "✅ <b>Download complete</b>\n\n"
+            f"📦 File size: <b>{size_label}</b>\n\n"
+            "📤 <b>Sending file to Telegram...</b>"
+            if ui_language.get() == "en"
+            else "✅ <b>دانلود کامل شد</b>\n\n"
+            f"📦 حجم فایل: <b>{size_label}</b>\n\n"
+            "📤 <b>در حال ارسال فایل به تلگرام...</b>"
         ),
         reply_markup=None,
     )
@@ -2483,16 +3051,18 @@ async def send_downloaded_file(
         or ".mp4"
     )
 
+    filename = (
+        f"MediaHub-"
+        f"{job_id}"
+        f"{suffix}"
+    )
+
     document = (
         FSInputFile(
             path=str(
                 path
             ),
-            filename=(
-                f"MediaHub-"
-                f"{job_id}"
-                f"{suffix}"
-            ),
+            filename=filename,
         )
     )
 
@@ -2501,10 +3071,16 @@ async def send_downloaded_file(
         await message.answer_document(
             document=document,
             disable_content_type_detection=True,
-            caption=(
-                f"{_tr('✅ <b>دانلود با موفقیت انجام شد</b>\n\n🆔 Job ID: <code>')}{job_id}{_tr('</code>\n📦 حجم فایل: <code>')}{size_label}</code>"
+            caption=_completed_file_caption(
+                filename=filename,
+                size_label=size_label,
+                job=job,
+                media_info=media_info,
             ),
             parse_mode="HTML",
+            reply_markup=build_completed_download_keyboard(
+                job_id
+            ),
         )
 
         delivery_confirmed = False
@@ -2782,14 +3358,6 @@ async def download_resume_callback(
             )
         )
 
-        progress = int(
-            job.get(
-                "progress",
-                0,
-            )
-            or 0
-        )
-
         quality = str(
             job.get(
                 "quality"
@@ -2797,22 +3365,6 @@ async def download_resume_callback(
             or
             _tr("نامشخص")
         )
-
-        downloaded_label = (
-            format_file_size(
-                job.get(
-                    "downloaded_bytes"
-                )
-            )
-        )
-
-        extra = ""
-
-        if downloaded_label:
-
-            extra = (
-                f"{_tr('\n📦 دانلود شده: <code>')}{downloaded_label}</code>"
-            )
 
         await callback.answer(
             _tr("▶️ دانلود ادامه پیدا کرد.")
@@ -2825,8 +3377,11 @@ async def download_resume_callback(
 
             await safe_edit_message(
                 callback.message,
-                (
-                    f"{_tr('▶️ <b>دانلود ادامه پیدا کرد</b>\n\n🆔 Job ID: <code>')}{job_id}{_tr('</code>\n🎬 کیفیت: <code>')}{quality}{_tr('</code>\n📊 ادامه از حدود: <code>')}{progress}%</code>{extra}"
+                build_progress_text(
+                    job_id=job_id,
+                    quality=quality,
+                    job=job,
+                    paused=False,
                 ),
                 reply_markup=(
                     build_active_download_keyboard(
@@ -2889,14 +3444,6 @@ async def download_cancel_callback(
             )
         )
 
-        progress = int(
-            job.get(
-                "progress",
-                0,
-            )
-            or 0
-        )
-
         downloaded_label = (
             format_file_size(
                 job.get(
@@ -2910,7 +3457,11 @@ async def download_cancel_callback(
         if downloaded_label:
 
             extra = (
-                f"{_tr('\n📦 دانلود شده تا زمان لغو: <code>')}{downloaded_label}</code>"
+                (
+                    f"\n📦 Downloaded before cancellation: <b>{downloaded_label}</b>"
+                    if ui_language.get() == "en"
+                    else f"\n📦 دانلود شده تا زمان لغو: <b>{downloaded_label}</b>"
+                )
             )
 
         await callback.answer(
@@ -2925,7 +3476,15 @@ async def download_cancel_callback(
             await safe_edit_message(
                 callback.message,
                 (
-                    f"{_tr('❌ <b>دانلود لغو شد</b>\n\n🆔 Job ID: <code>')}{job_id}{_tr('</code>\n📊 پیشرفت هنگام لغو: <code>')}{progress}%</code>{extra}{_tr('\n\n🗑 فایل موقت از سرور حذف می\u200cشود.')}"
+                    "❌ <b>Download cancelled</b>"
+                    if ui_language.get() == "en"
+                    else "❌ <b>دانلود لغو شد</b>"
+                )
+                + extra
+                + (
+                    "\n\n🗑 The temporary file will be removed."
+                    if ui_language.get() == "en"
+                    else "\n\n🗑 فایل موقت از سرور حذف می‌شود."
                 ),
                 reply_markup=None,
             )
@@ -2935,6 +3494,274 @@ async def download_cancel_callback(
         await callback.answer(
             f"❌ {download_error_text(exc)[:150]}",
             show_alert=True,
+        )
+
+
+# ============================================================
+# Delivered-file actions
+# ============================================================
+
+@dp.callback_query(F.data.startswith("download_details:"))
+async def download_details_callback(
+    callback: CallbackQuery,
+) -> None:
+    if not callback.data or not isinstance(callback.message, Message):
+        return
+
+    try:
+
+        job_id = int(
+            callback.data.split(
+                ":",
+                1,
+            )[1]
+        )
+
+    except (
+        ValueError,
+        IndexError,
+    ):
+
+        await callback.answer(
+            _tr("❌ Job نامعتبر است."),
+            show_alert=True,
+        )
+        return
+
+    try:
+
+        job = await get_download_job(
+            job_id
+        )
+
+    except Exception as exc:
+
+        await callback.answer(
+            f"❌ {download_error_text(exc)[:150]}",
+            show_alert=True,
+        )
+        return
+
+    await callback.answer(
+        "Details sent." if ui_language.get() == "en" else "جزئیات ارسال شد."
+    )
+    await callback.message.answer(
+        _download_details_text(
+            job
+        ),
+        parse_mode="HTML",
+    )
+
+
+@dp.callback_query(F.data.startswith("download_again:"))
+async def download_again_callback(
+    callback: CallbackQuery,
+) -> None:
+    if (
+        not callback.data
+        or not isinstance(
+            callback.message,
+            Message,
+        )
+        or not callback.from_user
+    ):
+        return
+
+    try:
+
+        original_job_id = int(
+            callback.data.split(
+                ":",
+                1,
+            )[1]
+        )
+
+    except (
+        ValueError,
+        IndexError,
+    ):
+
+        await callback.answer(
+            _tr("❌ Job نامعتبر است."),
+            show_alert=True,
+        )
+        return
+
+    language = ui_language.get()
+
+    try:
+
+        original = await get_download_job(
+            original_job_id
+        )
+
+        if str(
+            original.get(
+                "status"
+            )
+            or ""
+        ) != "completed":
+
+            await callback.answer(
+                "This download is not ready to repeat."
+                if language == "en"
+                else "این دانلود هنوز برای تکرار آماده نیست.",
+                show_alert=True,
+            )
+            return
+
+        source_url = str(
+            original.get(
+                "source_url"
+            )
+            or ""
+        )
+        media_type = str(
+            original.get(
+                "media_type"
+            )
+            or "video"
+        ).lower()
+
+        if not source_url:
+
+            raise RuntimeError(
+                "Original source URL is unavailable"
+            )
+
+        if media_type == "convert":
+
+            await callback.answer(
+                "Upload the original file again to convert it again."
+                if language == "en"
+                else "برای تبدیل دوباره، فایل اصلی را دوباره ارسال کنید.",
+                show_alert=True,
+            )
+            return
+
+        await callback.answer(
+            "Starting the download again…"
+            if language == "en"
+            else "دانلود مجدد شروع شد…"
+        )
+
+        media_info: dict = {}
+
+        try:
+
+            refreshed_info = await get_media_info(
+                source_url=source_url,
+                playlist_index=original.get(
+                    "playlist_index"
+                ),
+            )
+
+            if isinstance(
+                refreshed_info,
+                dict,
+            ):
+
+                media_info = refreshed_info
+
+        except Exception as exc:
+
+            print(
+                "Could not refresh redownload metadata: "
+                f"{type(exc).__name__}: {exc}"
+            )
+
+        quality = str(
+            original.get(
+                "quality"
+            )
+            or (
+                f"audio/{str(original.get('output_format') or '').upper()}"
+                if media_type == "audio"
+                else (
+                    "Original"
+                    if language == "en"
+                    else "اصلی"
+                )
+            )
+        )
+        status_message = await callback.message.answer(
+            (
+                "⏳ <b>Preparing your download…</b>"
+                if language == "en"
+                else "⏳ <b>در حال آماده‌سازی دانلود…</b>"
+            ),
+            parse_mode="HTML",
+        )
+        job = await create_download_job(
+            source_url=source_url,
+            telegram_id=callback.from_user.id,
+            format_id=original.get("format_id"),
+            quality=original.get("quality"),
+            media_type=media_type,
+            output_format=original.get("output_format"),
+            playlist_index=original.get("playlist_index"),
+            estimated_size_bytes=original.get("total_bytes"),
+        )
+        job_id = int(
+            job[
+                "id"
+            ]
+        )
+        await safe_edit_message(
+            status_message,
+            _queued_download_text(
+                quality,
+                media_info,
+            ),
+            reply_markup=build_active_download_keyboard(
+                job_id
+            ),
+        )
+        completed = await wait_for_download(
+            job_id,
+            status_message,
+            quality,
+            media_info,
+        )
+
+        if completed.get("status") == "completed":
+
+            await send_downloaded_file(
+                message=status_message,
+                status_message=status_message,
+                job=completed,
+                media_info=media_info,
+            )
+
+            try:
+
+                await status_message.delete()
+
+            except Exception as exc:
+
+                print(
+                    "Redownload status cleanup failed: "
+                    f"{type(exc).__name__}: {exc}"
+                )
+
+    except Exception as exc:
+
+        print(
+            "Redownload failed: "
+            f"{type(exc).__name__}: {exc}"
+        )
+        await callback.message.answer(
+            (
+                "❌ The download could not be started again.\n\n"
+                if language == "en"
+                else "❌ دانلود مجدد شروع نشد.\n\n"
+            )
+            + html.escape(
+                download_error_text(
+                    exc
+                )[:800]
+            ),
+            parse_mode="HTML",
         )
 
 
@@ -3285,6 +4112,22 @@ async def media_entry_callback(
 
         try:
 
+            image_media_info = {
+                "title": selected_entry.get(
+                    "title"
+                ),
+                "description": selected_entry.get(
+                    "description"
+                ),
+                "duration": selected_entry.get(
+                    "duration"
+                ),
+                "thumbnail": selected_entry.get(
+                    "thumbnail"
+                ),
+                "formats": [],
+            }
+
             await safe_edit_message(
                 message,
                 (
@@ -3310,8 +4153,9 @@ async def media_entry_callback(
 
             await safe_edit_message(
                 message,
-                (
-                    f"{_tr('✅ <b>درخواست دانلود عکس ایجاد شد</b>\n\n🆔 Job ID: <code>')}{job_id}{_tr('</code>\n📷 عکس: <code>')}{index}{_tr('</code>\n🖼 کیفیت: <code>اصلی</code>\n📊 وضعیت: <code>pending</code>')}"
+                _queued_download_text(
+                    _tr("تصویر اصلی"),
+                    image_media_info,
                 ),
                 reply_markup=(
                     build_active_download_keyboard(
@@ -3325,6 +4169,7 @@ async def media_entry_callback(
                     job_id,
                     message,
                     _tr("تصویر اصلی"),
+                    image_media_info,
                 )
             )
 
@@ -3342,6 +4187,7 @@ async def media_entry_callback(
                 message=message,
                 status_message=message,
                 job=completed_job,
+                media_info=image_media_info,
             )
 
         except Exception as exc:
@@ -3407,6 +4253,7 @@ async def media_entry_callback(
                 source_url,
                 quality_options,
                 playlist_index=index,
+                media_info=selected_info,
             )
         )
 
@@ -3417,6 +4264,8 @@ async def media_entry_callback(
                 ),
                 token=token,
                 audio_token=token,
+                cover_token=token,
+                description_token=token,
                 language=ui_language.get(),
             )
         )
@@ -3461,7 +4310,7 @@ async def media_entry_callback(
             (
                 f"{_tr('❌ <b>دریافت اطلاعات رسانه ناموفق بود</b>\n\n⚠️ خطا:\n<code>')}{html.escape(str(exc)[:1000])}</code>"
             ),
-            reply_markup=download_error_markup(exc),
+            reply_markup=None,
         )
 
 
@@ -3476,6 +4325,582 @@ def _audio_picker_keyboard(token: str, language: str) -> InlineKeyboardMarkup:
         callback_prefix="audio:format",
         cancel_callback=f"audio:cancel:{token}",
     )
+
+
+MAX_COVER_SIZE_BYTES = 50 * 1024 * 1024
+
+
+def _cover_extension(
+    url: str,
+    content_type: str | None,
+) -> str:
+
+    try:
+
+        suffix = Path(
+            urlparse(
+                url
+            ).path
+        ).suffix.lower()
+
+    except Exception:
+
+        suffix = ""
+
+    if suffix in {
+        ".jpg",
+        ".jpeg",
+        ".png",
+        ".webp",
+    }:
+
+        return suffix
+
+    guessed = mimetypes.guess_extension(
+        (
+            content_type
+            or ""
+        ).split(
+            ";",
+            1,
+        )[0]
+        .strip()
+        .lower()
+    )
+
+    if guessed in {
+        ".jpg",
+        ".jpeg",
+        ".png",
+        ".webp",
+    }:
+
+        return guessed
+
+    return ".jpg"
+
+
+async def _ensure_public_cover_url(
+    value: str,
+) -> str:
+    """Reject localhost/private cover URLs before the Bot fetches them."""
+
+    parsed = urlparse(
+        value
+    )
+
+    if (
+        parsed.scheme not in {
+            "http",
+            "https",
+        }
+        or not parsed.hostname
+    ):
+
+        raise RuntimeError(
+            "Cover image URL is invalid"
+        )
+
+    hostname = parsed.hostname.lower().rstrip(
+        "."
+    )
+
+    if hostname in {
+        "localhost",
+        "localhost.localdomain",
+    }:
+
+        raise RuntimeError(
+            "Cover image host is not public"
+        )
+
+    port = (
+        parsed.port
+        or (
+            443
+            if parsed.scheme == "https"
+            else 80
+        )
+    )
+
+    try:
+
+        resolved = await asyncio.get_running_loop().getaddrinfo(
+            hostname,
+            port,
+            type=socket.SOCK_STREAM,
+        )
+
+    except OSError as exc:
+
+        raise RuntimeError(
+            "Cover image host could not be resolved"
+        ) from exc
+
+    if not resolved:
+
+        raise RuntimeError(
+            "Cover image host could not be resolved"
+        )
+
+    for entry in resolved:
+
+        try:
+
+            address = ipaddress.ip_address(
+                entry[4][0]
+            )
+
+        except (
+            IndexError,
+            ValueError,
+        ) as exc:
+
+            raise RuntimeError(
+                "Cover image host is invalid"
+            ) from exc
+
+        if (
+            address.is_private
+            or address.is_loopback
+            or address.is_link_local
+            or address.is_multicast
+            or address.is_reserved
+            or address.is_unspecified
+        ):
+
+            raise RuntimeError(
+                "Cover image host is not public"
+            )
+
+    return value
+
+
+async def _download_cover_file(
+    cover_url: str,
+    token: str,
+) -> Path:
+    """Fetch one public cover image to the shared download volume.
+
+    The URL is obtained from the extractor, while the callback token is kept
+    server-side.  The function streams to disk, so a large image never sits
+    entirely in Bot memory.
+    """
+
+    timeout = aiohttp.ClientTimeout(
+        total=90,
+        connect=20,
+    )
+
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (compatible; MediaHubAI/1.0)"
+        ),
+    }
+
+    async with aiohttp.ClientSession(
+        timeout=timeout,
+        headers=headers,
+    ) as session:
+
+        current_url = cover_url
+
+        for _redirect in range(4):
+
+            await _ensure_public_cover_url(
+                current_url
+            )
+
+            async with session.get(
+                current_url,
+                allow_redirects=False,
+            ) as response:
+
+                if 300 <= response.status < 400:
+
+                    location = response.headers.get(
+                        "Location"
+                    )
+
+                    if not location:
+
+                        raise RuntimeError(
+                            "Cover redirect has no destination"
+                        )
+
+                    current_url = urljoin(
+                        current_url,
+                        location,
+                    )
+                    continue
+
+                if response.status != 200:
+
+                    raise RuntimeError(
+                        f"Cover download returned HTTP {response.status}"
+                    )
+
+                content_length = response.content_length
+
+                if (
+                    content_length is not None
+                    and content_length > MAX_COVER_SIZE_BYTES
+                ):
+
+                    raise RuntimeError(
+                        "Cover image is too large"
+                    )
+
+                suffix = _cover_extension(
+                    str(
+                        response.url
+                    ),
+                    response.headers.get(
+                        "Content-Type"
+                    ),
+                )
+                target = DOWNLOAD_DIR / (
+                    f"cover-{token}{suffix}"
+                )
+                received = 0
+
+                try:
+
+                    with target.open(
+                        "wb"
+                    ) as destination:
+
+                        async for chunk in response.content.iter_chunked(
+                            64 * 1024
+                        ):
+
+                            received += len(
+                                chunk
+                            )
+
+                            if received > MAX_COVER_SIZE_BYTES:
+
+                                raise RuntimeError(
+                                    "Cover image is too large"
+                                )
+
+                            destination.write(
+                                chunk
+                            )
+
+                except Exception:
+
+                    target.unlink(
+                        missing_ok=True
+                    )
+                    raise
+
+                if received <= 0:
+
+                    target.unlink(
+                        missing_ok=True
+                    )
+                    raise RuntimeError(
+                        "Cover image is empty"
+                    )
+
+                return target
+
+    raise RuntimeError(
+        "Cover image exceeded redirect limit"
+    )
+
+
+async def _selection_media_info(
+    selection: dict,
+) -> dict:
+    """Refresh metadata when possible, retaining the original menu state."""
+
+    cached = selection.get(
+        "media_info"
+    )
+    result = (
+        dict(
+            cached
+        )
+        if isinstance(
+            cached,
+            dict,
+        )
+        else {}
+    )
+    source_url = str(
+        selection.get(
+            "source_url"
+        )
+        or ""
+    )
+
+    if not source_url:
+
+        return result
+
+    try:
+
+        refreshed = await get_media_info(
+            source_url=source_url,
+            playlist_index=selection.get(
+                "playlist_index"
+            ),
+        )
+
+    except Exception as exc:
+
+        print(
+            "Could not refresh media metadata: "
+            f"{type(exc).__name__}: {exc}"
+        )
+        return result
+
+    if isinstance(
+        refreshed,
+        dict,
+    ):
+
+        return refreshed
+
+    return result
+
+
+def _description_chunks(
+    description: str,
+    maximum_length: int = 3400,
+) -> list[str]:
+
+    value = description.strip()
+
+    if not value:
+
+        return []
+
+    chunks: list[
+        str
+    ] = []
+
+    while len(
+        value
+    ) > maximum_length:
+
+        split_at = value.rfind(
+            "\n",
+            0,
+            maximum_length,
+        )
+
+        if split_at < maximum_length // 2:
+
+            split_at = value.rfind(
+                " ",
+                0,
+                maximum_length,
+            )
+
+        if split_at < maximum_length // 2:
+
+            split_at = maximum_length
+
+        chunks.append(
+            value[:split_at].rstrip()
+        )
+        value = value[split_at:].lstrip()
+
+    if value:
+
+        chunks.append(
+            value
+        )
+
+    return chunks
+
+
+@dp.callback_query(F.data.startswith("media:cover:"))
+async def media_cover_callback(callback: CallbackQuery) -> None:
+    if not callback.data or not isinstance(callback.message, Message):
+        return
+
+    token = callback.data.split(":", 2)[-1]
+    selection = PENDING_SELECTIONS.get(token)
+
+    if not selection:
+        await callback.answer(
+            _tr("⏰ این درخواست منقضی شده است. لطفاً لینک را دوباره ارسال کنید."),
+            show_alert=True,
+        )
+        return
+
+    language = ui_language.get()
+    await callback.answer(
+        "Downloading the highest-quality cover…"
+        if language == "en"
+        else "در حال دریافت کاور با بالاترین کیفیت…"
+    )
+
+    try:
+
+        media_info = await _selection_media_info(
+            selection
+        )
+        cover_url = str(
+            media_info.get(
+                "thumbnail"
+            )
+            or ""
+        ).strip()
+
+        if not cover_url:
+
+            raise RuntimeError(
+                "No cover image is available for this media"
+            )
+
+        cover_path = await _download_cover_file(
+            cover_url,
+            token,
+        )
+        title = str(
+            media_info.get(
+                "title"
+            )
+            or _source_label(
+                selection.get(
+                    "source_url"
+                )
+            )
+        ).strip()
+        caption = (
+            "🖼 <b>Cover — highest available quality</b>\n\n"
+            f"📌 <b>Title:</b> {html.escape(title[:700])}"
+            if language == "en"
+            else "🖼 <b>کاور با بالاترین کیفیت موجود</b>\n\n"
+            f"📌 <b>عنوان:</b> {html.escape(title[:700])}"
+        )
+
+        try:
+
+            await callback.message.answer_photo(
+                photo=FSInputFile(
+                    str(
+                        cover_path
+                    ),
+                    filename=(
+                        f"MediaHub-cover{cover_path.suffix.lower() or '.jpg'}"
+                    ),
+                ),
+                caption=caption,
+                parse_mode="HTML",
+            )
+
+        except Exception:
+
+            await callback.message.answer_document(
+                document=FSInputFile(
+                    str(
+                        cover_path
+                    ),
+                    filename=(
+                        f"MediaHub-cover{cover_path.suffix.lower() or '.jpg'}"
+                    ),
+                ),
+                caption=caption,
+                parse_mode="HTML",
+            )
+
+        finally:
+
+            cover_path.unlink(
+                missing_ok=True
+            )
+
+    except Exception as exc:
+
+        print(
+            "Cover extraction failed: "
+            f"{type(exc).__name__}: {exc}"
+        )
+        await callback.message.answer(
+            (
+                "❌ I could not download this media cover."
+                if language == "en"
+                else "❌ دریافت کاور این رسانه انجام نشد."
+            )
+        )
+
+
+@dp.callback_query(F.data.startswith("media:description:"))
+async def media_description_callback(callback: CallbackQuery) -> None:
+    if not callback.data or not isinstance(callback.message, Message):
+        return
+
+    token = callback.data.split(":", 2)[-1]
+    selection = PENDING_SELECTIONS.get(token)
+
+    if not selection:
+        await callback.answer(
+            _tr("⏰ این درخواست منقضی شده است. لطفاً لینک را دوباره ارسال کنید."),
+            show_alert=True,
+        )
+        return
+
+    language = ui_language.get()
+    await callback.answer(
+        "Loading description…"
+        if language == "en"
+        else "در حال دریافت توضیحات…"
+    )
+
+    media_info = await _selection_media_info(
+        selection
+    )
+    description = str(
+        media_info.get(
+            "description"
+        )
+        or ""
+    ).strip()
+
+    if not description:
+
+        await callback.message.answer(
+            (
+                "ℹ️ No description was provided for this media."
+                if language == "en"
+                else "ℹ️ برای این رسانه توضیحی در دسترس نیست."
+            )
+        )
+        return
+
+    chunks = _description_chunks(
+        description
+    )
+    header = (
+        "📝 <b>Media description</b>\n\n"
+        if language == "en"
+        else "📝 <b>توضیحات رسانه</b>\n\n"
+    )
+
+    for index, chunk in enumerate(chunks):
+
+        prefix = (
+            header
+            if index == 0
+            else (
+                "📝 <b>Description (continued)</b>\n\n"
+                if language == "en"
+                else "📝 <b>ادامهٔ توضیحات</b>\n\n"
+            )
+        )
+
+        await callback.message.answer(
+            prefix + html.escape(
+                chunk
+            ),
+            parse_mode="HTML",
+        )
 
 
 @dp.callback_query(F.data.startswith("audio:open:"))
@@ -3535,6 +4960,8 @@ async def audio_cancel_callback(callback: CallbackQuery) -> None:
             quality_options=quality_options,
             token=token,
             audio_token=token,
+            cover_token=token,
+            description_token=token,
             language=language,
         ),
     )
@@ -3560,6 +4987,18 @@ async def audio_format_callback(callback: CallbackQuery) -> None:
 
     source_url = str(selection.get("source_url") or "")
     playlist_index = selection.get("playlist_index")
+    media_info = (
+        selection.get(
+            "media_info"
+        )
+        if isinstance(
+            selection.get(
+                "media_info"
+            ),
+            dict,
+        )
+        else {}
+    )
     if not source_url:
         await callback.answer("The media link is missing.", show_alert=True)
         return
@@ -3592,19 +5031,24 @@ async def audio_format_callback(callback: CallbackQuery) -> None:
         job_id = int(job["id"])
         await safe_edit_message(
             status_message,
-            (
-                f"✅ <b>Audio job queued</b>\n\n🆔 Job ID: <code>{job_id}</code>\n🎵 Output: <code>{output_format.upper()}</code>\n📊 Status: <code>pending</code>"
-                if language == "en"
-                else f"✅ <b>درخواست صوتی ایجاد شد</b>\n\n🆔 Job ID: <code>{job_id}</code>\n🎵 خروجی: <code>{output_format.upper()}</code>\n📊 وضعیت: <code>pending</code>"
+            _queued_download_text(
+                quality_label,
+                media_info,
             ),
             reply_markup=build_active_download_keyboard(job_id),
         )
-        completed_job = await wait_for_download(job_id, status_message, quality_label)
+        completed_job = await wait_for_download(
+            job_id,
+            status_message,
+            quality_label,
+            media_info,
+        )
         if completed_job.get("status") == "completed":
             await send_downloaded_file(
                 message=status_message,
                 status_message=status_message,
                 job=completed_job,
+                media_info=media_info,
             )
     except asyncio.TimeoutError:
         await safe_edit_message(
@@ -3707,6 +5151,19 @@ async def quality_callback(
         )
     )
 
+    media_info = (
+        selection.get(
+            "media_info"
+        )
+        if isinstance(
+            selection.get(
+                "media_info"
+            ),
+            dict,
+        )
+        else {}
+    )
+
     if not source_url:
 
         await callback.answer(
@@ -3784,6 +5241,7 @@ async def quality_callback(
                 playlist_index=(
                     playlist_index
                 ),
+                media_info=media_info,
             )
         )
 
@@ -3891,8 +5349,9 @@ async def quality_callback(
 
         await safe_edit_message(
             status_message,
-            (
-                f"{_tr('✅ <b>درخواست دانلود ایجاد شد</b>\n\n🆔 Job ID: <code>')}{job_id}{_tr('</code>\n🎬 کیفیت: <code>')}{quality}{_tr('</code>\n📊 وضعیت: <code>pending</code>')}"
+            _queued_download_text(
+                quality,
+                media_info,
             ),
             reply_markup=(
                 build_active_download_keyboard(
@@ -3906,6 +5365,7 @@ async def quality_callback(
                 job_id,
                 status_message,
                 quality,
+                media_info,
             )
         )
 
@@ -3926,6 +5386,7 @@ async def quality_callback(
             message,
             status_message,
             completed_job,
+            media_info=media_info,
         )
 
         try:
@@ -3951,7 +5412,7 @@ async def quality_callback(
 
                 "وضعیت Job را دوباره بررسی کنید.")
             ),
-            reply_markup=download_error_markup(exc),
+            reply_markup=None,
         )
 
     except Exception as exc:
@@ -3992,26 +5453,18 @@ async def quality_callback(
                 add_pending_selection(
                     source_url,
                     fallback_options,
+                    playlist_index=playlist_index,
+                    media_info=media_info,
                 )
             )
 
-            fallback_keyboard = (
-                InlineKeyboardMarkup(
-                    inline_keyboard=[
-                        [
-                            InlineKeyboardButton(
-                                text=(
-                                    _tr("🎬 دانلود با 360p")
-                                ),
-                                callback_data=(
-                                    f"quality:"
-                                    f"{fallback_token}:"
-                                    "360"
-                                ),
-                            )
-                        ]
-                    ]
-                )
+            fallback_keyboard = build_quality_keyboard(
+                quality_options=fallback_options,
+                token=fallback_token,
+                audio_token=fallback_token,
+                cover_token=fallback_token,
+                description_token=fallback_token,
+                language=ui_language.get(),
             )
 
             await safe_edit_message(
@@ -4265,8 +5718,9 @@ async def download_handler(
 
             await safe_edit_message(
                 status_message,
-                (
-                    f"{_tr('✅ <b>درخواست دانلود تصویر ایجاد شد</b>\n\n🆔 Job ID: <code>')}{job_id}{_tr('</code>\n🖼 کیفیت: <code>اصلی</code>\n📊 وضعیت: <code>pending</code>')}"
+                _queued_download_text(
+                    _tr("تصویر اصلی"),
+                    media_info,
                 ),
                 reply_markup=(
                     build_active_download_keyboard(
@@ -4280,6 +5734,7 @@ async def download_handler(
                     job_id,
                     status_message,
                     _tr("تصویر اصلی"),
+                    media_info,
                 )
             )
 
@@ -4296,6 +5751,7 @@ async def download_handler(
                         status_message
                     ),
                     job=completed_job,
+                    media_info=media_info,
                 )
 
             return
@@ -4326,6 +5782,7 @@ async def download_handler(
                 playlist_index=(
                     single_playlist_index
                 ),
+                media_info=media_info,
             )
         )
 
@@ -4336,6 +5793,8 @@ async def download_handler(
                 ),
                 token=token,
                 audio_token=token,
+                cover_token=token,
+                description_token=token,
                 language=ui_language.get(),
             )
         )

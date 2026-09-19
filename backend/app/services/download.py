@@ -395,6 +395,148 @@ def _positive_int(
     return result
 
 
+def _positive_float(
+    value: Any,
+) -> float | None:
+
+    if value is None:
+
+        return None
+
+    try:
+
+        result = float(
+            value
+        )
+
+    except (
+        TypeError,
+        ValueError,
+    ):
+
+        return None
+
+    if result <= 0:
+
+        return None
+
+    return result
+
+
+# ============================================================
+# Thumbnail helpers
+# ============================================================
+
+def _best_thumbnail_url(
+    item: dict[str, Any],
+) -> str | None:
+    """Return the largest advertised thumbnail for one extractor item.
+
+    yt-dlp usually exposes ``thumbnail`` as a convenient default, but the
+    full ``thumbnails`` list often contains a larger original.  The Bot uses
+    this URL for the explicit cover-download action, so prefer dimensions and
+    use the later candidate as a stable tie-breaker for extractors that omit
+    dimensions.
+    """
+
+    candidates: list[
+        dict[str, Any]
+    ] = []
+
+    fallback = item.get(
+        "thumbnail"
+    )
+
+    if isinstance(
+        fallback,
+        str,
+    ) and fallback.strip():
+
+        candidates.append(
+            {
+                "url": fallback.strip(),
+            }
+        )
+
+    for thumbnail in (
+        item.get(
+            "thumbnails"
+        )
+        or []
+    ):
+
+        if not isinstance(
+            thumbnail,
+            dict,
+        ):
+
+            continue
+
+        url = thumbnail.get(
+            "url"
+        )
+
+        if not isinstance(
+            url,
+            str,
+        ) or not url.strip():
+
+            continue
+
+        candidates.append(
+            {
+                **thumbnail,
+                "url": url.strip(),
+            }
+        )
+
+    if not candidates:
+
+        return None
+
+    def score(
+        candidate: dict[str, Any],
+    ) -> tuple[
+        int,
+        int,
+        int,
+    ]:
+
+        width = _positive_int(
+            candidate.get(
+                "width"
+            )
+        ) or 0
+
+        height = _positive_int(
+            candidate.get(
+                "height"
+            )
+        ) or 0
+
+        return (
+            width * height,
+            width,
+            height,
+        )
+
+    return str(
+        max(
+            enumerate(
+                candidates
+            ),
+            key=lambda pair: (
+                *score(
+                    pair[1]
+                ),
+                pair[0],
+            ),
+        )[1][
+            "url"
+        ]
+    )
+
+
 # ============================================================
 # Content-Range
 # ============================================================
@@ -1111,6 +1253,16 @@ def _normalize_format(
         )
     )
 
+    fps = (
+        _positive_float(
+            item.get(
+                "fps"
+            )
+        )
+        if has_video
+        else None
+    )
+
     return {
         "format_id":
             str(
@@ -1137,6 +1289,9 @@ def _normalize_format(
 
         "audio_codec":
             audio_codec,
+
+        "fps":
+            fps,
     }
 
 
@@ -1566,11 +1721,11 @@ def _get_instagram_gallery_info(
         )
 
         thumbnail_url = (
-            item.get(
-                "thumbnail"
-            )
-            or best_thumbnail.get(
+            best_thumbnail.get(
                 "url"
+            )
+            or item.get(
+                "thumbnail"
             )
         )
 
@@ -1635,6 +1790,11 @@ def _get_instagram_gallery_info(
                 "title":
                     item.get(
                         "title"
+                    ),
+
+                "description":
+                    item.get(
+                        "description"
                     ),
 
                 "duration":
@@ -1702,6 +1862,11 @@ def _get_instagram_gallery_info(
         "title":
             raw_info.get(
                 "title"
+            ),
+
+        "description":
+            raw_info.get(
+                "description"
             ),
 
         "duration":
@@ -2160,6 +2325,13 @@ def _get_x_gallery_info(
                         else None
                     ),
 
+                "description":
+                    (
+                        str(content)
+                        if content
+                        else None
+                    ),
+
                 "duration":
                     duration,
 
@@ -2299,6 +2471,20 @@ def _get_x_gallery_info(
             "title":
                 title,
 
+            "description":
+                next(
+                    (
+                        entry.get(
+                            "description"
+                        )
+                        for entry in entries
+                        if entry.get(
+                            "description"
+                        )
+                    ),
+                    None,
+                ),
+
             "duration":
                 None,
 
@@ -2379,6 +2565,20 @@ def _get_x_gallery_info(
 
         "title":
             title,
+
+        "description":
+            next(
+                (
+                    entry.get(
+                        "description"
+                    )
+                    for entry in entries
+                    if entry.get(
+                        "description"
+                    )
+                ),
+                None,
+            ),
 
         "duration":
             None,
@@ -3473,12 +3673,17 @@ class DownloadService:
                                 "title"
                             ),
 
+                        "description":
+                            raw_entry.get(
+                                "description"
+                            ),
+
                         "duration":
                             entry_duration,
 
                         "thumbnail":
-                            raw_entry.get(
-                                "thumbnail"
+                            _best_thumbnail_url(
+                                raw_entry
                             ),
 
                         "formats":
@@ -3532,8 +3737,14 @@ class DownloadService:
             )
 
             top_thumbnail = (
+                _best_thumbnail_url(
+                    info
+                )
+            )
+
+            top_description = (
                 info.get(
-                    "thumbnail"
+                    "description"
                 )
             )
 
@@ -3570,6 +3781,13 @@ class DownloadService:
                     or top_thumbnail
                 )
 
+                top_description = (
+                    selected.get(
+                        "description"
+                    )
+                    or top_description
+                )
+
             return {
                 "source_url":
                     source_url,
@@ -3578,6 +3796,9 @@ class DownloadService:
                     info.get(
                         "title"
                     ),
+
+                "description":
+                    top_description,
 
                 "duration":
                     top_duration,
@@ -3647,12 +3868,17 @@ class DownloadService:
                     "title"
                 ),
 
+            "description":
+                info.get(
+                    "description"
+                ),
+
             "duration":
                 normalized_duration,
 
             "thumbnail":
-                info.get(
-                    "thumbnail"
+                _best_thumbnail_url(
+                    info
                 ),
 
             "formats":

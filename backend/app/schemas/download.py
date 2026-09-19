@@ -311,6 +311,14 @@ class MediaFormat(
         | None
     ) = None
 
+    # Frames per second is optional because some extractors do not expose it.
+    # Keeping it in the public media-info response lets the Bot describe the
+    # selected output accurately without guessing from a quality label.
+    fps: (
+        float
+        | None
+    ) = None
+
 
 # ============================================================
 # Media entry
@@ -334,6 +342,11 @@ class MediaEntry(
     ) = None
 
     title: (
+        str
+        | None
+    ) = None
+
+    description: (
         str
         | None
     ) = None
@@ -390,6 +403,14 @@ class MediaInfoResponse(
     source_url: str
 
     title: (
+        str
+        | None
+    ) = None
+
+    # Caption / post text when the upstream extractor provides it.  It is
+    # deliberately separate from ``title`` because many providers use a
+    # shortened title while retaining the full post description.
+    description: (
         str
         | None
     ) = None

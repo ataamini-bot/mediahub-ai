@@ -22,6 +22,7 @@ def add_pending_selection(
     ]
     | None = None,
     playlist_index: int | None = None,
+    media_info: dict | None = None,
 ) -> str:
 
     token = (
@@ -58,6 +59,21 @@ def add_pending_selection(
 
         "playlist_index":
             playlist_index,
+
+        # Keep the non-sensitive extraction result that powers the quality
+        # menu.  The Bot uses it for FPS/duration in the delivered-file
+        # caption and for the cover/description actions.  The source URL is
+        # already present above; no user credentials are kept here.
+        "media_info": (
+            dict(
+                media_info
+            )
+            if isinstance(
+                media_info,
+                dict,
+            )
+            else {}
+        ),
     }
 
     if (

@@ -1120,5 +1120,7 @@
   "🌐 <b>زبان ربات را انتخاب کنید / Choose the bot language:</b>": "🌐 <b>Choose the bot language:</b>",
   "❌ اتصال به Backend برقرار نشد / Backend is unavailable.": "❌ Backend is unavailable.",
   "این عملیات تأیید شود؟": "Confirm this action?",
-  "✅ تأیید": "✅ Confirm"
+  "✅ تأیید": "✅ Confirm",
+  "🔄 دانلود مجدد": "🔄 Download again",
+  "📋 جزئیات": "📋 Details"
 }

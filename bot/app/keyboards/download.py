@@ -69,6 +69,37 @@ def build_paused_download_keyboard(
     )
 
 
+def build_completed_download_keyboard(
+    job_id: int,
+) -> InlineKeyboardMarkup:
+    """Controls attached to the delivered file, not the progress message."""
+
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text=(
+                        _tr("🔄 دانلود مجدد")
+                    ),
+                    callback_data=(
+                        f"download_again:"
+                        f"{job_id}"
+                    ),
+                ),
+                InlineKeyboardButton(
+                    text=(
+                        _tr("📋 جزئیات")
+                    ),
+                    callback_data=(
+                        f"download_details:"
+                        f"{job_id}"
+                    ),
+                ),
+            ],
+        ]
+    )
+
+
 # ============================================================
 # Resolution helpers
 # ============================================================
