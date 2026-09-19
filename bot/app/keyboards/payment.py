@@ -8,7 +8,12 @@ from aiogram.types import (
 )
 
 from app.i18n import translate
-from app.runtime_config import fallback_configuration, runtime_button, runtime_button_style
+from app.runtime_config import (
+    fallback_configuration,
+    runtime_button,
+    runtime_button_style,
+    runtime_home_layout,
+)
 
 
 def _configuration(language: str, value: dict | None) -> dict:
@@ -143,30 +148,25 @@ def build_home_reply_keyboard(
 ) -> ReplyKeyboardMarkup:
     """Build the persistent menu displayed beside the Telegram input field."""
     config = _configuration(language, configuration)
-    rows = [
-        [
-            _reply_button(runtime_button(config, "buy"), runtime_button_style(config, "buy")),
-            _reply_button(runtime_button(config, "subscription"), runtime_button_style(config, "subscription")),
-        ],
-        [
-            _reply_button(runtime_button(config, "support"), runtime_button_style(config, "support")),
-            _reply_button(runtime_button(config, "language"), runtime_button_style(config, "language")),
-        ],
-        [
-            _reply_button(runtime_button(config, "convert"), runtime_button_style(config, "convert")),
-        ],
-        [
-            _reply_button(runtime_button(config, "tutorial"), runtime_button_style(config, "tutorial")),
-            _reply_button(runtime_button(config, "faq"), runtime_button_style(config, "faq")),
-        ],
-    ]
+    layout = runtime_home_layout(config)
+    columns = int(layout["columns"])
+    buttons: list[KeyboardButton] = []
+
+    for key in layout["order"]:
+        if key == "admin" and not include_admin:
+            continue
+        buttons.append(
+            _reply_button(
+                runtime_button(config, key),
+                runtime_button_style(config, key),
+            )
+        )
 
     customs = [
         c
         for c in config.get("custom_buttons", [])
         if isinstance(c, dict) and c.get("is_active", True)
     ]
-    custom_row: list[KeyboardButton] = []
     # Reply keyboards scroll vertically in Telegram. Keep every active
     # custom button here instead of replacing the seventh one with an
     # inline "More options" home menu, which created a duplicate main menu
@@ -175,15 +175,12 @@ def build_home_reply_keyboard(
         label = str(custom.get(f"label_{config.get('language', language)}") or "").strip()
         if not label:
             continue
-        custom_row.append(_reply_button(label[:64], str(custom.get("style") or "default")))
-        if len(custom_row) == 2:
-            rows.append(custom_row); custom_row = []
-    if custom_row:
-        rows.append(custom_row)
-    if include_admin:
-        rows.append(
-            [_reply_button(runtime_button(config, "admin"), runtime_button_style(config, "admin"))]
-        )
+        buttons.append(_reply_button(label[:64], str(custom.get("style") or "default")))
+
+    # The administrator selects one, two, or three buttons per row. The same
+    # layout is applied to active custom buttons so the visible menu remains
+    # coherent and Telegram can keep it as a single persistent keyboard.
+    rows = [buttons[index:index + columns] for index in range(0, len(buttons), columns)]
 
     return ReplyKeyboardMarkup(
         keyboard=rows,

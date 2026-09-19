@@ -25,12 +25,15 @@ from app.keyboards.admin_experience import (
     build_home_button_detail_keyboard,
     build_home_buttons_admin_keyboard,
     build_home_buttons_root_keyboard,
+    build_home_layout_keyboard,
+    build_home_layout_language_keyboard,
     build_home_style_keyboard,
 )
 from app.keyboards.payment import build_home_reply_keyboard
 from app.runtime_config import (
     clear_runtime_configuration_cache,
     runtime_configuration,
+    runtime_home_layout,
 )
 from app.services.backend import (
     BackendAPIError,
@@ -99,6 +102,8 @@ def _api_error(exc: BackendAPIError) -> str:
 
 
 def _copy_setting_key(language: str, section: str) -> str:
+    if section == "layout":
+        return f"bot.home_layout.{language}"
     setting_section = "button_styles" if section == "styles" else section
     return f"bot.{setting_section}.{language}"
 
@@ -167,6 +172,63 @@ async def _refresh_saved_style_for_admin(
 
     if isinstance(callback.message, Message):
         await callback.message.answer(text, reply_markup=markup)
+
+
+async def _refresh_saved_layout_for_admin(
+    callback: CallbackQuery,
+    *,
+    edited_language: str,
+    saved_layout: dict,
+) -> None:
+    """Refresh this administrator's persistent menu after a layout change."""
+
+    configuration = dict(
+        await runtime_configuration(edited_language, refresh=True)
+    )
+    configuration["home_layout"] = dict(saved_layout)
+    try:
+        user = await get_telegram_user(callback.from_user.id)
+        current_language = (
+            normalize_language(user.get("effective_language"))
+            or edited_language
+        )
+    except BackendAPIError:
+        current_language = edited_language
+
+    if current_language == edited_language:
+        text = _tr("✅ ترتیب و چیدمان جدید روی منوی اصلی این گفتگو اعمال شد.")
+        markup = build_home_reply_keyboard(
+            edited_language,
+            include_admin=True,
+            configuration=configuration,
+        )
+    else:
+        text = _tr(
+            "✅ چیدمان ذخیره شد. منوی زبان دیگر هنگام انتخاب آن به‌روزرسانی می‌شود."
+        )
+        markup = None
+    if isinstance(callback.message, Message):
+        await callback.message.answer(text, reply_markup=markup)
+
+
+def _layout_value(row: dict | None) -> dict:
+    """Read a setting row defensively without allowing a bad value to hide buttons."""
+
+    return runtime_home_layout(
+        {"home_layout": row.get("value") if isinstance(row, dict) else None}
+    )
+
+
+def _home_layout_text(language: str, layout: dict) -> str:
+    language_name = _tr("فارسی") if language == "fa" else "English"
+    return (
+        _tr("↕️ <b>ترتیب و چیدمان دکمه‌های اصلی</b>\n\n")
+        + _tr("زبان: <b>")
+        + language_name
+        + _tr("</b>\nدکمه در هر ردیف: <b>")
+        + str(layout["columns"])
+        + _tr("</b>\n\nبا فلش‌ها جای هر دکمه را تغییر دهید. انتخاب ۱، ۲ یا ۳، تعداد دکمه‌ها در هر ردیف منوی دائمی تلگرام را تعیین می‌کند.")
+    )
 
 
 async def _show_home_buttons(message: Message, actor_telegram_id: int) -> None:
@@ -507,12 +569,152 @@ async def home_buttons_root(callback: CallbackQuery, state: FSMContext) -> None:
     await callback.message.edit_text(
         _tr(
             "🧩 <b>دکمه‌های صفحه اصلی</b>\n\n"
-            "از این بخش می‌توانید عنوان و رنگ دکمه‌های اصلی را ویرایش کنید "
-            "یا دکمه‌های صفحه اصلی را مدیریت کنید."
+            "از این بخش می‌توانید عنوان، رنگ، ترتیب و چیدمان دکمه‌های اصلی را "
+            "ویرایش کنید. مدیریت دکمه‌های سفارشی پس از انتخاب زبان، زیر «متن‌ها و عنوان دکمه‌ها» قرار دارد."
         ),
         parse_mode="HTML",
         reply_markup=build_home_buttons_root_keyboard(),
     )
+    await callback.answer()
+
+
+@router.callback_query(F.data == "admin:homelayout")
+async def home_layout_root(callback: CallbackQuery, state: FSMContext) -> None:
+    if not isinstance(callback.message, Message):
+        return
+    if await _context(callback.from_user.id, "settings.manage") is None:
+        await callback.answer(_tr("دسترسی مدیریت دکمه‌ها را ندارید."), show_alert=True)
+        return
+    await state.clear()
+    await callback.message.edit_text(
+        _tr("↕️ <b>ترتیب و چیدمان دکمه‌های اصلی</b>\n\nزبان منوی موردنظر را انتخاب کنید:"),
+        parse_mode="HTML",
+        reply_markup=build_home_layout_language_keyboard(),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.regexp(r"^admin:layout:lang:(fa|en)$"))
+async def home_layout_language(callback: CallbackQuery, state: FSMContext) -> None:
+    if not callback.data or not isinstance(callback.message, Message):
+        return
+    if await _context(callback.from_user.id, "settings.manage") is None:
+        await callback.answer(_tr("دسترسی ندارید."), show_alert=True)
+        return
+    language = callback.data.rsplit(":", 1)[-1]
+    try:
+        row = await _setting_row(
+            callback.from_user.id,
+            language=language,
+            section="layout",
+        )
+    except BackendAPIError as exc:
+        await callback.answer(_api_error(exc), show_alert=True)
+        return
+    if row is None:
+        await callback.answer(_tr("تنظیم چیدمان در دیتابیس پیدا نشد."), show_alert=True)
+        return
+    layout = _layout_value(row)
+    await state.clear()
+    await callback.message.edit_text(
+        _home_layout_text(language, layout),
+        parse_mode="HTML",
+        reply_markup=build_home_layout_keyboard(language, layout),
+    )
+    await callback.answer()
+
+
+async def _save_home_layout(
+    callback: CallbackQuery,
+    *,
+    language: str,
+    layout: dict,
+    row: dict,
+) -> None:
+    await update_application_setting(
+        actor_telegram_id=callback.from_user.id,
+        key=str(row["key"]),
+        category=str(row.get("category") or "bot_buttons"),
+        value=layout,
+        expected_version=int(row["version"]),
+        description=row.get("description"),
+    )
+    clear_runtime_configuration_cache()
+    await _refresh_saved_layout_for_admin(
+        callback,
+        edited_language=language,
+        saved_layout=layout,
+    )
+
+
+@router.callback_query(F.data.regexp(r"^admin:layout:cols:(fa|en):[123]$"))
+async def save_home_layout_columns(callback: CallbackQuery, state: FSMContext) -> None:
+    if not callback.data or not isinstance(callback.message, Message):
+        return
+    if await _context(callback.from_user.id, "settings.manage") is None:
+        await callback.answer(_tr("دسترسی ندارید."), show_alert=True)
+        return
+    _admin, _layout, _columns, language, raw_columns = callback.data.split(":")
+    try:
+        row = await _setting_row(callback.from_user.id, language=language, section="layout")
+        if row is None:
+            raise BackendAPIError(status_code=404, detail="missing home layout setting")
+        layout = _layout_value(row)
+        selected_columns = int(raw_columns)
+        if layout["columns"] == selected_columns:
+            await callback.answer(_tr("این چیدمان از قبل فعال است."))
+            return
+        layout["columns"] = selected_columns
+        await _save_home_layout(callback, language=language, layout=layout, row=row)
+        await state.clear()
+        await callback.message.edit_text(
+            _home_layout_text(language, layout),
+            parse_mode="HTML",
+            reply_markup=build_home_layout_keyboard(language, layout),
+        )
+        await callback.answer(_tr("چیدمان ذخیره شد."))
+    except BackendAPIError as exc:
+        await callback.answer(_api_error(exc), show_alert=True)
+
+
+@router.callback_query(F.data.regexp(r"^admin:layout:move:(fa|en):[a-z_]+:(up|down)$"))
+async def move_home_layout_button(callback: CallbackQuery, state: FSMContext) -> None:
+    if not callback.data or not isinstance(callback.message, Message):
+        return
+    if await _context(callback.from_user.id, "settings.manage") is None:
+        await callback.answer(_tr("دسترسی ندارید."), show_alert=True)
+        return
+    _admin, _layout, _move, language, key, direction = callback.data.split(":")
+    try:
+        row = await _setting_row(callback.from_user.id, language=language, section="layout")
+        if row is None:
+            raise BackendAPIError(status_code=404, detail="missing home layout setting")
+        layout = _layout_value(row)
+        order = list(layout["order"])
+        if key not in order:
+            await callback.answer(_tr("دکمه معتبر نیست."), show_alert=True)
+            return
+        index = order.index(key)
+        target = index - 1 if direction == "up" else index + 1
+        if target < 0 or target >= len(order):
+            await callback.answer(_tr("این دکمه در انتهای فهرست است."), show_alert=True)
+            return
+        order[index], order[target] = order[target], order[index]
+        layout["order"] = order
+        await _save_home_layout(callback, language=language, layout=layout, row=row)
+        await state.clear()
+        await callback.message.edit_text(
+            _home_layout_text(language, layout),
+            parse_mode="HTML",
+            reply_markup=build_home_layout_keyboard(language, layout),
+        )
+        await callback.answer(_tr("ترتیب ذخیره شد."))
+    except BackendAPIError as exc:
+        await callback.answer(_api_error(exc), show_alert=True)
+
+
+@router.callback_query(F.data == "admin:layout:noop")
+async def home_layout_noop(callback: CallbackQuery) -> None:
     await callback.answer()
 
 

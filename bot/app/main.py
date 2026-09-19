@@ -44,7 +44,11 @@ from app.keyboards.payment import (
     build_upgrade_keyboard,
 )
 from app.handlers.operations import router as operations_router
-from app.handlers.conversion import cleanup_staged_state, router as conversion_router
+from app.handlers.conversion import (
+    cleanup_staged_state,
+    configure_download_runtime,
+    router as conversion_router,
+)
 from app.handlers.home import (
     router as home_router,
 )
@@ -2552,6 +2556,17 @@ async def send_downloaded_file(
                 f"{type(exc).__name__}: "
                 f"{exc}"
             )
+
+
+# Conversion callbacks share the ordinary download progress and delivery
+# implementation.  Register it here rather than importing this entrypoint
+# from a router while it is already executing as ``__main__``.
+configure_download_runtime(
+    wait_for_download=wait_for_download,
+    send_downloaded_file=send_downloaded_file,
+    download_error_text=download_error_text,
+    download_error_markup=download_error_markup,
+)
 
 
 # ============================================================

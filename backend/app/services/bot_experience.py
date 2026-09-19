@@ -30,7 +30,11 @@ from app.models.user import User, UserStatus
 from app.services.application_settings import ApplicationSettingsService
 from app.services.audit import AuditService
 from app.services.admin_access import AdminAccessService
-from app.services.managed_settings import BUTTON_KEYS
+from app.services.managed_settings import (
+    BUTTON_KEYS,
+    DEFAULT_HOME_LAYOUT as MANAGED_DEFAULT_HOME_LAYOUT,
+    HOME_MENU_BUTTON_KEYS,
+)
 from app.core.language import effective_language
 
 
@@ -57,6 +61,10 @@ DEFAULT_BUTTON_STYLES: dict[str, dict[str, str]] = {
         "convert": "primary",
         "admin": "danger",
     },
+}
+DEFAULT_HOME_LAYOUT = {
+    "columns": int(MANAGED_DEFAULT_HOME_LAYOUT["columns"]),
+    "order": list(HOME_MENU_BUTTON_KEYS),
 }
 SUPPORT_CATEGORIES = {"download", "payment", "subscription", "account", "other"}
 SUPPORT_FILE_TYPES = {"photo", "document", "video", "voice"}
@@ -243,6 +251,26 @@ def _merge_style_map(defaults: dict[str, str], value: Any) -> dict[str, str]:
     return result
 
 
+def _merge_home_layout(value: Any) -> dict[str, Any]:
+    """Return a complete, safe main-menu layout for Bot clients."""
+
+    columns = DEFAULT_HOME_LAYOUT["columns"]
+    order = list(DEFAULT_HOME_LAYOUT["order"])
+    if not isinstance(value, dict):
+        return {"columns": columns, "order": order}
+
+    candidate_columns = value.get("columns")
+    if isinstance(candidate_columns, int) and not isinstance(candidate_columns, bool) and candidate_columns in {1, 2, 3}:
+        columns = candidate_columns
+
+    candidate_order = value.get("order")
+    if isinstance(candidate_order, list):
+        normalized = [key for key in candidate_order if key in HOME_MENU_BUTTON_KEYS]
+        if len(normalized) == len(HOME_MENU_BUTTON_KEYS) and len(set(normalized)) == len(normalized):
+            order = normalized
+    return {"columns": columns, "order": order}
+
+
 class BotExperienceService:
     def __init__(self, session: AsyncSession):
         self.session = session
@@ -262,6 +290,9 @@ class BotExperienceService:
             DEFAULT_BUTTON_STYLES[normalized],
             await settings.get_value(f"bot.button_styles.{normalized}"),
         )
+        home_layout = _merge_home_layout(
+            await settings.get_value(f"bot.home_layout.{normalized}"),
+        )
         home_result = await self.session.execute(
             select(HomeButton)
             .where(HomeButton.is_active.is_(True))
@@ -277,6 +308,7 @@ class BotExperienceService:
             "content": content,
             "buttons": buttons,
             "button_styles": button_styles,
+            "home_layout": home_layout,
             "custom_buttons": [self.serialize_home_button(row) for row in home_result.scalars()],
             "required_channels": [self.serialize_channel(row) for row in channel_result.scalars()],
         }

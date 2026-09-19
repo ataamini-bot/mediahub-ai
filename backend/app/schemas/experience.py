@@ -25,6 +25,7 @@ class BotConfigurationResponse(BaseModel):
     content: dict[str, str]
     buttons: dict[str, str]
     button_styles: dict[str, ButtonStyle] = Field(default_factory=dict)
+    home_layout: dict[str, Any] = Field(default_factory=dict)
     custom_buttons: list[dict[str, Any]]
     required_channels: list[dict[str, Any]]
 

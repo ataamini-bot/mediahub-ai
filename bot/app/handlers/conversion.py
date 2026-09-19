@@ -8,7 +8,9 @@ import logging
 import os
 import shutil
 import uuid
+from collections.abc import Awaitable, Callable
 from pathlib import Path
+from typing import Any
 from urllib.parse import unquote, urlparse
 
 import aiofiles
@@ -62,9 +64,44 @@ def _positive_int_setting(name: str, default: int) -> int:
 
 LOCAL_FILE_READ_ATTEMPTS = _positive_int_setting(
     "TELEGRAM_LOCAL_FILE_READ_ATTEMPTS",
-    4,
+    12,
 )
 LOCAL_FILE_READ_DELAY_SECONDS = 0.5
+
+
+# The conversion router is included by ``app.main``.  Importing ``app.main``
+# from a callback would execute the module for a second time when the Bot is
+# launched with ``python -m app.main``; aiogram then rejects the already
+# attached routers.  Main registers the runtime functions below after it has
+# defined them, so this router never imports the module that owns Dispatcher.
+DownloadRuntimeFunction = Callable[..., Any]
+_download_runtime: dict[str, DownloadRuntimeFunction] = {}
+
+
+def configure_download_runtime(
+    *,
+    wait_for_download: Callable[[int, Message, str], Awaitable[dict]],
+    send_downloaded_file: Callable[..., Awaitable[None]],
+    download_error_text: Callable[[Exception], str],
+    download_error_markup: Callable[[Exception], InlineKeyboardMarkup | None],
+) -> None:
+    """Register the shared delivery helpers owned by the Bot entrypoint."""
+
+    _download_runtime.update(
+        {
+            "wait_for_download": wait_for_download,
+            "send_downloaded_file": send_downloaded_file,
+            "download_error_text": download_error_text,
+            "download_error_markup": download_error_markup,
+        }
+    )
+
+
+def _download_runtime_function(name: str) -> DownloadRuntimeFunction:
+    function = _download_runtime.get(name)
+    if not callable(function):
+        raise RuntimeError("Conversion delivery runtime is not configured")
+    return function
 
 
 def _is_english() -> bool:
@@ -81,8 +118,16 @@ def _cancel_keyboard(language: str) -> InlineKeyboardMarkup:
 
 
 def _attachment(message: Message) -> tuple[object, str, int | None] | None:
+    """Return every Telegram attachment type that can contain media.
+
+    Telegram uses different fields for a regular video, a round video,
+    voice message, music upload, animation, and a file sent as a document.
+    All are staged through the same reader and then verified with ffprobe.
+    """
+
     candidates = (
         (message.video, "video.mp4"),
+        (message.animation, "animation.mp4"),
         (message.audio, "audio"),
         (message.voice, "voice.ogg"),
         (message.video_note, "video.mp4"),
@@ -128,6 +173,9 @@ def _local_file_candidates(bot: object, file_path: str) -> tuple[Path, ...]:
 
     parsed = urlparse(raw_path)
     if parsed.scheme == "file":
+        # A Local Bot API may return either ``file:///...`` or a file URI
+        # containing its own hostname.  The mounted path is still the URI
+        # path; the hostname is not a directory inside the shared volume.
         raw_path = unquote(parsed.path)
 
     wrapper = getattr(api, "wrap_local_file", None)
@@ -642,9 +690,8 @@ async def choose_conversion_format(callback: CallbackQuery, state: FSMContext) -
             reply_markup=build_active_download_keyboard(job_id),
         )
 
-        # Imported lazily to avoid a module cycle: main owns the shared
-        # progress renderer and final Telegram delivery implementation.
-        from app.main import send_downloaded_file, wait_for_download
+        wait_for_download = _download_runtime_function("wait_for_download")
+        send_downloaded_file = _download_runtime_function("send_downloaded_file")
 
         completed = await wait_for_download(
             job_id,
@@ -658,9 +705,10 @@ async def choose_conversion_format(callback: CallbackQuery, state: FSMContext) -
                 job=completed,
             )
     except BackendAPIError as exc:
-        # Imported lazily because main includes the conversion router. This
-        # keeps quota errors consistent with normal download errors.
-        from app.main import download_error_markup, download_error_text
+        # Keep quota errors consistent with ordinary downloads without
+        # importing the entrypoint (which would attach routers a second time).
+        download_error_markup = _download_runtime_function("download_error_markup")
+        download_error_text = _download_runtime_function("download_error_text")
 
         await status_message.edit_text(
             "❌ Conversion failed.\n\n" + html.escape(download_error_text(exc))

@@ -2,6 +2,7 @@ from app.admin_runtime_settings import runtime_settings_text
 from app.main import dp
 from app.keyboards.admin_experience import (
     BUTTON_LABELS,
+    build_copy_section_keyboard,
     build_home_buttons_root_keyboard,
 )
 from app.keyboards.admin_settings import build_runtime_settings_keyboard
@@ -78,7 +79,7 @@ def test_home_buttons_are_the_parent_for_labels_and_custom_button_management():
     home_callbacks = [row[0].callback_data for row in home_keyboard.inline_keyboard]
     assert home_callbacks == [
         "admin:copy",
-        "admin:homebuttons:list",
+        "admin:homelayout",
         "admin:settings",
     ]
 
@@ -94,6 +95,15 @@ def test_button_editor_contains_every_builtin_home_button():
         "faq",
         "admin",
     }.issubset(BUTTON_LABELS.keys())
+
+
+def test_custom_home_buttons_are_nested_under_text_and_title_settings():
+    callbacks = [
+        row[0].callback_data
+        for row in build_copy_section_keyboard("fa").inline_keyboard
+    ]
+
+    assert "admin:homebuttons:list" in callbacks
 
 
 def test_settings_viewer_only_gets_back_button():

@@ -10,7 +10,14 @@ from app.services.application_settings import (
 )
 
 
-SettingKind = Literal["boolean", "integer", "timezone", "string_map", "style_map"]
+SettingKind = Literal[
+    "boolean",
+    "integer",
+    "timezone",
+    "string_map",
+    "style_map",
+    "home_layout",
+]
 
 
 @dataclass(frozen=True, slots=True)
@@ -55,6 +62,21 @@ BUTTON_KEYS = frozenset(
     }
 )
 BUTTON_STYLES = frozenset({"default", "primary", "success", "danger"})
+HOME_MENU_BUTTON_KEYS = (
+    "buy",
+    "subscription",
+    "support",
+    "language",
+    "convert",
+    "tutorial",
+    "faq",
+    "admin",
+)
+HOME_MENU_BUTTON_KEY_SET = frozenset(HOME_MENU_BUTTON_KEYS)
+DEFAULT_HOME_LAYOUT = {
+    "columns": 2,
+    "order": list(HOME_MENU_BUTTON_KEYS),
+}
 
 
 MANAGED_SETTINGS: dict[str, ManagedSetting] = {
@@ -158,6 +180,22 @@ MANAGED_SETTINGS: dict[str, ManagedSetting] = {
         description_fa="Telegram styles for English built-in buttons",
         allowed_keys=BUTTON_KEYS,
     ),
+    "bot.home_layout.fa": ManagedSetting(
+        key="bot.home_layout.fa",
+        category="bot_buttons",
+        kind="home_layout",
+        default=DEFAULT_HOME_LAYOUT,
+        label_fa="چیدمان منوی فارسی",
+        description_fa="ترتیب دکمه‌های اصلی و تعداد دکمه در هر ردیف",
+    ),
+    "bot.home_layout.en": ManagedSetting(
+        key="bot.home_layout.en",
+        category="bot_buttons",
+        kind="home_layout",
+        default=DEFAULT_HOME_LAYOUT,
+        label_fa="چیدمان منوی انگلیسی",
+        description_fa="Order and row size for English main-menu buttons",
+    ),
 }
 
 
@@ -220,6 +258,19 @@ def validate_managed_setting(key: str, value: Any) -> Any:
                 raise SettingValidationError("Unsupported Telegram button style")
             normalized[str(raw_key)] = style
         return normalized
+
+    if definition.kind == "home_layout":
+        if not isinstance(value, dict):
+            raise SettingValidationError("Home menu layout must be an object")
+        columns = value.get("columns")
+        if isinstance(columns, bool) or not isinstance(columns, int) or columns not in {1, 2, 3}:
+            raise SettingValidationError("Home menu columns must be 1, 2, or 3")
+        order = value.get("order")
+        if not isinstance(order, list) or any(not isinstance(key, str) for key in order):
+            raise SettingValidationError("Home menu order must be a list of button keys")
+        if len(order) != len(HOME_MENU_BUTTON_KEYS) or set(order) != HOME_MENU_BUTTON_KEY_SET:
+            raise SettingValidationError("Home menu order must contain each built-in button exactly once")
+        return {"columns": columns, "order": list(order)}
 
     raise SettingValidationError("Unsupported managed setting type")
 

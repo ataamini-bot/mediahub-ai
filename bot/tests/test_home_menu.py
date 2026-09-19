@@ -63,6 +63,55 @@ def test_persistent_home_keyboard_keeps_all_custom_buttons_scrollable():
     assert keyboard.is_persistent is True
 
 
+def test_persistent_home_keyboard_honors_admin_order_and_one_two_three_columns():
+    configuration = {
+        "language": "en",
+        "buttons": {},
+        "home_layout": {
+            "columns": 3,
+            "order": [
+                "support", "buy", "subscription", "convert",
+                "language", "faq", "tutorial", "admin",
+            ],
+        },
+        "custom_buttons": [],
+    }
+
+    keyboard = build_home_reply_keyboard(
+        "en",
+        include_admin=True,
+        configuration=configuration,
+    )
+
+    assert [len(row) for row in keyboard.keyboard] == [3, 3, 2]
+    assert _button_texts(keyboard) == [
+        "🛟 Support",
+        "💎 Buy subscription",
+        "👤 My subscription",
+        "🔄 Convert media",
+        "🌐 Language",
+        "❓ FAQ",
+        "📘 How to use",
+        "⚙️ Admin panel",
+    ]
+
+    configuration["home_layout"]["columns"] = 1
+    one_per_row = build_home_reply_keyboard(
+        "en",
+        include_admin=False,
+        configuration=configuration,
+    )
+    assert all(len(row) == 1 for row in one_per_row.keyboard)
+
+    configuration["home_layout"]["columns"] = 2
+    two_per_row = build_home_reply_keyboard(
+        "en",
+        include_admin=False,
+        configuration=configuration,
+    )
+    assert [len(row) for row in two_per_row.keyboard] == [2, 2, 2, 1]
+
+
 def test_persistent_home_labels_resolve_without_fuzzy_matching():
     assert home_action_for_text("💎 خرید اشتراک") == "buy"
     assert home_action_for_text("👤 My subscription") == "subscription"

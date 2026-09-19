@@ -48,7 +48,7 @@ def build_copy_root_keyboard() -> InlineKeyboardMarkup:
 
 
 def build_home_buttons_root_keyboard() -> InlineKeyboardMarkup:
-    """Show the two admin tools that belong to the home-button section."""
+    """Show the admin tools that belong to the home-button section."""
 
     return InlineKeyboardMarkup(
         inline_keyboard=[
@@ -60,8 +60,8 @@ def build_home_buttons_root_keyboard() -> InlineKeyboardMarkup:
             ],
             [
                 InlineKeyboardButton(
-                    text=_tr("🛠 مدیریت دکمه‌های صفحه اصلی"),
-                    callback_data="admin:homebuttons:list",
+                    text=_tr("↕️ ترتیب و چیدمان دکمه‌ها"),
+                    callback_data="admin:homelayout",
                 )
             ],
             [
@@ -72,6 +72,64 @@ def build_home_buttons_root_keyboard() -> InlineKeyboardMarkup:
             ],
         ]
     )
+
+
+def build_home_layout_language_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text=_tr("🇮🇷 فارسی"), callback_data="admin:layout:lang:fa"),
+                InlineKeyboardButton(text="🇬🇧 English", callback_data="admin:layout:lang:en"),
+            ],
+            [
+                InlineKeyboardButton(
+                    text=_tr("🔙 دکمه‌های صفحه اصلی"),
+                    callback_data="admin:homebuttons",
+                )
+            ],
+        ]
+    )
+
+
+def build_home_layout_keyboard(language: str, layout: dict) -> InlineKeyboardMarkup:
+    """Build the one/two/three-column and built-in button order editor."""
+
+    columns = int(layout.get("columns") or 2)
+    order = list(layout.get("order") or [])
+    rows: list[list[InlineKeyboardButton]] = [
+        [
+            InlineKeyboardButton(
+                text=("✅ " if columns == count else "") + _tr(f"{count} در هر ردیف"),
+                callback_data=f"admin:layout:cols:{language}:{count}",
+            )
+            for count in (1, 2, 3)
+        ]
+    ]
+    for index, key in enumerate(order, start=1):
+        label = BUTTON_LABELS.get(key, key)
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text="⬆️",
+                    callback_data=f"admin:layout:move:{language}:{key}:up",
+                ),
+                InlineKeyboardButton(
+                    text=f"{index}. {_tr(label)}",
+                    callback_data="admin:layout:noop",
+                ),
+                InlineKeyboardButton(
+                    text="⬇️",
+                    callback_data=f"admin:layout:move:{language}:{key}:down",
+                ),
+            ]
+        )
+    rows.append([
+        InlineKeyboardButton(
+            text=_tr("🔙 انتخاب زبان"),
+            callback_data="admin:homelayout",
+        )
+    ])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def build_copy_section_keyboard(language: str) -> InlineKeyboardMarkup:
@@ -93,6 +151,12 @@ def build_copy_section_keyboard(language: str) -> InlineKeyboardMarkup:
                 InlineKeyboardButton(
                     text=_tr("🎨 رنگ دکمه‌ها"),
                     callback_data=f"admin:copy:section:{language}:styles",
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text=_tr("🛠 دکمه‌های صفحه اصلی"),
+                    callback_data="admin:homebuttons:list",
                 )
             ],
             [InlineKeyboardButton(text=_tr("🔙 انتخاب زبان"), callback_data="admin:copy")],

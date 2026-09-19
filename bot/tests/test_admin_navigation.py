@@ -169,6 +169,98 @@ def test_saving_main_button_color_refreshes_persistent_keyboard(ui, monkeypatch)
     asyncio.run(exercise())
 
 
+def test_saving_home_layout_refreshes_persistent_keyboard(ui, monkeypatch):
+    context = {"is_admin": True, "permissions": ["settings.manage"]}
+    monkeypatch.setattr(
+        admin_experience,
+        "get_admin_context",
+        AsyncMock(return_value=context),
+    )
+    row = {
+        "key": "bot.home_layout.fa",
+        "category": "bot_buttons",
+        "version": 3,
+        "value": {
+            "columns": 2,
+            "order": [
+                "buy", "subscription", "support", "language",
+                "convert", "tutorial", "faq", "admin",
+            ],
+        },
+    }
+    monkeypatch.setattr(
+        admin_experience,
+        "list_application_settings",
+        AsyncMock(return_value=[row]),
+    )
+    save = AsyncMock()
+    monkeypatch.setattr(admin_experience, "update_application_setting", save)
+    monkeypatch.setattr(
+        admin_experience,
+        "get_telegram_user",
+        AsyncMock(return_value={"effective_language": "fa", "is_admin": True}),
+    )
+    refreshed = AsyncMock(return_value=fallback_configuration("fa"))
+    monkeypatch.setattr(admin_experience, "runtime_configuration", refreshed)
+
+    async def exercise():
+        await ui.dispatch(callback="admin:layout:cols:fa:3")
+
+        save.assert_awaited_once()
+        assert save.await_args.kwargs["key"] == "bot.home_layout.fa"
+        assert save.await_args.kwargs["value"] == {
+            "columns": 3,
+            "order": row["value"]["order"],
+        }
+        markup = ui.answer.await_args.kwargs["reply_markup"]
+        assert isinstance(markup, ReplyKeyboardMarkup)
+        assert [len(menu_row) for menu_row in markup.keyboard] == [3, 3, 2]
+        assert "ترتیب و چیدمان" in ui.edit.await_args.args[0]
+        assert await ui.state.get_state() is None
+
+    asyncio.run(exercise())
+
+
+def test_moving_home_layout_button_swaps_only_requested_neighbors(ui, monkeypatch):
+    context = {"is_admin": True, "permissions": ["settings.manage"]}
+    monkeypatch.setattr(admin_experience, "get_admin_context", AsyncMock(return_value=context))
+    row = {
+        "key": "bot.home_layout.fa",
+        "category": "bot_buttons",
+        "version": 9,
+        "value": {
+            "columns": 2,
+            "order": [
+                "buy", "subscription", "support", "language",
+                "convert", "tutorial", "faq", "admin",
+            ],
+        },
+    }
+    monkeypatch.setattr(admin_experience, "list_application_settings", AsyncMock(return_value=[row]))
+    save = AsyncMock()
+    monkeypatch.setattr(admin_experience, "update_application_setting", save)
+    monkeypatch.setattr(
+        admin_experience,
+        "get_telegram_user",
+        AsyncMock(return_value={"effective_language": "en", "is_admin": True}),
+    )
+    monkeypatch.setattr(
+        admin_experience,
+        "runtime_configuration",
+        AsyncMock(return_value=fallback_configuration("fa")),
+    )
+
+    async def exercise():
+        await ui.dispatch(callback="admin:layout:move:fa:support:up")
+        assert save.await_args.kwargs["value"]["order"] == [
+            "buy", "support", "subscription", "language",
+            "convert", "tutorial", "faq", "admin",
+        ]
+        assert ui.answer.await_args.kwargs["reply_markup"] is None
+
+    asyncio.run(exercise())
+
+
 @pytest.mark.parametrize("permissions", [
     ["roles.manage"], ["admins.manage"], ["admins.manage", "roles.manage"], [],
 ])

@@ -18,6 +18,20 @@ _DEFAULT_BUTTON_STYLES = {
     "convert": "primary",
     "admin": "danger",
 }
+HOME_MENU_BUTTON_KEYS = (
+    "buy",
+    "subscription",
+    "support",
+    "language",
+    "convert",
+    "tutorial",
+    "faq",
+    "admin",
+)
+_DEFAULT_HOME_LAYOUT = {
+    "columns": 2,
+    "order": list(HOME_MENU_BUTTON_KEYS),
+}
 
 
 FALLBACK_CONTENT: dict[str, dict[str, str]] = {
@@ -74,6 +88,10 @@ def fallback_configuration(language: str) -> dict[str, Any]:
             "back_home": "🏠 منوی اصلی" if normalized == "fa" else "🏠 Main menu",
         },
         "button_styles": dict(_DEFAULT_BUTTON_STYLES),
+        "home_layout": {
+            "columns": _DEFAULT_HOME_LAYOUT["columns"],
+            "order": list(_DEFAULT_HOME_LAYOUT["order"]),
+        },
         "custom_buttons": [],
         "required_channels": [],
     }
@@ -114,6 +132,11 @@ async def runtime_configuration(
                 if str(value).strip().lower() in _BUTTON_STYLES
             },
         }
+        result["home_layout"] = runtime_home_layout(
+            {
+                "home_layout": result.get("home_layout"),
+            }
+        )
         result["custom_buttons"] = list(result.get("custom_buttons") or [])
         result["required_channels"] = list(result.get("required_channels") or [])
     except Exception:
@@ -166,6 +189,32 @@ def runtime_button_style(configuration: dict, key: str) -> str:
         if value in _BUTTON_STYLES:
             return value
     return str(fallback_configuration(configuration.get("language", "fa"))["button_styles"].get(key, "default"))
+
+
+def runtime_home_layout(configuration: dict) -> dict[str, Any]:
+    """Normalize the admin-controlled order and row width of the reply menu."""
+
+    layout = configuration.get("home_layout") if isinstance(configuration, dict) else None
+    columns = _DEFAULT_HOME_LAYOUT["columns"]
+    order = list(_DEFAULT_HOME_LAYOUT["order"])
+    if not isinstance(layout, dict):
+        return {"columns": columns, "order": order}
+
+    candidate_columns = layout.get("columns")
+    if isinstance(candidate_columns, int) and not isinstance(candidate_columns, bool) and candidate_columns in {1, 2, 3}:
+        columns = candidate_columns
+
+    candidate_order = layout.get("order")
+    if isinstance(candidate_order, list):
+        cleaned: list[str] = []
+        for key in candidate_order:
+            if key in HOME_MENU_BUTTON_KEYS and key not in cleaned:
+                cleaned.append(key)
+        # A partial/corrupt setting must never hide a primary action. Append
+        # missing keys in the default order while keeping every valid move.
+        cleaned.extend(key for key in HOME_MENU_BUTTON_KEYS if key not in cleaned)
+        order = cleaned
+    return {"columns": columns, "order": order}
 
 
 def action_for_runtime_text(

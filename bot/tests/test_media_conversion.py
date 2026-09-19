@@ -10,7 +10,7 @@ from app.keyboards.conversion import (
 )
 from app.keyboards.payment import build_home_keyboard, build_home_reply_keyboard
 from app.handlers import conversion
-from app.handlers.conversion import _download_telegram_file, _local_file_candidates
+from app.handlers.conversion import _attachment, _download_telegram_file, _local_file_candidates
 from app.utils.media_conversion import (
     AUDIO_FORMATS,
     VIDEO_FORMATS,
@@ -78,6 +78,59 @@ def test_bot_can_read_uploads_exposed_by_the_local_telegram_api():
     compose = compose_path.read_text(encoding="utf-8")
 
     assert "telegram_api_data:/var/lib/telegram-bot-api:ro" in compose
+    assert "--dir=/var/lib/telegram-bot-api" in compose
+
+
+def test_every_telegram_audio_video_attachment_uses_the_conversion_reader():
+    kinds = {
+        "video": ("clip.mp4", 101),
+        "animation": ("animation.mp4", 102),
+        "audio": ("song.mp3", 103),
+        "voice": ("voice.ogg", 104),
+        "video_note": ("note.mp4", 105),
+        "document": ("movie.mkv", 106),
+    }
+    for kind, (name, size) in kinds.items():
+        values = {
+            candidate: None
+            for candidate in kinds
+        }
+        values[kind] = SimpleNamespace(
+            file_id=f"{kind}-file-id",
+            file_name=name,
+            file_size=size,
+        )
+        attachment = _attachment(SimpleNamespace(**values))
+        assert attachment is not None
+        item, original_name, declared_size = attachment
+        assert item.file_id == f"{kind}-file-id"
+        assert original_name == name
+        assert declared_size == size
+
+
+def test_conversion_runtime_is_injected_without_reimporting_main():
+    async def wait_for_download(*_args, **_kwargs):
+        return {"status": "completed"}
+
+    async def send_downloaded_file(*_args, **_kwargs):
+        return None
+
+    def error_text(_error):
+        return "error"
+
+    def error_markup(_error):
+        return None
+
+    conversion.configure_download_runtime(
+        wait_for_download=wait_for_download,
+        send_downloaded_file=send_downloaded_file,
+        download_error_text=error_text,
+        download_error_markup=error_markup,
+    )
+
+    assert conversion._download_runtime_function("wait_for_download") is wait_for_download
+    assert conversion._download_runtime_function("send_downloaded_file") is send_downloaded_file
+    assert "from app.main" not in Path(conversion.__file__).read_text(encoding="utf-8")
 
 
 def test_local_bot_api_upload_is_copied_from_the_absolute_file_path(tmp_path):
