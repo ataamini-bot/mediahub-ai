@@ -1010,8 +1010,143 @@ def format_eta(
 # Progress text
 # ============================================================
 
+def format_frame_rate(
+    value: object,
+) -> str | None:
+
+    if isinstance(
+        value,
+        bool,
+    ):
+
+        return None
+
+    try:
+
+        frame_rate = float(
+            value
+        )
+
+    except (
+        TypeError,
+        ValueError,
+    ):
+
+        return None
+
+    if not (
+        0 < frame_rate <= 240
+    ):
+
+        return None
+
+    rounded = round(
+        frame_rate
+    )
+
+    if abs(
+        frame_rate
+        - rounded
+    ) < 0.01:
+
+        label = str(
+            rounded
+        )
+
+    else:
+
+        label = (
+            f"{frame_rate:.2f}"
+            .rstrip(
+                "0"
+            )
+            .rstrip(
+                "."
+            )
+        )
+
+    return (
+        f"{label} FPS"
+    )
+
+
+def format_download_quality(
+    quality: object,
+    frame_rate: object = None,
+) -> str:
+
+    quality_label = html.escape(
+        str(
+            quality
+            or _tr("نامشخص")
+        )
+    )
+
+    frame_rate_label = (
+        format_frame_rate(
+            frame_rate
+        )
+    )
+
+    if frame_rate_label:
+
+        return (
+            f"{quality_label}"
+            f" • "
+            f"{frame_rate_label}"
+        )
+
+    return quality_label
+
+
+def build_progress_bar(
+    progress: object,
+    width: int = 10,
+) -> str:
+
+    try:
+
+        normalized_progress = int(
+            float(
+                progress
+            )
+        )
+
+    except (
+        TypeError,
+        ValueError,
+    ):
+
+        normalized_progress = 0
+
+    normalized_progress = max(
+        0,
+        min(
+            100,
+            normalized_progress,
+        ),
+    )
+
+    filled = min(
+        width,
+        int(
+            normalized_progress
+            * width
+            / 100
+        ),
+    )
+
+    return (
+        "█"
+        * filled
+        + "░"
+        * (
+            width - filled
+        )
+    )
+
+
 def build_progress_text(
-    job_id: int,
     quality: str,
     job: dict,
     paused: bool = False,
@@ -1148,20 +1283,32 @@ def build_progress_text(
         )
     )
 
+    quality_label = (
+        format_download_quality(
+            quality,
+            job.get(
+                "frame_rate"
+            ),
+        )
+    )
+
+    progress_label = (
+        f"{build_progress_bar(progress)} "
+        f"{progress}%"
+    )
+
     if paused:
 
         lines = [
             _tr("⏸ <b>دانلود متوقف شده است</b>"),
             "",
             (
-                f"🆔 Job ID: "
-                f"<code>{job_id}</code>"
+                f"{_tr('🎞 کیفیت: ')}"
+                f"<code>{quality_label}</code>"
             ),
             (
-                f"{_tr('🎬 کیفیت: <code>')}{quality}</code>"
-            ),
-            (
-                f"{_tr('📊 پیشرفت: <code>')}{progress}%</code>"
+                f"{_tr('📊 پیشرفت: ')}"
+                f"<code>{progress_label}</code>"
             ),
         ]
 
@@ -1171,14 +1318,12 @@ def build_progress_text(
             _tr("⬇️ <b>در حال دانلود...</b>"),
             "",
             (
-                f"🆔 Job ID: "
-                f"<code>{job_id}</code>"
+                f"{_tr('🎞 کیفیت: ')}"
+                f"<code>{quality_label}</code>"
             ),
             (
-                f"{_tr('🎬 کیفیت: <code>')}{quality}</code>"
-            ),
-            (
-                f"{_tr('📊 پیشرفت: <code>')}{progress}%</code>"
+                f"{_tr('📊 پیشرفت: ')}"
+                f"<code>{progress_label}</code>"
             ),
         ]
 
@@ -1212,7 +1357,8 @@ def build_progress_text(
 
             lines.append(
                 (
-                    f"{_tr('📦 دریافت شده: <code>')}{downloaded_label}</code>"
+                    f"{_tr('📦 حجم: ')}"
+                    f"<code>{downloaded_label}</code>"
                 )
             )
 
@@ -1220,7 +1366,8 @@ def build_progress_text(
 
             lines.append(
                 (
-                    f"{_tr('📦 دانلود شده: <code>')}{downloaded_label}{_tr(' از ')}{total_label}</code>"
+                    f"{_tr('📦 حجم: ')}"
+                    f"<code>{downloaded_label} / {total_label}</code>"
                 )
             )
 
@@ -1228,7 +1375,8 @@ def build_progress_text(
 
         lines.append(
             (
-                f"{_tr('📦 دانلود شده: <code>')}{downloaded_label}</code>"
+                f"{_tr('📦 حجم: ')}"
+                f"<code>{downloaded_label}</code>"
             )
         )
 
@@ -1236,7 +1384,8 @@ def build_progress_text(
 
         lines.append(
             (
-                f"{_tr('📦 حجم کل: <code>')}{total_label}</code>"
+                f"{_tr('📦 حجم: ')}"
+                f"<code>{total_label}</code>"
             )
         )
 
@@ -1246,7 +1395,8 @@ def build_progress_text(
 
             lines.append(
                 (
-                    f"{_tr('🚀 سرعت: <code>')}{speed_label}</code>"
+                    f"{_tr('🚀 سرعت: ')}"
+                    f"<code>{speed_label}</code>"
                 )
             )
 
@@ -1254,7 +1404,8 @@ def build_progress_text(
 
             lines.append(
                 (
-                    f"{_tr('⏳ زمان باقی\u200cمانده: <code>')}{eta_label}</code>"
+                    f"{_tr('⏱ باقی\u200cمانده: ~')}"
+                    f"<code>{eta_label}</code>"
                 )
             )
 
@@ -1279,6 +1430,94 @@ def build_progress_text(
         "\n".join(
             lines
         )
+    )
+
+
+def build_pending_download_text(
+    quality: object,
+    frame_rate: object = None,
+) -> str:
+
+    quality_label = (
+        format_download_quality(
+            quality,
+            frame_rate,
+        )
+    )
+
+    return "\n".join(
+        [
+            _tr("⏳ <b>دانلود در صف است</b>"),
+            "",
+            (
+                f"{_tr('🎞 کیفیت: ')}"
+                f"<code>{quality_label}</code>"
+            ),
+            _tr("📊 وضعیت: <code>pending</code>"),
+        ]
+    )
+
+
+def build_download_complete_text(
+    file_size: str,
+    quality: object,
+    frame_rate: object = None,
+) -> str:
+
+    quality_label = (
+        format_download_quality(
+            quality,
+            frame_rate,
+        )
+    )
+
+    return "\n".join(
+        [
+            _tr("✅ <b>دانلود کامل شد</b>"),
+            "",
+            (
+                f"{_tr('📦 حجم: ')}"
+                f"<code>{file_size}</code>"
+            ),
+            (
+                f"{_tr('🎞 کیفیت: ')}"
+                f"<code>{quality_label}</code>"
+            ),
+            "",
+            _tr("📤 <b>در حال ارسال فایل به تلگرام...</b>"),
+        ]
+    )
+
+
+def build_download_caption(
+    file_name: str,
+    file_size: str,
+    quality: object,
+    frame_rate: object = None,
+) -> str:
+
+    quality_label = (
+        format_download_quality(
+            quality,
+            frame_rate,
+        )
+    )
+
+    return "\n".join(
+        [
+            f"📥 <code>{html.escape(file_name)}</code>",
+            "",
+            _tr("✅ <b>دانلود با موفقیت انجام شد</b>"),
+            "",
+            (
+                f"{_tr('📦 حجم: ')}"
+                f"<code>{file_size}</code>"
+            ),
+            (
+                f"{_tr('🎞 کیفیت: ')}"
+                f"<code>{quality_label}</code>"
+            ),
+        ]
     )
 
 
@@ -2026,6 +2265,102 @@ def extract_available_quality_options(
     return result
 
 
+def extract_quality_frame_rates(
+    media_info: dict,
+) -> dict[
+    int,
+    float,
+]:
+    """Return the best known FPS for every displayed quality label."""
+
+    result: dict[
+        int,
+        float,
+    ] = {}
+
+    formats = (
+        media_info.get(
+            "formats",
+            [],
+        )
+        or []
+    )
+
+    for item in formats:
+
+        if not isinstance(
+            item,
+            dict,
+        ):
+
+            continue
+
+        if not item.get(
+            "has_video"
+        ):
+
+            continue
+
+        quality = (
+            _get_format_quality(
+                item
+            )
+        )
+
+        if (
+            quality is None
+            or quality <= 0
+        ):
+
+            continue
+
+        try:
+
+            frame_rate = float(
+                item.get(
+                    "fps"
+                )
+            )
+
+        except (
+            TypeError,
+            ValueError,
+        ):
+
+            continue
+
+        if not (
+            0 < frame_rate <= 240
+        ):
+
+            continue
+
+        normalized_quality = (
+            normalize_platform_quality(
+                quality
+            )
+        )
+
+        current = (
+            result.get(
+                normalized_quality
+            )
+        )
+
+        # yt-dlp's "bestvideo" selection normally favors the higher-frame
+        # rate variant when multiple streams share the same resolution.
+        if (
+            current is None
+            or frame_rate > current
+        ):
+
+            result[
+                normalized_quality
+            ] = frame_rate
+
+    return result
+
+
 # ============================================================
 # Multi-video keyboard
 # ============================================================
@@ -2042,6 +2377,10 @@ def build_smaller_quality_keyboard(
         int | None,
     ],
     playlist_index: int | None = None,
+    frame_rates: dict[
+        int,
+        float,
+    ] | None = None,
 ) -> InlineKeyboardMarkup | None:
 
     quality_options: list[
@@ -2094,6 +2433,7 @@ def build_smaller_quality_keyboard(
             playlist_index=(
                 playlist_index
             ),
+            frame_rates=frame_rates,
         )
     )
 
@@ -2186,6 +2526,9 @@ async def wait_for_download(
             status,
             progress,
             job.get(
+                "frame_rate"
+            ),
+            job.get(
                 "downloaded_bytes"
             ),
             job.get(
@@ -2209,8 +2552,11 @@ async def wait_for_download(
 
                 await safe_edit_message(
                     message,
-                    (
-                        f"{_tr('⏳ <b>درخواست در صف دانلود است</b>\n\n🆔 Job ID: <code>')}{job_id}{_tr('</code>\n🎬 کیفیت: <code>')}{quality}{_tr('</code>\n📊 وضعیت: <code>pending</code>')}"
+                    build_pending_download_text(
+                        quality,
+                        job.get(
+                            "frame_rate"
+                        ),
                     ),
                     reply_markup=(
                         build_active_download_keyboard(
@@ -2236,7 +2582,6 @@ async def wait_for_download(
                 await safe_edit_message(
                     message,
                     build_progress_text(
-                        job_id=job_id,
                         quality=quality,
                         job=job,
                         paused=False,
@@ -2265,7 +2610,6 @@ async def wait_for_download(
                 await safe_edit_message(
                     message,
                     build_progress_text(
-                        job_id=job_id,
                         quality=quality,
                         job=job,
                         paused=True,
@@ -2312,7 +2656,14 @@ async def wait_for_download(
             await safe_edit_message(
                 message,
                 (
-                    f"{_tr('❌ <b>دانلود لغو شد</b>\n\n🆔 Job ID: <code>')}{job_id}{_tr('</code>\n📊 پیشرفت هنگام لغو: <code>')}{progress}%</code>{extra}{_tr('\n\n🗑 فایل\u200cهای موقت از سرور حذف شدند.')}"
+                    _tr("❌ <b>دانلود لغو شد</b>")
+                    + "\n\n"
+                    + (
+                        f"{_tr('📊 پیشرفت هنگام لغو: ')}"
+                        f"<code>{build_progress_bar(progress)} {progress}%</code>"
+                    )
+                    + extra
+                    + _tr("\n\n🗑 فایل\u200cهای موقت از سرور حذف شدند.")
                 ),
                 reply_markup=None,
             )
@@ -2327,7 +2678,11 @@ async def wait_for_download(
             await safe_edit_message(
                 message,
                 (
-                    f"{_tr('⌛ <b>دانلود منقضی شد</b>\n\n🆔 Job ID: <code>')}{job_id}{_tr('</code>\n\nبیش از ۶ ساعت از توقف دانلود گذشته بود.\n🗑 فایل موقت برای آزادسازی فضای سرور حذف شد.')}"
+                    _tr(
+                        "⌛ <b>دانلود منقضی شد</b>\n\n"
+                        "بیش از ۶ ساعت از توقف دانلود گذشته بود.\n"
+                        "🗑 فایل موقت برای آزادسازی فضای سرور حذف شد."
+                    )
                 ),
                 reply_markup=None,
             )
@@ -2442,17 +2797,38 @@ async def send_downloaded_file(
         f"{file_size} bytes"
     )
 
-    await safe_edit_message(
-        status_message,
-        (
-            f"{_tr('✅ <b>دانلود کامل شد</b>\n\n🆔 Job ID: <code>')}{job_id}{_tr('</code>\n📦 حجم فایل: <code>')}{size_label}{_tr('</code>\n\n📤 <b>در حال ارسال فایل به تلگرام...</b>')}"
-        ),
-        reply_markup=None,
-    )
-
     suffix = (
         path.suffix
         or ".mp4"
+    )
+
+    file_name = (
+        f"MediaHub-"
+        f"{job_id}"
+        f"{suffix}"
+    )
+
+    quality = (
+        job.get(
+            "quality"
+        )
+        or _tr("تصویر اصلی")
+    )
+
+    frame_rate = (
+        job.get(
+            "frame_rate"
+        )
+    )
+
+    await safe_edit_message(
+        status_message,
+        build_download_complete_text(
+            file_size=size_label,
+            quality=quality,
+            frame_rate=frame_rate,
+        ),
+        reply_markup=None,
     )
 
     document = (
@@ -2460,11 +2836,7 @@ async def send_downloaded_file(
             path=str(
                 path
             ),
-            filename=(
-                f"MediaHub-"
-                f"{job_id}"
-                f"{suffix}"
-            ),
+            filename=file_name,
         )
     )
 
@@ -2473,8 +2845,11 @@ async def send_downloaded_file(
         await message.answer_document(
             document=document,
             disable_content_type_detection=True,
-            caption=(
-                f"{_tr('✅ <b>دانلود با موفقیت انجام شد</b>\n\n🆔 Job ID: <code>')}{job_id}{_tr('</code>\n📦 حجم فایل: <code>')}{size_label}</code>"
+            caption=build_download_caption(
+                file_name=file_name,
+                file_size=size_label,
+                quality=quality,
+                frame_rate=frame_rate,
             ),
             parse_mode="HTML",
         )
@@ -2666,7 +3041,6 @@ async def download_pause_callback(
             await safe_edit_message(
                 callback.message,
                 build_progress_text(
-                    job_id=job_id,
                     quality=quality,
                     job=job,
                     paused=True,
@@ -2776,7 +3150,12 @@ async def download_resume_callback(
             await safe_edit_message(
                 callback.message,
                 (
-                    f"{_tr('▶️ <b>دانلود ادامه پیدا کرد</b>\n\n🆔 Job ID: <code>')}{job_id}{_tr('</code>\n🎬 کیفیت: <code>')}{quality}{_tr('</code>\n📊 ادامه از حدود: <code>')}{progress}%</code>{extra}"
+                    f"{_tr('▶️ <b>دانلود ادامه پیدا کرد</b>')}\n\n"
+                    f"{_tr('🎞 کیفیت: ')}"
+                    f"<code>{format_download_quality(quality, job.get('frame_rate'))}</code>\n"
+                    f"{_tr('📊 ادامه از حدود: ')}"
+                    f"<code>{build_progress_bar(progress)} {progress}%</code>"
+                    f"{extra}"
                 ),
                 reply_markup=(
                     build_active_download_keyboard(
@@ -2875,7 +3254,11 @@ async def download_cancel_callback(
             await safe_edit_message(
                 callback.message,
                 (
-                    f"{_tr('❌ <b>دانلود لغو شد</b>\n\n🆔 Job ID: <code>')}{job_id}{_tr('</code>\n📊 پیشرفت هنگام لغو: <code>')}{progress}%</code>{extra}{_tr('\n\n🗑 فایل موقت از سرور حذف می\u200cشود.')}"
+                    f"{_tr('❌ <b>دانلود لغو شد</b>')}\n\n"
+                    f"{_tr('📊 پیشرفت هنگام لغو: ')}"
+                    f"<code>{build_progress_bar(progress)} {progress}%</code>"
+                    f"{extra}"
+                    f"{_tr('\n\n🗑 فایل موقت از سرور حذف می\u200cشود.')}"
                 ),
                 reply_markup=None,
             )
@@ -3260,8 +3643,8 @@ async def media_entry_callback(
 
             await safe_edit_message(
                 message,
-                (
-                    f"{_tr('✅ <b>درخواست دانلود عکس ایجاد شد</b>\n\n🆔 Job ID: <code>')}{job_id}{_tr('</code>\n📷 عکس: <code>')}{index}{_tr('</code>\n🖼 کیفیت: <code>اصلی</code>\n📊 وضعیت: <code>pending</code>')}"
+                build_pending_download_text(
+                    _tr("تصویر اصلی")
                 ),
                 reply_markup=(
                     build_active_download_keyboard(
@@ -3357,6 +3740,9 @@ async def media_entry_callback(
                 source_url,
                 quality_options,
                 playlist_index=index,
+                frame_rates=extract_quality_frame_rates(
+                    selected_info
+                ),
             )
         )
 
@@ -3493,6 +3879,13 @@ async def quality_callback(
         )
     )
 
+    frame_rates = (
+        selection.get(
+            "frame_rates",
+            {},
+        )
+    )
+
     playlist_index = (
         selection.get(
             "playlist_index"
@@ -3525,6 +3918,12 @@ async def quality_callback(
 
     quality = (
         normalize_quality_label(
+            height
+        )
+    )
+
+    frame_rate = (
+        frame_rates.get(
             height
         )
     )
@@ -3576,6 +3975,7 @@ async def quality_callback(
                 playlist_index=(
                     playlist_index
                 ),
+                frame_rates=frame_rates,
             )
         )
 
@@ -3659,7 +4059,10 @@ async def quality_callback(
         await safe_edit_message(
             status_message,
             (
-                f"{_tr('⏳ <b>در حال ایجاد درخواست دانلود...</b>\n\n🎬 کیفیت: <code>')}{quality}</code>{estimated_text}"
+                f"{_tr('⏳ <b>در حال ایجاد درخواست دانلود...</b>')}\n\n"
+                f"{_tr('🎞 کیفیت: ')}"
+                f"<code>{format_download_quality(quality, frame_rate)}</code>"
+                f"{estimated_text}"
             ),
         )
 
@@ -3668,6 +4071,7 @@ async def quality_callback(
                 source_url=source_url,
                 telegram_id=callback.from_user.id,
                 quality=quality,
+                frame_rate=frame_rate,
                 playlist_index=(
                     playlist_index
                 ),
@@ -3683,8 +4087,12 @@ async def quality_callback(
 
         await safe_edit_message(
             status_message,
-            (
-                f"{_tr('✅ <b>درخواست دانلود ایجاد شد</b>\n\n🆔 Job ID: <code>')}{job_id}{_tr('</code>\n🎬 کیفیت: <code>')}{quality}{_tr('</code>\n📊 وضعیت: <code>pending</code>')}"
+            build_pending_download_text(
+                quality,
+                job.get(
+                    "frame_rate"
+                )
+                or frame_rate,
             ),
             reply_markup=(
                 build_active_download_keyboard(
@@ -3741,7 +4149,7 @@ async def quality_callback(
             (
                 _tr("⌛ <b>زمان انتظار ربات به پایان رسید</b>\n\n"
 
-                "وضعیت Job را دوباره بررسی کنید.")
+                "لطفاً کمی بعد همان لینک را دوباره ارسال کنید.")
             ),
             reply_markup=download_error_markup(exc),
         )
@@ -3784,6 +4192,12 @@ async def quality_callback(
                 add_pending_selection(
                     source_url,
                     fallback_options,
+                    playlist_index=playlist_index,
+                    frame_rates={
+                        360: frame_rates.get(
+                            360
+                        )
+                    },
                 )
             )
 
@@ -4057,8 +4471,8 @@ async def download_handler(
 
             await safe_edit_message(
                 status_message,
-                (
-                    f"{_tr('✅ <b>درخواست دانلود تصویر ایجاد شد</b>\n\n🆔 Job ID: <code>')}{job_id}{_tr('</code>\n🖼 کیفیت: <code>اصلی</code>\n📊 وضعیت: <code>pending</code>')}"
+                build_pending_download_text(
+                    _tr("تصویر اصلی")
                 ),
                 reply_markup=(
                     build_active_download_keyboard(
@@ -4117,6 +4531,9 @@ async def download_handler(
                 quality_options,
                 playlist_index=(
                     single_playlist_index
+                ),
+                frame_rates=extract_quality_frame_rates(
+                    media_info
                 ),
             )
         )

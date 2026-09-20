@@ -22,6 +22,10 @@ def add_pending_selection(
     ]
     | None = None,
     playlist_index: int | None = None,
+    frame_rates: dict[
+        int,
+        float | None,
+    ] | None = None,
 ) -> str:
 
     token = (
@@ -32,6 +36,11 @@ def add_pending_selection(
     sizes: dict[
         int,
         int | None,
+    ] = {}
+
+    selected_frame_rates: dict[
+        int,
+        float,
     ] = {}
 
     if quality_options:
@@ -47,6 +56,30 @@ def add_pending_selection(
                 file_size
             )
 
+            frame_rate = (
+                (frame_rates or {}).get(
+                    height
+                )
+            )
+
+            if (
+                isinstance(
+                    frame_rate,
+                    (int, float),
+                )
+                and not isinstance(
+                    frame_rate,
+                    bool,
+                )
+                and 0 < frame_rate <= 240
+            ):
+
+                selected_frame_rates[
+                    height
+                ] = float(
+                    frame_rate
+                )
+
     PENDING_SELECTIONS[
         token
     ] = {
@@ -58,6 +91,9 @@ def add_pending_selection(
 
         "playlist_index":
             playlist_index,
+
+        "frame_rates":
+            selected_frame_rates,
     }
 
     if (

@@ -10,6 +10,7 @@ for key, value in {'SECRET_KEY':'test', 'JWT_SECRET_KEY':'test', 'POSTGRES_DB':'
     os.environ.setdefault(key, value)
 
 from app.schemas.payment import PaymentCreate
+from app.schemas.download import DownloadCreate
 from app.services.payment import canonical_network, normalize_transaction_id, classify_plan_change
 from app.services.operations import validate_operation, resolve_routes
 from app.services.admin_statistics import _period_start
@@ -24,6 +25,25 @@ def test_usdt_requires_txid_but_accepts_no_screenshot():
     assert payment.receipt_file_type is None
     with pytest.raises(ValueError): PaymentCreate(**base, txid='a' * 64, receipt_file_id='file')
     with pytest.raises(ValueError): PaymentCreate(telegram_id=123, offer_code='test', currency='IRT')
+
+
+def test_download_request_accepts_only_sane_frame_rates():
+    request = DownloadCreate(
+        telegram_id=123,
+        source_url='https://example.com/video',
+        quality='1080p',
+        frame_rate=29.97,
+    )
+
+    assert request.frame_rate == 29.97
+
+    for value in (0, -1, 240.1):
+        with pytest.raises(ValueError):
+            DownloadCreate(
+                telegram_id=123,
+                source_url='https://example.com/video',
+                frame_rate=value,
+            )
 
 
 def test_txid_normalization_preserves_base58_case_and_collapses_hex_aliases():

@@ -15,7 +15,10 @@ os.environ.setdefault("TELEGRAM_BOT_TOKEN", "123456789:test-token")
 
 
 from app.services import social_media  # noqa: E402
-from app.services.download import _get_format_filesize  # noqa: E402
+from app.services.download import (  # noqa: E402
+    _get_format_filesize,
+    _normalize_format,
+)
 
 
 def _gallery_payload(*items):
@@ -235,6 +238,7 @@ def test_threads_video_exposes_one_real_quality(monkeypatch):
             "duration": 18,
             "filesize": 1_812_374,
             "has_audio": True,
+            "fps": 29.97,
         },
     )
 
@@ -248,6 +252,7 @@ def test_threads_video_exposes_one_real_quality(monkeypatch):
             "format_id": "threads-direct",
             "extension": "mp4",
             "resolution": "640x360",
+            "fps": 29.97,
             "filesize": 1_812_374,
             "has_video": True,
             "has_audio": True,
@@ -255,6 +260,36 @@ def test_threads_video_exposes_one_real_quality(monkeypatch):
             "audio_codec": None,
         }
     ]
+
+
+def test_media_format_preserves_valid_frame_rate():
+    format_info = _normalize_format(
+        {
+            "format_id": "137",
+            "width": 1920,
+            "height": 1080,
+            "vcodec": "avc1",
+            "acodec": "none",
+            "fps": "29.97",
+        }
+    )
+
+    assert format_info is not None
+    assert format_info["fps"] == 29.97
+
+    invalid_frame_rate = _normalize_format(
+        {
+            "format_id": "bad-fps",
+            "width": 1920,
+            "height": 1080,
+            "vcodec": "avc1",
+            "acodec": "none",
+            "fps": 0,
+        }
+    )
+
+    assert invalid_frame_rate is not None
+    assert invalid_frame_rate["fps"] is None
 
 
 def test_manifest_size_is_estimated_without_probing(monkeypatch):

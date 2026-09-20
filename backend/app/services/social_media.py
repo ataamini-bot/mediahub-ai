@@ -144,6 +144,21 @@ def _positive_int(value: Any) -> int | None:
     return result if result > 0 else None
 
 
+def _frame_rate(value: Any) -> float | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        if "/" in text:
+            numerator, denominator = text.split("/", 1)
+            result = float(numerator) / float(denominator)
+        else:
+            result = float(text)
+    except (TypeError, ValueError, ZeroDivisionError):
+        return None
+    return result if 0 < result <= 240 else None
+
+
 def _normalize_extension(value: Any, media_url: str = "") -> str | None:
     extension = str(value or "").strip().lower().lstrip(".")
     if not extension:
@@ -543,7 +558,7 @@ def _probe_threads_video(media_url: str) -> dict[str, Any]:
         "-rw_timeout", "15000000",
         "-analyzeduration", "1000000",
         "-probesize", "1000000",
-        "-show_entries", "stream=width,height,codec_type",
+        "-show_entries", "stream=width,height,codec_type,avg_frame_rate,r_frame_rate",
         "-show_entries", "format=duration,size",
         "-of", "json",
         media_url,
@@ -578,6 +593,9 @@ def _probe_threads_video(media_url: str) -> dict[str, Any]:
     )
     width = _positive_int(video_stream.get("width"))
     height = _positive_int(video_stream.get("height"))
+    fps = _frame_rate(video_stream.get("avg_frame_rate")) or _frame_rate(
+        video_stream.get("r_frame_rate")
+    )
 
     if width is None or height is None:
         quality = _threads_quality_from_url(media_url) or 640
@@ -596,6 +614,7 @@ def _probe_threads_video(media_url: str) -> dict[str, Any]:
         "duration": duration,
         "filesize": filesize,
         "has_audio": has_audio,
+        "fps": fps,
     }
 
 
@@ -652,6 +671,7 @@ def _threads_info(source_url: str, playlist_index: int | None) -> dict[str, Any]
                             "format_id": "threads-direct",
                             "extension": "mp4",
                             "resolution": f"{probe['width']}x{probe['height']}",
+                            "fps": probe.get("fps"),
                             "filesize": probe["filesize"],
                             "has_video": True,
                             "has_audio": probe["has_audio"],

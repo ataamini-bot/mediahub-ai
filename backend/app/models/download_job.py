@@ -121,6 +121,15 @@ class DownloadJob(
         nullable=True,
     )
 
+    # The selected/verified video frame rate.  It is optional because image
+    # and audio downloads have no meaningful FPS value.
+    frame_rate: Mapped[
+        Optional[float]
+    ] = mapped_column(
+        Float,
+        nullable=True,
+    )
+
     media_type: Mapped[
         Optional[str]
     ] = mapped_column(

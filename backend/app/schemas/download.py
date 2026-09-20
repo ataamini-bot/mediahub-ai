@@ -38,6 +38,15 @@ class DownloadCreate(
         | None
     ) = None
 
+    frame_rate: (
+        float
+        | None
+    ) = Field(
+        default=None,
+        gt=0,
+        le=240,
+    )
+
     media_type: (
         str
         | None
@@ -156,6 +165,11 @@ class DownloadResponse(
         | None
     )
 
+    frame_rate: (
+        float
+        | None
+    )
+
     media_type: (
         str
         | None
@@ -261,6 +275,11 @@ class MediaFormat(
 
     resolution: (
         str
+        | None
+    ) = None
+
+    fps: (
+        float
         | None
     ) = None
 

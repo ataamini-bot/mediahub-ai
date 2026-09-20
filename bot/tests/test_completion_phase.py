@@ -21,7 +21,12 @@ from app.keyboards.admin_statistics import build_statistics_section_keyboard
 from app.keyboards.experience import build_user_ticket_list_keyboard
 from app.keyboards.admin import build_admin_home_keyboard
 from app.admin_runtime_settings import runtime_settings_text
-from app.main import build_progress_text
+from app.main import (
+    build_download_caption,
+    build_download_complete_text,
+    build_progress_text,
+    extract_quality_frame_rates,
+)
 from app.handlers.experience import _ticket_detail_text
 from app.handlers.operations import LABELS
 
@@ -45,7 +50,7 @@ def callback(data, user_id=100, msg=None):
 def test_english_download_admin_settings_and_statistics():
     token = ui_language.set('en')
     try:
-        values = [build_progress_text(1, '1080p', {'progress': 25, 'speed': 1000, 'eta': 30}, paused=True),
+        values = [build_progress_text('1080p', {'progress': 25, 'speed': 1000, 'eta': 30}, paused=True),
             runtime_settings_text([]),
             _section_text('downloads', {'downloads': {'by_site': [{'site': 'Vimeo', 'count': 2}]}}, '1mo'),
             _section_text('finance', {'finance': {'currencies': {'USDT': {'total': '2.5000', 'successful': 1}, 'IRT': {'total': '10000'}}}}, '7d'),
@@ -66,6 +71,55 @@ def test_english_download_admin_settings_and_statistics():
         assert 'Notifications' in __import__('app.localization', fromlist=['tr']).tr(LABELS['notifications.enabled'])
     finally:
         ui_language.reset(token)
+
+
+def test_download_copy_uses_live_statistics_without_exposing_job_id():
+    progress = build_progress_text(
+        '1080p',
+        {
+            'progress': 90,
+            'downloaded_bytes': 34 * 1024 * 1024,
+            'total_bytes': 38 * 1024 * 1024,
+            'speed': int(1.5 * 1024 * 1024),
+            'eta': 3,
+            'frame_rate': 30,
+        },
+    )
+    caption = build_download_caption(
+        'MediaHub-428.mp4',
+        '33 MB',
+        '1080p',
+        30,
+    )
+    complete = build_download_complete_text('33 MB', '1080p', 29.97)
+
+    assert 'Job ID' not in progress
+    assert '🆔' not in progress
+    assert '█████████░ 90%' in progress
+    assert '34 MB / 38 MB' in progress
+    assert '1.5 MB/s' in progress
+    assert '⏱ باقی\u200cمانده: ~<code>3 ثانیه</code>' in progress
+    assert '1080p • 30 FPS' in progress
+
+    assert '📥 <code>MediaHub-428.mp4</code>' in caption
+    assert '✅ <b>دانلود با موفقیت انجام شد</b>' in caption
+    assert '📦 حجم: <code>33 MB</code>' in caption
+    assert '🎞 کیفیت: <code>1080p • 30 FPS</code>' in caption
+    assert 'Job ID' not in caption
+    assert '1080p • 29.97 FPS' in complete
+
+
+def test_quality_frame_rates_follow_the_highest_matching_stream():
+    values = extract_quality_frame_rates({
+        'formats': [
+            {'has_video': True, 'resolution': '1920x1080', 'fps': 30},
+            {'has_video': True, 'resolution': '1080x1920', 'fps': 60},
+            {'has_video': True, 'resolution': '1280x720', 'fps': 29.97},
+            {'has_video': True, 'resolution': '640x360', 'fps': 0},
+        ],
+    })
+
+    assert values == {1080: 60.0, 720: 29.97}
 
 
 def test_six_requested_periods_and_active_selection():

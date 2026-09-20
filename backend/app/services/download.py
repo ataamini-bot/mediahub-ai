@@ -387,6 +387,36 @@ def _positive_int(
     return result
 
 
+def _positive_float(
+    value: Any,
+) -> float | None:
+
+    if value is None:
+
+        return None
+
+    try:
+
+        result = float(
+            value
+        )
+
+    except (
+        TypeError,
+        ValueError,
+    ):
+
+        return None
+
+    if not (
+        0 < result <= 240
+    ):
+
+        return None
+
+    return result
+
+
 # ============================================================
 # Content-Range
 # ============================================================
@@ -1103,6 +1133,14 @@ def _normalize_format(
         )
     )
 
+    fps = (
+        _positive_float(
+            item.get(
+                "fps"
+            )
+        )
+    )
+
     return {
         "format_id":
             str(
@@ -1114,6 +1152,9 @@ def _normalize_format(
 
         "resolution":
             resolution,
+
+        "fps":
+            fps,
 
         "filesize":
             filesize,
@@ -2437,6 +2478,7 @@ class DownloadService:
         telegram_id: int,
         format_id: str | None = None,
         quality: str | None = None,
+        frame_rate: float | None = None,
         media_type: str | None = None,
         playlist_index: int | None = None,
         estimated_size_bytes: int | None = None,
@@ -2464,6 +2506,9 @@ class DownloadService:
                 ),
                 quality=(
                     quality
+                ),
+                frame_rate=(
+                    frame_rate
                 ),
                 media_type=(
                     media_type

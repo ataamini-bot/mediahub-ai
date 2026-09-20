@@ -75,6 +75,7 @@ async def create_download(
             telegram_id=data.telegram_id,
             format_id=data.format_id,
             quality=data.quality,
+            frame_rate=data.frame_rate,
             media_type=data.media_type,
             playlist_index=data.playlist_index,
             estimated_size_bytes=data.estimated_size_bytes,

@@ -1739,6 +1739,7 @@ def _set_completed(
     job_id: int,
     file_path: str,
     file_size: int,
+    frame_rate: float | None = None,
 ) -> None:
 
     with WorkerSessionLocal() as session:
@@ -1776,6 +1777,12 @@ def _set_completed(
         job.file_size = (
             file_size
         )
+
+        if frame_rate is not None:
+
+            job.frame_rate = (
+                frame_rate
+            )
 
         # ----------------------------------------------------
         # Final values
@@ -2106,6 +2113,123 @@ def _get_video_resolution(
             width,
             height,
         )
+
+    return None
+
+
+def _parse_frame_rate(
+    value: object,
+) -> float | None:
+
+    if value is None:
+
+        return None
+
+    text = str(
+        value
+    ).strip()
+
+    if not text:
+
+        return None
+
+    try:
+
+        if "/" in text:
+
+            numerator_text, denominator_text = text.split(
+                "/",
+                1,
+            )
+
+            denominator = float(
+                denominator_text
+            )
+
+            if denominator == 0:
+
+                return None
+
+            frame_rate = (
+                float(
+                    numerator_text
+                )
+                / denominator
+            )
+
+        else:
+
+            frame_rate = float(
+                text
+            )
+
+    except (
+        TypeError,
+        ValueError,
+    ):
+
+        return None
+
+    if not (
+        0 < frame_rate <= 240
+    ):
+
+        return None
+
+    return frame_rate
+
+
+def _get_video_frame_rate(
+    file_path: Path,
+) -> float | None:
+
+    probe = (
+        _probe_media_file(
+            file_path
+        )
+    )
+
+    if probe is None:
+
+        return None
+
+    for stream in probe.get(
+        "streams",
+        [],
+    ):
+
+        if not isinstance(
+            stream,
+            dict,
+        ):
+
+            continue
+
+        if (
+            stream.get(
+                "codec_type"
+            )
+            != "video"
+        ):
+
+            continue
+
+        for key in (
+            "avg_frame_rate",
+            "r_frame_rate",
+        ):
+
+            frame_rate = (
+                _parse_frame_rate(
+                    stream.get(
+                        key
+                    )
+                )
+            )
+
+            if frame_rate is not None:
+
+                return frame_rate
 
     return None
 
@@ -4664,6 +4788,13 @@ def download_task(
                 file_path
             ),
             file_size=file_size,
+            frame_rate=(
+                _get_video_frame_rate(
+                    file_path
+                )
+                if media_type == "video"
+                else None
+            ),
         )
 
         print(

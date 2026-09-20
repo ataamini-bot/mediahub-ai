@@ -42,6 +42,7 @@ from app.services.download_access import (  # noqa: E402
 )
 from app.workers.tasks.download import (  # noqa: E402
     MAX_DOWNLOAD_BYTES,
+    _parse_frame_rate,
     _resolve_max_download_bytes,
 )
 
@@ -253,6 +254,13 @@ def test_quality_parser_supports_bot_labels():
     assert DownloadAccessService.parse_quality_height("2K") == 1440
     assert DownloadAccessService.parse_quality_height("4K") == 2160
     assert DownloadAccessService.parse_quality_height(None) is None
+
+
+def test_worker_parses_fractional_ffprobe_frame_rates():
+    assert _parse_frame_rate("30000/1001") == pytest.approx(29.97002997)
+    assert _parse_frame_rate("60/1") == 60
+    assert _parse_frame_rate("0/0") is None
+    assert _parse_frame_rate("invalid") is None
 
 
 def test_daily_quota_uses_tehran_calendar_day():

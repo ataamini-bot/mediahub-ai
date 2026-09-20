@@ -25,6 +25,7 @@ class DownloadJobRepository:
         plan_limits_snapshot: dict | None = None,
         format_id: str | None = None,
         quality: str | None = None,
+        frame_rate: float | None = None,
         media_type: str | None = None,
         playlist_index: int | None = None,
     ) -> DownloadJob:
@@ -37,6 +38,7 @@ class DownloadJobRepository:
             plan_limits_snapshot=plan_limits_snapshot,
             format_id=format_id,
             quality=quality,
+            frame_rate=frame_rate,
             media_type=media_type,
             playlist_index=playlist_index,
             status=DownloadJobStatus.PENDING,

@@ -839,6 +839,7 @@ async def create_download_job(
     source_url: str,
     telegram_id: int,
     quality: str | None = None,
+    frame_rate: float | None = None,
     media_type: str = "video",
     playlist_index: int | None = None,
     estimated_size_bytes: int | None = None,
@@ -859,6 +860,9 @@ async def create_download_job(
 
         "quality":
             quality,
+
+        "frame_rate":
+            frame_rate,
 
         "media_type":
             media_type,
