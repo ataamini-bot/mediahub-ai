@@ -1,4 +1,7 @@
 import os
+from html.parser import HTMLParser
+
+import pytest
 
 
 os.environ.setdefault("TELEGRAM_BOT_TOKEN", "123456789:test-token")
@@ -15,27 +18,47 @@ def _buttons(keyboard):
     return [button for row in keyboard.inline_keyboard for button in row]
 
 
-def test_progress_hides_internal_job_id_and_renders_media_stats():
-    text = build_progress_text(
-        428,
-        "1080p",
-        {
-            "progress": 90,
-            "downloaded_bytes": 34 * 1024 * 1024,
-            "total_bytes": 38 * 1024 * 1024,
-            "speed": 1.5 * 1024 * 1024,
-            "eta": 3,
-        },
-        media_info={
-            "formats": [
-                {
-                    "has_video": True,
-                    "resolution": "1920x1080",
-                    "fps": 30,
-                }
-            ]
-        },
-    )
+class _VisibleText(HTMLParser):
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.parts = []
+
+    def handle_data(self, data):
+        self.parts.append(data)
+
+
+@pytest.mark.parametrize("language", ["fa", "en"])
+def test_progress_hides_internal_job_id_and_renders_media_stats(language):
+    token = ui_language.set(language)
+    try:
+        message = build_progress_text(
+            428,
+            "1080p",
+            {
+                "progress": 90,
+                "downloaded_bytes": 34 * 1024 * 1024,
+                "total_bytes": 38 * 1024 * 1024,
+                "speed": 1.5 * 1024 * 1024,
+                "eta": 3,
+            },
+            media_info={
+                "formats": [
+                    {
+                        "has_video": True,
+                        "resolution": "1920x1080",
+                        "fps": 30,
+                    }
+                ]
+            },
+        )
+    finally:
+        ui_language.reset(token)
+
+    # Telegram renders HTML formatting before showing this text to the user.
+    visible_text = _VisibleText()
+    visible_text.feed(message)
+    visible_text.close()
+    text = "".join(visible_text.parts)
 
     assert "Job ID" not in text
     assert "428" not in text
@@ -44,6 +67,7 @@ def test_progress_hides_internal_job_id_and_renders_media_stats():
     assert "34 MB / 38 MB" in text
     assert "1.5 MB/s" in text
     assert "~3" in text
+    assert ("باقی‌مانده:" if language == "fa" else "Remaining:") in text
 
 
 def test_delivered_file_exposes_id_only_through_details_button():
