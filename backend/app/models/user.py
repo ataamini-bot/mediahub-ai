@@ -87,3 +87,7 @@ class User(Base, TimestampMixin):
         DateTime(timezone=True),
         nullable=True,
     )
+
+    # Reset the accounting window without deleting delivery or financial history.
+    quota_reset_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    conversion_quota_reset_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

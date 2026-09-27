@@ -450,6 +450,9 @@ class DownloadAccessService:
         )
         period = entitlement.download_limit_period if entitlement.download_limit_period in {"daily", "weekly"} else "daily"
         window_start = quota_window_start_utc(period, timezone_name=timezone_name)
+        reset_at = await self.session.scalar(select(User.quota_reset_at).where(User.id == entitlement.user_id))
+        if reset_at:
+            window_start = max(window_start, reset_at)
         reserved_statuses = (
             DownloadJobStatus.PENDING,
             DownloadJobStatus.PROCESSING,
@@ -505,6 +508,9 @@ class DownloadAccessService:
             "weekly",
             timezone_name=timezone_name,
         )
+        reset_at = await self.session.scalar(select(User.conversion_quota_reset_at).where(User.id == entitlement.user_id))
+        if reset_at:
+            window_start = max(window_start, reset_at)
         reserved_statuses = (
             DownloadJobStatus.PENDING,
             DownloadJobStatus.PROCESSING,

@@ -1,0 +1,10 @@
+.git
+.env
+.env.*
+backups
+secrets
+**/__pycache__
+**/.pytest_cache
+.venv
+downloads
+media

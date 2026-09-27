@@ -13,6 +13,7 @@ from app.services.backend import (
     register_telegram_user,
     set_user_language,
 )
+from app.handlers.experience import entry_membership_allowed
 
 
 router = Router(name="language")
@@ -73,6 +74,11 @@ async def select_language(callback: CallbackQuery) -> None:
             translate(language, "language.changed"),
             parse_mode="HTML",
         )
+        if callback.message.chat.type == "private" and not await entry_membership_allowed(
+            callback.message, telegram_id=callback.from_user.id, user=user, configuration=configuration,
+        ):
+            await callback.answer()
+            return
         await callback.message.answer(
             translate(language, "home.ready"),
             reply_markup=build_home_reply_keyboard(

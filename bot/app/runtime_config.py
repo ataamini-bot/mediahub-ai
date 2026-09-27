@@ -50,7 +50,7 @@ FALLBACK_CONTENT: dict[str, dict[str, str]] = {
         "support_prompt": "پیام خود را در یک نوبت بفرستید.",
         "support_sent": "✅ درخواست شما ثبت شد و برای مدیران مرتبط ارسال شد.",
         "forced_join": "ابتدا در کانال‌های زیر عضو شوید و سپس عضویت را بررسی کنید.",
-        "membership_verified": "✅ عضویت تأیید شد؛ اکنون لینک را دوباره بفرستید.",
+        "membership_verified": "✅ عضویت تأیید شد؛ اکنون می‌توانید از ربات استفاده کنید.",
     },
     "en": {
         "welcome_title": "👋 Welcome to MediaHub AI!",
@@ -63,7 +63,7 @@ FALLBACK_CONTENT: dict[str, dict[str, str]] = {
         "support_prompt": "Send your request in one message.",
         "support_sent": "✅ Your request was sent to the relevant administrators.",
         "forced_join": "Join the channels below, then check your membership.",
-        "membership_verified": "✅ Membership verified. Send the link again now.",
+        "membership_verified": "✅ Membership verified. You can use the bot now.",
     },
 }
 
@@ -101,11 +101,12 @@ async def runtime_configuration(
     language: str,
     *,
     refresh: bool = False,
+    strict: bool = False,
 ) -> dict[str, Any]:
     normalized = normalize_language(language) or "fa"
     now = time.monotonic()
     cached = _cache.get(normalized)
-    if not refresh and cached is not None and cached[0] > now:
+    if not refresh and cached is not None and cached[0] > now and (not strict or cached[1].get("_configuration_available")):
         return cached[1]
 
     try:
@@ -139,7 +140,10 @@ async def runtime_configuration(
         )
         result["custom_buttons"] = list(result.get("custom_buttons") or [])
         result["required_channels"] = list(result.get("required_channels") or [])
-    except Exception:
+        result["_configuration_available"] = True
+    except Exception as exc:
+        if strict:
+            raise RuntimeError("Membership configuration is unavailable") from exc
         result = fallback_configuration(normalized)
 
     _cache[normalized] = (now + CACHE_TTL_SECONDS, result)

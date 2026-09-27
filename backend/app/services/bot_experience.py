@@ -103,7 +103,7 @@ DEFAULT_CONTENT: dict[str, dict[str, str]] = {
         "forced_join": (
             "برای استفاده از دانلود، ابتدا در کانال‌های زیر عضو شوید و سپس «بررسی عضویت» را بزنید."
         ),
-        "membership_verified": "✅ عضویت شما تأیید شد؛ اکنون لینک را دوباره بفرستید.",
+        "membership_verified": "✅ عضویت شما تأیید شد؛ اکنون می‌توانید از ربات استفاده کنید.",
     },
     "en": {
         "welcome_title": "👋 Welcome to MediaHub AI!",
@@ -133,7 +133,7 @@ DEFAULT_CONTENT: dict[str, dict[str, str]] = {
         ),
         "support_sent": "✅ Your request was recorded and sent to the relevant administrators.",
         "forced_join": "Join the channels below, then tap Check membership to use downloads.",
-        "membership_verified": "✅ Membership verified. You can send the link again now.",
+        "membership_verified": "✅ Membership verified. You can use the bot now.",
     },
 }
 

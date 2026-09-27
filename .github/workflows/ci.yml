@@ -47,6 +47,7 @@ jobs:
       BOT_BACKEND_API_KEY: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
       DATA_ENCRYPTION_KEY: MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDA=
       ADMIN_NOTIFICATIONS_ENABLED: "false"
+      RUN_BACKUP_INTEGRATION: "1"
 
     steps:
       - name: Check out repository
@@ -70,7 +71,8 @@ jobs:
       - name: Install FFmpeg test dependency
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends ffmpeg
+          sudo apt-get install -y --no-install-recommends ffmpeg postgresql-client-16
+          echo /usr/lib/postgresql/16/bin >> "$GITHUB_PATH"
 
       - name: Validate and apply migrations
         working-directory: backend
@@ -88,3 +90,9 @@ jobs:
         env:
           PYTHONPATH: bot
         run: python -m pytest bot/tests -q
+
+      - name: Validate release scripts and build backup image
+        run: |
+          bash -n scripts/deploy_launch_operations.sh scripts/backup.sh scripts/restore.sh scripts/check_launch.sh
+          docker build -f backup/Dockerfile -t mediahub-backup:ci .
+          docker run --rm mediahub-backup:ci --help

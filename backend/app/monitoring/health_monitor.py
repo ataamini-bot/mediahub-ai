@@ -15,6 +15,7 @@ from app.workers.celery_app import celery_app
 
 
 SERVICE_LABELS = {
+    "backup": "Encrypted backup",
     "bot": "Bot polling", "telegram_api": "Local Telegram API",
     "celery_queue": "Celery queue", "disk": "Disk", "ram": "RAM",
     "cpu": "CPU", "download_errors": "Download errors",
@@ -26,6 +27,7 @@ SERVICE_LABELS = {
 
 
 FAILURE_LEVELS = {
+    "backup": "critical",
     "bot": "error", "telegram_api": "error", "celery_queue": "warning",
     "disk": "warning", "ram": "warning", "cpu": "warning", "download_errors": "warning",
     "backend": "error",

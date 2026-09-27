@@ -11,6 +11,8 @@ from app.api.downloads import router as downloads_router
 from app.api.experience import router as experience_router
 from app.api.payments import router as payments_router
 from app.api.users import router as users_router
+from app.api.customers import router as customers_router
+from app.api.backups import router as backups_router
 from app.services.system_monitor import (
     notify_backend_started,
     notify_backend_stopping,
@@ -47,6 +49,8 @@ app.include_router(admin_statistics_router)
 app.include_router(experience_router)
 app.include_router(operations_router)
 app.include_router(reporting_router)
+app.include_router(customers_router)
+app.include_router(backups_router)
 
 
 @app.get("/")

@@ -94,9 +94,10 @@ services:
       - temp_data:/app/tmp
       - monitor_data:/app/monitor-data
       - ./secrets:/app/secrets:ro
+      - ./backups:/backups
 
     ports:
-      - "8000:8000"
+      - "127.0.0.1:8000:8000"
 
     networks:
       - mediahub
@@ -180,12 +181,40 @@ services:
     volumes:
       - downloads_data:/app/downloads:ro
       - monitor_data:/app/monitor-data
+      - ./backups:/backups:ro
 
     env_file:
       - .env
 
     networks:
       - mediahub
+
+
+  backup:
+    build:
+      context: .
+      dockerfile: backup/Dockerfile
+    container_name: mediahub-backup
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      BACKUP_DIR: /backups
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ./backups:/backups
+      - ./.env:/config/mediahub.env:ro
+      - ./secrets:/config/secrets:ro
+    networks:
+      - mediahub
+    healthcheck:
+      test: ["CMD", "/opt/backup-venv/bin/python", "-m", "app.backup.engine", "health"]
+      interval: 60s
+      timeout: 10s
+      start_period: 120s
+      retries: 3
 
 
 networks:

@@ -231,6 +231,8 @@ def build_user_ticket_detail_keyboard(
 
 def build_required_membership_keyboard(
     configuration: dict,
+    *,
+    return_home: bool = False,
 ) -> InlineKeyboardMarkup:
     rows = [
         [InlineKeyboardButton(text=str(channel["title"])[:64], url=channel["invite_url"])]
@@ -241,7 +243,7 @@ def build_required_membership_keyboard(
         [
             InlineKeyboardButton(
                 text=runtime_button(configuration, "check_membership"),
-                callback_data="membership:check",
+                callback_data="membership:check:home" if return_home else "membership:check",
                 **({"style": runtime_button_style(configuration, "check_membership")} if runtime_button_style(configuration, "check_membership") != "default" else {}),
             )
         ]

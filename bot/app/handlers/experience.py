@@ -33,6 +33,7 @@ from app.services.backend import (
     get_support_ticket,
     get_user_support_ticket,
     get_telegram_user,
+    get_download_entitlement,
     list_support_tickets,
     list_user_support_tickets,
     reply_support_ticket,
@@ -158,7 +159,8 @@ async def missing_required_channels(bot, telegram_id: int, configuration: dict) 
             continue
         try:
             member = await bot.get_chat_member(chat_id=chat_id, user_id=telegram_id)
-            status = str(getattr(member, "status", ""))
+            raw_status = getattr(member, "status", "")
+            status = str(getattr(raw_status, "value", raw_status))
             is_member = status in {"creator", "administrator", "member"} or bool(
                 getattr(member, "is_member", False)
             )
@@ -174,16 +176,45 @@ async def enforce_required_membership(
     *,
     telegram_id: int,
     configuration: dict,
+    return_home: bool = False,
 ) -> bool:
+    try:
+        # Never treat a fallback configuration with no channels as permission.
+        # A fresh read also makes newly added/removed channels effective at once.
+        configuration = await runtime_configuration(
+            normalize_language(configuration.get("language")), refresh=True, strict=True,
+        )
+    except RuntimeError:
+        await message.answer("Membership verification is temporarily unavailable. Please try /start again."
+            if normalize_language(configuration.get("language")) == "en" else
+            "بررسی عضویت موقتاً در دسترس نیست؛ کمی بعد /start را بفرستید.")
+        return False
     missing = await missing_required_channels(message.bot, telegram_id, configuration)
     if not missing:
         return True
     prompt_configuration = {**configuration, "required_channels": missing}
     await message.answer(
         runtime_content(configuration, "forced_join"),
-        reply_markup=build_required_membership_keyboard(prompt_configuration),
+        reply_markup=build_required_membership_keyboard(prompt_configuration, return_home=return_home),
     )
     return False
+
+
+async def entry_membership_allowed(message: Message, *, telegram_id: int, user: dict, configuration: dict) -> bool:
+    """Show the channel gate on entry for plans that require it."""
+    if user.get("is_admin"):
+        return True
+    try:
+        entitlement = await get_download_entitlement(telegram_id)
+    except BackendAPIError:
+        await message.answer("Could not verify account access. Please try /start again."
+            if normalize_language(configuration.get("language")) == "en" else
+            "بررسی دسترسی حساب انجام نشد؛ کمی بعد /start را بفرستید.")
+        return False
+    if not entitlement.get("forced_join_required"):
+        return True
+    return await enforce_required_membership(message, telegram_id=telegram_id,
+        configuration=configuration, return_home=True)
 
 
 @router.callback_query(F.data == "support:open", F.message.chat.type == "private")
@@ -462,20 +493,27 @@ async def receive_user_ticket_reply(message: Message, state: FSMContext) -> None
         )
 
 
-@router.callback_query(F.data == "membership:check")
+@router.callback_query(F.data.in_({"membership:check", "membership:check:home"}), F.message.chat.type == "private")
 async def check_membership(callback: CallbackQuery) -> None:
     if not isinstance(callback.message, Message):
         return
-    _user, configuration = await _user_and_configuration(callback.from_user.id)
-    missing = await missing_required_channels(
-        callback.message.bot,
-        callback.from_user.id,
-        configuration,
-    )
+    user, configuration = await _user_and_configuration(callback.from_user.id)
+    language = normalize_language(configuration.get("language"))
+    try:
+        entitlement = await get_download_entitlement(callback.from_user.id)
+        configuration = await runtime_configuration(language, refresh=True, strict=True)
+        missing = await missing_required_channels(callback.message.bot, callback.from_user.id, configuration) if entitlement.get("forced_join_required") else []
+    except (BackendAPIError, RuntimeError):
+        await callback.answer("Membership verification is temporarily unavailable." if language == "en" else
+            "بررسی عضویت موقتاً در دسترس نیست؛ دوباره تلاش کنید.", show_alert=True)
+        return
     if missing:
         await callback.answer("Membership in all channels is not confirmed yet." if normalize_language(configuration.get("language")) == "en" else _tr("عضویت در همه کانال‌ها هنوز تأیید نشده است."), show_alert=True)
         return
     await callback.message.edit_text(runtime_content(configuration, "membership_verified"))
+    from app.i18n import translate
+    await callback.message.answer(translate(language, "home.ready"),
+        reply_markup=build_home_reply_keyboard(language, include_admin=bool(user.get("is_admin")), configuration=configuration))
     await callback.answer("Membership confirmed." if normalize_language(configuration.get("language")) == "en" else _tr("عضویت تأیید شد."))
 
 

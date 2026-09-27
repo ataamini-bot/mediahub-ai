@@ -19,7 +19,7 @@ ui_language = ContextVar("ui_language", default="fa")
 FINAL = re.compile(
     r"^(?:admin:(?:change:(?:confirm|final)|finance:confirm|setting:confirm|"
     r"plan:[a-z_]+:confirm|homebutton:delete:[0-9]+|channel:delete:[0-9]+)|"
-    r"payment_admin:(?:approve-confirm|reject-confirm):[0-9]+|ops:confirm)$"
+    r"payment_admin:(?:approve-confirm|reject-confirm):[0-9]+|ops:confirm|customer:confirm|backup:confirm)$"
 )
 # These legacy actions previously wrote immediately from a detail screen.
 DIRECT = re.compile(

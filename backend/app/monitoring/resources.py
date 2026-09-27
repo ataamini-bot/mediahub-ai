@@ -88,6 +88,7 @@ def download_error_rate(window_minutes):
 
 def collect(thresholds, *, redis_healthy, postgres_healthy):
     probes = {
+        "backup": (backup_status, lambda value: value["healthy"]),
         "telegram_api": (telegram_api_ok, lambda value: bool(value)),
         "disk": (disk_usage, lambda value: value < thresholds["disk_percent"]),
         "ram": (ram_usage, lambda value: value < thresholds["ram_percent"]),
@@ -111,6 +112,28 @@ def collect(thresholds, *, redis_healthy, postgres_healthy):
         except Exception as exc:
             result[name] = {"healthy": False, "value": None, "error": type(exc).__name__}
     return result
+
+
+def backup_status():
+    directory = Path(os.getenv("BACKUP_DIR", "/backups"))
+    heartbeat = json.loads((directory / "heartbeat.json").read_text())
+    now = datetime.now(timezone.utc)
+    age = (now - datetime.fromisoformat(heartbeat["checked_at"])).total_seconds()
+    latest = None
+    for path in directory.glob("*.json"):
+        if len(path.stem) != 32:
+            continue
+        try:
+            row = json.loads(path.read_text())
+            if row.get("status") == "success":
+                created = datetime.fromisoformat(row["created_at"])
+                latest = max(latest, created) if latest else created
+        except (OSError, ValueError, KeyError):
+            continue
+    fresh = latest is not None and (now - latest).total_seconds() < 36 * 3600
+    return {"healthy": bool(heartbeat.get("healthy") and age < 7200 and fresh),
+            "heartbeat_age_seconds": round(age), "recent_backup": fresh,
+            "scheduled_enabled": heartbeat.get("enabled", False)}
 
 
 def save_snapshot(states, metrics, thresholds):

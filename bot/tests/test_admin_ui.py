@@ -25,6 +25,8 @@ def test_superadmin_sees_all_foundation_menu_entries():
     callbacks = [row[0].callback_data for row in keyboard.inline_keyboard]
 
     assert callbacks == [
+        "customer:open",
+        "backup:open",
         "admin:accounts",
         "admin:settings",
         "admin:plans",

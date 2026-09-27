@@ -12,6 +12,16 @@ def build_admin_home_keyboard(
 ) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = []
 
+    from app.middleware.interface import ui_language
+    if is_superadmin or "users.view" in permissions:
+        rows.append([InlineKeyboardButton(
+            text="👤 Customer management" if ui_language.get() == "en" else "👤 مدیریت مشتریان",
+            callback_data="customer:open")])
+    if is_superadmin or "backups.view" in permissions:
+        rows.append([InlineKeyboardButton(
+            text="💾 Backup and recovery" if ui_language.get() == "en" else "💾 بکاپ و بازیابی",
+            callback_data="backup:open")])
+
     if is_superadmin or permissions & {"admins.manage", "roles.manage"}:
         rows.append(
             [

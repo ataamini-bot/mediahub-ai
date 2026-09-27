@@ -695,6 +695,8 @@ class PaymentService:
             "quota.timezone",
         )
         window_start = quota_window_start_utc(limit_period, timezone_name=timezone_name)
+        if user.quota_reset_at:
+            window_start = max(window_start, user.quota_reset_at)
         reserved_statuses = (
             DownloadJobStatus.PENDING,
             DownloadJobStatus.PROCESSING,

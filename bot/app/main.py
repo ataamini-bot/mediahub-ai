@@ -50,6 +50,8 @@ from app.keyboards.payment import (
     build_upgrade_keyboard,
 )
 from app.handlers.operations import router as operations_router
+from app.handlers.customers import router as customers_router
+from app.handlers.backups import router as backups_router
 from app.handlers.conversion import (
     cleanup_staged_state,
     configure_download_runtime,
@@ -60,6 +62,7 @@ from app.handlers.home import (
 )
 from app.handlers.experience import (
     enforce_required_membership,
+    entry_membership_allowed,
     router as experience_router,
 )
 from app.handlers.admin import (
@@ -169,6 +172,8 @@ dp.callback_query.outer_middleware(InterfaceContext())
 dp.callback_query.outer_middleware(InterfaceCallbacks(dp.storage.redis))
 
 dp.include_router(operations_router)
+dp.include_router(customers_router)
+dp.include_router(backups_router)
 dp.include_router(conversion_router)
 dp.include_router(
     experience_router
@@ -3176,6 +3181,11 @@ async def start_handler(
 
         await cleanup_staged_state(state)
         await state.clear()
+
+        if message.chat.type == "private" and not await entry_membership_allowed(
+            message, telegram_id=telegram_id, user=user, configuration=configuration,
+        ):
+            return
 
         await message.answer(
             (
