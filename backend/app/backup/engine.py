@@ -45,7 +45,7 @@ def atomic_json(path, value):
     path = Path(path)
     temp = path.with_name(path.name + "." + uuid.uuid4().hex + ".tmp")
     try:
-        with temp.open("x", opener=lambda p, f: os.open(p, f, 0o600)) as output:
+        with open(temp, "x", opener=lambda p, f: os.open(p, f, 0o600)) as output:
             json.dump(value, output, ensure_ascii=False)
             output.flush()
             os.fsync(output.fileno())
@@ -189,7 +189,7 @@ def create_backup(kind="manual", backup_id=None):
                                 raise ValueError("Backup secret symlinks are not supported")
                             if item.is_file():
                                 archive.add(item, arcname="config/secrets/" + str(item.relative_to(secrets)))
-                with plain.open("rb") as source, partial.open("wb", opener=lambda p, f: os.open(p, f, 0o600)) as target:
+                with plain.open("rb") as source, open(partial, "wb", opener=lambda p, f: os.open(p, f, 0o600)) as target:
                     encrypt(source, target)
                     target.flush()
                     os.fsync(target.fileno())

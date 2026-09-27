@@ -12,6 +12,19 @@ from cryptography.fernet import Fernet
 from app.backup import engine as backup
 
 
+def test_backup_metadata_is_private_and_preserved_on_failed_write(tmp_path):
+    path = tmp_path / "status.json"
+    backup.atomic_json(path, {"status": "running"})
+    assert path.stat().st_mode & 0o777 == 0o600
+    backup.atomic_json(path, {"status": "success"})
+    assert json.loads(path.read_text()) == {"status": "success"}
+    assert path.stat().st_mode & 0o777 == 0o600
+    with pytest.raises(TypeError):
+        backup.atomic_json(path, {"invalid": object()})
+    assert json.loads(path.read_text()) == {"status": "success"}
+    assert list(tmp_path.iterdir()) == [path]
+
+
 def test_backup_stream_is_authenticated_and_handles_multiple_chunks(monkeypatch):
     monkeypatch.setenv("DATA_ENCRYPTION_KEY", Fernet.generate_key().decode())
     payload = os.urandom(backup.CHUNK * 2 + 157)
@@ -71,6 +84,7 @@ def test_real_snapshot_encryption_restore_and_safe_database_switch(tmp_path, mon
             conn.execute("CREATE TABLE marker(id integer PRIMARY KEY, content text)")
             conn.execute("INSERT INTO marker VALUES (42, 'saved-data')")
         result = backup.create_backup()
+        assert backup.archive_path(result["id"]).stat().st_mode & 0o777 == 0o600
         encrypted = backup.archive_path(result["id"]).read_bytes()
         assert b"must-stay-encrypted" not in encrypted
         assert backup.restore_drill(result["id"])["restore_verified_at"]
