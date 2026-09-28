@@ -56,6 +56,9 @@ while read -r service image_name; do
   image_names[$service]="$image_name"
 done <<< "$compose_images"
 for service in "${services[@]}"; do
+  [[ "$(docker inspect --format '{{.State.Running}}' "mediahub-$service")" == true ]] || {
+    printf 'DEPLOYMENT=ABORTED_SERVICE_NOT_RUNNING SERVICE=%s\n' "$service"; exit 1;
+  }
   old_images[$service]="$(docker inspect --format '{{.Image}}' "mediahub-$service")"
   docker image tag "${old_images[$service]}" "mediahub-ai-$service:rollback-$release_time"
 done
@@ -64,21 +67,30 @@ stopped=0
 bot_stopped=0
 rollback() {
   local code=$?
+  local recovery_ok=1
   trap - EXIT
   if [[ "$code" -ne 0 && "$changed" -eq 1 ]]; then
+    # Keep the original services running on build/compile failures. Once cutover
+    # has started, stop all new writers before restoring the old image tags.
     if [[ "$stopped" -eq 1 ]]; then
-      docker compose stop backup >/dev/null 2>&1 || true
+      docker compose stop backend bot worker monitor backup || recovery_ok=0
     fi
-    git reset --keep "$original_head" || true
+    git reset --keep "$original_head" || recovery_ok=0
     for service in "${services[@]}"; do
-      docker image tag "${old_images[$service]}" "${image_names[$service]}" || true
+      docker image tag "${old_images[$service]}" "${image_names[$service]}" || recovery_ok=0
     done
-    if [[ "$stopped" -eq 1 ]]; then
-      docker compose up -d --no-deps --no-build --pull never --force-recreate "${services[@]}" || true
-    elif [[ "$bot_stopped" -eq 1 ]]; then
-      docker compose up -d --no-deps --no-build --pull never bot || true
+    if [[ "$stopped" -eq 1 && "$recovery_ok" -eq 1 ]]; then
+      docker compose up -d --no-deps --no-build --pull never --force-recreate "${services[@]}" || recovery_ok=0
+    elif [[ "$bot_stopped" -eq 1 && "$stopped" -eq 0 ]]; then
+      # Resume the existing bot container without recreating it before cutover.
+      docker compose start bot || recovery_ok=0
     fi
-    printf 'ROLLBACK=ATTEMPTED DATABASE=NOT_DOWNGRADED\nDEPLOYMENT=FAILED\n'
+    if [[ "$recovery_ok" -eq 1 ]]; then
+      printf 'ROLLBACK=ATTEMPTED DATABASE=NOT_DOWNGRADED\n'
+    else
+      printf 'ROLLBACK=INCOMPLETE_MANUAL_RECOVERY_REQUIRED DATABASE=NOT_DOWNGRADED\n'
+    fi
+    printf 'DEPLOYMENT=FAILED\n'
   fi
   exit "$code"
 }
@@ -122,7 +134,7 @@ async def check():
 asyncio.run(check())
 print("LAUNCH_SCHEMA=OK")
 PY
-docker compose up -d --no-deps --force-recreate backend worker backup monitor
+docker compose up -d --no-deps --no-build --pull never --force-recreate backend worker backup monitor
 healthy=0
 for attempt in $(seq 1 45); do
   if curl --max-time 3 -fsS http://127.0.0.1:8000/health >/dev/null 2>&1; then
@@ -132,7 +144,7 @@ for attempt in $(seq 1 45); do
   sleep 2
 done
 [[ "$healthy" -eq 1 ]]
-docker compose up -d --no-deps --force-recreate bot
+docker compose up -d --no-deps --no-build --pull never --force-recreate bot
 sleep 5
 for service in backend bot worker monitor backup; do
   status="$(docker inspect --format '{{.State.Status}}' "mediahub-$service")"
@@ -141,7 +153,7 @@ for service in backend bot worker monitor backup; do
   [[ "$status" == running && "$restarts" -eq 0 ]]
 done
 docker compose exec -T backup /opt/backup-venv/bin/python -m app.backup.engine health
-for service in "${services[@]}"; do
+for service in backend bot worker monitor backup; do
   docker image tag "$(docker inspect --format '{{.Image}}' "mediahub-$service")" "mediahub-ai-$service:release-${target:0:12}"
 done
 printf 'FINAL_HEAD=%s\nDEPLOYMENT=OK\nPILOT_STATUS=AWAITING_LIVE_TESTS\n' "$(git rev-parse HEAD)"

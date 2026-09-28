@@ -50,7 +50,8 @@ if name == "docker":
         service = args[-1].removeprefix("mediahub-")
         image = "sha256:" + str(["backend", "bot", "worker", "monitor", "backup"].index(service) + 1) * 64
         if args[2] == "{{.State.Running}}":
-            done("true" if state.get("backup_running") else "false")
+            running = service != "backup" or state.get("backup_running")
+            done("true" if running else "false")
         if args[2] in ("{{.Image}}", "{{.Config.Image}}"):
             done(image)
         if args[2] == "{{.State.Status}}":
@@ -58,6 +59,8 @@ if name == "docker":
         if args[2] == "{{.RestartCount}}":
             done("0")
     if args[:2] == ["image", "tag"]:
+        if state.get("fail_restore_tag") and args[-1] == "mediahub-ai-backend":
+            done(code=1)
         done(code=1 if args[-1].startswith("sha256:") else 0)
     if args[:4] == ["compose", "config", "--format", "json"]:
         done(json.dumps({"name": "mediahub-ai", "services": {
@@ -82,7 +85,7 @@ if name == "docker":
             done(code=1 if state.get("fail") == "migration" else 0)
         if "python" in args:
             done()
-    if args[:2] in (["compose", "stop"], ["compose", "up"]):
+    if args[:2] in (["compose", "stop"], ["compose", "up"], ["compose", "start"]):
         done()
 done("Unexpected stub command: " + repr([name, *args]), code=97)
 '''
@@ -159,9 +162,9 @@ def test_job_arriving_after_bot_stop_does_not_restart_active_worker(tmp_path):
     result, state = deploy(tmp_path, busy_after_stop=True)
     assert result.returncode != 0
     assert state["head"] == PREPARED
-    restarts = [c for c in state["calls"] if c[:3] == ["docker", "compose", "up"]]
-    assert len(restarts) == 1 and restarts[0][-1] == "bot"
-    assert "worker" not in restarts[0]
+    restarts = [c for c in state["calls"] if c[:3] in
+                (["docker", "compose", "up"], ["docker", "compose", "start"])]
+    assert restarts == [["docker", "compose", "start", "bot"]]
     assert not any("alembic" in c for c in state["calls"])
 
 
@@ -171,3 +174,11 @@ def test_build_failure_keeps_existing_services_running(tmp_path):
     assert state["head"] == PREPARED
     assert not any(c[:3] in (["docker", "compose", "stop"], ["docker", "compose", "up"])
                    for c in state["calls"])
+
+
+def test_failed_image_recovery_does_not_restart_with_wrong_images(tmp_path):
+    result, state = deploy(tmp_path, fail="verify", fail_restore_tag=True)
+    assert result.returncode != 0
+    assert "ROLLBACK=INCOMPLETE_MANUAL_RECOVERY_REQUIRED" in result.stdout
+    assert state["head"] == PREPARED
+    assert not any(c[:3] == ["docker", "compose", "up"] for c in state["calls"])
