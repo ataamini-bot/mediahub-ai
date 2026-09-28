@@ -1128,5 +1128,20 @@
   "زبان کاربران: ": "User language: ",
   "🌐 این کانال برای کاربران کدام زبان اجباری باشد؟\nزبان انتخابی کاربر در ربات ملاک است.": "🌐 Which users should be required to join this channel?\nThis follows the language they select in the bot.",
   "🌐 زبان کاربران این کانال را انتخاب کنید:": "🌐 Choose the user language for this channel:",
-  "زبان کانال ذخیره شد.": "Channel language saved."
+  "زبان کانال ذخیره شد.": "Channel language saved.",
+  "⚠️ پیوست نمایش داده نشد؛ برای تلاش مجدد، رسید را از فهرست پرداخت‌ها باز کنید.": "⚠️ The attachment could not be displayed. Open the receipt from the payment list to retry.",
+  "✅ <b>گزارش تأیید پرداخت</b>": "✅ <b>Payment approval report</b>",
+  "🆔 پرداخت:": "🆔 Payment:",
+  "👤 کاربر:": "👤 Customer:",
+  "💎 پلن:": "💎 Plan:",
+  "💰 مبلغ:": "💰 Amount:",
+  "📅 مدت (روز):": "📅 Duration (days):",
+  "👮 تأییدکننده:": "👮 Approved by:",
+  "🕒 زمان تأیید:": "🕒 Approved at:",
+  "⚠️ پرداخت تأیید شده است، اما گزارش به تاپیک Payment نرسید. پس از رفع مشکل، ارسال گزارش را دوباره بزنید.": "⚠️ Payment was approved, but its report could not reach the Payment topic. Retry the report after resolving the delivery issue.",
+  "🔄 ارسال دوباره گزارش": "🔄 Retry report",
+  "رسید را در گفت‌وگوی خصوصی ربات، از پنل مدیریت ← پرداخت‌ها بررسی کنید.": "Review this receipt in the private bot chat: Admin panel → Payments.",
+  "فقط پرداخت تأییدشده گزارش می‌شود.": "Only approved payments can be reported.",
+  "✅ گزارش تأیید به تاپیک Payment ارسال شد.": "✅ The approval report was sent to the Payment topic.",
+  "ارسال گزارش انجام نشد؛ تنظیمات تاپیک Payment را بررسی کنید.": "The report could not be sent. Check the Payment topic settings."
 }

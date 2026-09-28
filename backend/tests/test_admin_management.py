@@ -31,6 +31,7 @@ from app.services.admin_management import (  # noqa: E402
     AdminRoleInUse,
     LastSuperadminError,
 )
+from app.services.payment_management import PaymentManagementService  # noqa: E402
 
 
 def unique_telegram_id() -> int:
@@ -61,6 +62,52 @@ async def add_superadmin(session, telegram_id: int) -> tuple[User, AdminAccount]
     session.add(account)
     await session.flush()
     return user, account
+
+
+@pytest.mark.asyncio
+async def test_private_receipt_recipients_require_active_review_and_view_permissions():
+    async with AsyncSessionLocal() as session:
+        transaction = await session.begin()
+        try:
+            owner, _ = await add_superadmin(session, unique_telegram_id())
+            disabled_owner, disabled_account = await add_superadmin(session, unique_telegram_id())
+            disabled_account.is_active = False
+            service = AdminManagementService(session)
+            finance = await add_user(session, unique_telegram_id())
+            finance.preferred_language = "en"
+            finance.language_code = "fa"
+            record = await service.create_account(
+                actor_telegram_id=owner.telegram_id, target_telegram_id=finance.telegram_id,
+                role_codes=["payment_finance", "support"], is_superadmin=False,
+                reason="Private receipt recipient test",
+            )
+            excluded = [disabled_owner.telegram_id]
+            for permission in ("payments.view", "payments.review"):
+                user = await add_user(session, unique_telegram_id())
+                role = await service.create_role(
+                    actor_telegram_id=owner.telegram_id, code=f"receipt_{uuid.uuid4().hex[:12]}",
+                    name="Partial finance access", description=None,
+                    permission_codes=["admin.access", permission], reason="Recipient isolation test",
+                )
+                await service.create_account(
+                    actor_telegram_id=owner.telegram_id, target_telegram_id=user.telegram_id,
+                    role_codes=[role.role.code], is_superadmin=False, reason="Recipient isolation test",
+                )
+                excluded.append(user.telegram_id)
+            await session.flush()
+            recipients = await PaymentManagementService(session).reviewers()
+            ids = [item["telegram_id"] for item in recipients]
+            assert owner.telegram_id in ids
+            assert ids.count(finance.telegram_id) == 1
+            assert not set(excluded).intersection(ids)
+            assert next(item for item in recipients if item["telegram_id"] == finance.telegram_id)["language"] == "en"
+            # Removing finance authority takes effect without changing .env.
+            record.account.is_active = False
+            await session.flush()
+            assert finance.telegram_id not in [item["telegram_id"] for item in await PaymentManagementService(session).reviewers()]
+        finally:
+            await transaction.rollback()
+            await engine.dispose()
 
 
 @pytest.mark.asyncio

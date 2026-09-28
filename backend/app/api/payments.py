@@ -32,7 +32,7 @@ from app.services.payment_offers import (
     get_payment_configuration,
 )
 from app.services.managed_settings import PublicOperationDisabled
-from app.services.payment_management import PaymentDestinationValidation
+from app.services.payment_management import PaymentDestinationValidation, PaymentManagementService
 from app.services.payment_orders import PaymentOrderService, PaymentOrderError
 
 
@@ -41,6 +41,11 @@ router = APIRouter(
     tags=["payments"],
     dependencies=[Depends(require_internal_api_key)],
 )
+
+
+@router.get("/reviewers")
+async def payment_reviewers(db: AsyncSession = Depends(get_db)) -> list[dict]:
+    return await PaymentManagementService(db).reviewers()
 
 
 def serialize_action(result: PaymentActionResult) -> PaymentActionResponse:

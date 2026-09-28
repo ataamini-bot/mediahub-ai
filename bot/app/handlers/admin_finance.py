@@ -40,6 +40,7 @@ from app.services.backend import (
     update_usdt_destination,
 )
 from app.state.admin_finance import AdminFinanceStates
+from app.services.payment_delivery import send_private_receipt
 
 
 router = Router(name="admin-finance")
@@ -366,6 +367,8 @@ async def show_payment_list(
 async def show_payment_receipt(callback: CallbackQuery) -> None:
     if not callback.data or not isinstance(callback.message, Message):
         return
+    if callback.message.chat.type != "private":
+        return
     context = await _context(callback.from_user.id, "payments.view")
     if context is None:
         await callback.answer(_tr("دسترسی مشاهده پرداخت‌ها ندارید."), show_alert=True)
@@ -393,12 +396,10 @@ async def show_payment_receipt(callback: CallbackQuery) -> None:
         if payment.get("txid"):
             details += "\nTxID: <code>" + html.escape(payment["txid"]) + "</code>"
             details += "\nRequired confirmations: " + str((payment.get("payment_destination_snapshot") or {}).get("confirmations_required", "—"))
-        await callback.message.answer(details, parse_mode="HTML", reply_markup=markup)
-        if payment.get("receipt_file_id"):
-            kind = payment.get("receipt_file_type")
-            if kind in {"photo", "document"}:
-                await getattr(callback.bot, f"send_{kind}")(
-                    chat_id=callback.message.chat.id, **{kind: payment["receipt_file_id"]})
+        await send_private_receipt(
+            callback.bot, chat_id=callback.message.chat.id, payment=payment,
+            text=details, reply_markup=markup,
+        )
         await callback.answer(_tr("رسید نمایش داده شد."))
     except BackendAPIError as exc:
         await callback.answer(_finance_error_text(exc), show_alert=True)

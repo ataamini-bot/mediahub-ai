@@ -1100,6 +1100,10 @@ async def get_payment_configuration(
     )
 
 
+async def list_payment_reviewers() -> list[dict]:
+    return await _payment_request("GET", "/payments/reviewers")
+
+
 async def create_manual_payment(
     *,
     telegram_id: int,

@@ -9,10 +9,13 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
+from app.core.language import effective_language
+from app.models.admin import AdminAccount
 from app.models.payment import Payment, PaymentStatus
 from app.models.payment_destination import PaymentCard, UsdtDestination
 from app.models.user import User
 from app.services.audit import AuditService
+from app.services.admin_access import AdminAccessService, PermissionCode
 from app.services.managed_settings import get_managed_setting
 
 
@@ -106,6 +109,28 @@ def usdt_destination_snapshot(destination: UsdtDestination) -> dict[str, Any]:
 class PaymentManagementService:
     def __init__(self, session: AsyncSession):
         self.session = session
+
+    async def reviewers(self) -> list[dict]:
+        users = (await self.session.execute(
+            select(User).join(AdminAccount, AdminAccount.user_id == User.id)
+            .where(AdminAccount.is_active.is_(True))
+            .order_by(User.id)
+        )).scalars().all()
+        access = AdminAccessService(self.session)
+        reviewers = []
+        for user in users:
+            context = await access.get_context(user.telegram_id)
+            if context.is_admin and all(context.has_permission(permission) for permission in (
+                PermissionCode.PAYMENTS_VIEW, PermissionCode.PAYMENTS_REVIEW,
+            )):
+                reviewers.append({
+                    "telegram_id": user.telegram_id,
+                    "language": effective_language(
+                        preferred_language=user.preferred_language,
+                        telegram_language_code=user.language_code,
+                    ),
+                })
+        return reviewers
 
     async def summary(self) -> dict[str, Any]:
         result = await self.session.execute(

@@ -9,7 +9,9 @@ from zoneinfo import ZoneInfo
 
 from aiogram import F, Router
 from aiogram.exceptions import TelegramBadRequest
-from app.services.topic_delivery import notification_routes
+from app.services.payment_delivery import send_private_receipt, send_approval_report
+from app.middleware.interface import ui_language
+from app.keyboards.admin_finance import build_payment_detail_keyboard
 from aiogram.fsm.context import FSMContext
 from aiogram.types import (
     BufferedInputFile,
@@ -48,10 +50,10 @@ from app.services.backend import (
     get_current_subscription,
     get_telegram_user,
     get_payment_configuration,
-    mark_payment_delivery_failed,
+    get_admin_payment,
+    list_payment_reviewers,
     register_telegram_user,
     reject_manual_payment,
-    set_payment_admin_message,
 )
 from app.state.payment import AdminPaymentStates, PaymentStates
 from app.utils.formatting import format_date_for_language, format_quality_limit
@@ -62,22 +64,6 @@ router = Router(name="payments")
 logger = logging.getLogger(__name__)
 
 
-def _parse_int_env(name: str) -> int | None:
-    raw_value = os.getenv(name, "").strip()
-
-    if not raw_value:
-        return None
-
-    try:
-        return int(raw_value)
-    except ValueError:
-        return None
-
-
-ADMIN_PAYMENT_CHAT_ID = _parse_int_env("ADMIN_NOTIFICATIONS_CHAT_ID")
-ADMIN_PAYMENT_TOPIC_ID = _parse_int_env(
-    "ADMIN_NOTIFICATIONS_PAYMENTS_TOPIC_ID"
-)
 DISPLAY_TIMEZONE = ZoneInfo(os.getenv("DISPLAY_TIMEZONE", "Asia/Tehran"))
 
 
@@ -274,6 +260,62 @@ def _build_admin_caption(result: dict, offer: dict) -> str:
     )
 
 
+async def _notify_payment_reviewers(message: Message, result: dict, offer: dict) -> None:
+    payment = result["payment"]
+    try:
+        reviewers = await list_payment_reviewers()
+    except Exception as exc:
+        logger.warning("Payment %s reviewer lookup failed: %s", payment['id'], type(exc).__name__)
+        return
+    for reviewer in reviewers:
+        token = ui_language.set(normalize_language(reviewer.get("language")))
+        try:
+            markup = build_payment_detail_keyboard(
+                payment, can_review=True, status_filter="pending", page=1,
+            )
+            explorer = _transaction_explorer_url(payment)
+            if explorer:
+                markup.inline_keyboard.insert(0, [InlineKeyboardButton(text="🔎 View transaction", url=explorer)])
+            await send_private_receipt(
+                message.bot, chat_id=int(reviewer["telegram_id"]), payment=payment,
+                text=_build_admin_caption(result, offer), reply_markup=markup,
+            )
+        except Exception as exc:
+            # The database queue remains available even when an admin blocked
+            # the bot. One unreachable reviewer must not block the others.
+            logger.warning("Payment %s private delivery failed: %s", payment['id'], type(exc).__name__)
+        finally:
+            ui_language.reset(token)
+
+
+def _approval_report(payment: dict) -> str:
+    amount = (format_usdt(payment["amount"]) if payment.get("payment_method") == "usdt"
+              else format_toman(payment["amount"]))
+    full_name = " ".join(str(payment.get(key) or "") for key in ("first_name", "last_name")).strip()
+    return "\n".join([
+        _tr("✅ <b>گزارش تأیید پرداخت</b>"),
+        f"{_tr('🆔 پرداخت:')} <code>{int(payment['id'])}</code>",
+        f"{_tr('👤 کاربر:')} {html.escape(full_name or '—')}",
+        f"Telegram ID: <code>{int(payment['user_telegram_id'])}</code>",
+        f"{_tr('💎 پلن:')} <b>{html.escape(str(payment.get('plan_name_snapshot') or '—'))}</b>",
+        f"{_tr('💰 مبلغ:')} <b>{amount}</b>",
+        f"{_tr('📅 مدت (روز):')} {int(payment.get('duration_days') or 0)}",
+        f"{_tr('👮 تأییدکننده:')} <code>{int(payment['reviewed_by_telegram_id'])}</code>",
+        f"{_tr('🕒 زمان تأیید:')} {_format_datetime(payment.get('reviewed_at'), ui_language.get())}",
+    ])
+
+
+async def _report_approved_payment(message: Message, payment: dict) -> None:
+    if await send_approval_report(message.bot, _approval_report(payment)) is False:
+        await message.answer(
+            _tr("⚠️ پرداخت تأیید شده است، اما گزارش به تاپیک Payment نرسید. پس از رفع مشکل، ارسال گزارش را دوباره بزنید."),
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+                InlineKeyboardButton(text=_tr("🔄 ارسال دوباره گزارش"),
+                                     callback_data=f"payment_admin:report:{payment['id']}"),
+            ]]),
+        )
+
+
 def _transaction_explorer_url(payment: dict) -> str | None:
     txid = str(payment.get("txid") or "").strip()
     if not txid:
@@ -367,14 +409,17 @@ def _payment_destination_text(offer: dict, destination: dict, receipt_rules: dic
     )
 
 
-def _status_caption(original: str | None, status_line: str) -> str:
+def _status_caption(original: str | None, status_line: str, *, limit: int = 1024) -> str:
     base = (original or _tr("🧾 رسید پرداخت")).strip()
     marker = _tr("\n\n⏳ وضعیت:")
 
     if marker in base:
         base = base.split(marker, 1)[0]
 
-    max_base_length = max(0, 1024 - len(status_line) - 4)
+    # The finance panel places status near the top, unlike the push receipt.
+    base = re.sub(r"(?m)^(?:وضعیت|Status):[^\n]*\n?", "", base)
+
+    max_base_length = max(0, limit - len(status_line) - 4)
     return f"{base[:max_base_length]}\n\n{status_line}"
 
 
@@ -383,7 +428,7 @@ async def _edit_receipt_status(
     status_line: str,
 ) -> None:
     original = message.caption if message.caption is not None else message.text
-    caption = _status_caption(original, status_line)
+    caption = _status_caption(original, status_line, limit=1024 if message.caption is not None else 4096)
 
     try:
         if message.caption is not None:
@@ -412,7 +457,7 @@ async def _edit_receipt_status_by_id(
     is_media: bool,
     status_line: str,
 ) -> None:
-    caption = _status_caption(original_content, status_line)
+    caption = _status_caption(original_content, status_line, limit=1024 if is_media else 4096)
 
     try:
         if is_media:
@@ -955,10 +1000,6 @@ async def _submit_payment_from_state(
         return
 
     try:
-        routes = await notification_routes()
-        payment_chat_id = routes.get("chat_id")
-        payment_topic_id = (routes.get("topics") or {}).get("payments")
-
         if receipt_message is not None and receipt_message.photo:
             receipt = receipt_message.photo[-1]
             file_id = receipt.file_id
@@ -1032,39 +1073,8 @@ async def _submit_payment_from_state(
             txid=txid,
         )
         payment_id = int(result["payment"]["id"])
-        caption = _build_admin_caption(result, offer)
-        send_kwargs = {
-            "chat_id": payment_chat_id,
-            "parse_mode": "HTML",
-            "message_thread_id": payment_topic_id,
-            "reply_markup": build_admin_payment_keyboard(
-                payment_id,
-                explorer_url=_transaction_explorer_url(result["payment"]),
-            ),
-        }
-
         if not result.get("already_submitted"):
-            try:
-                if not routes.get("enabled") or not payment_chat_id or not payment_topic_id:
-                    raise RuntimeError("Payments Topic is not configured")
-                # Text accommodates complete payment details; attachments have no
-                # duplicated action buttons and cannot overflow Telegram captions.
-                admin_message = await message.bot.send_message(text=caption, **send_kwargs)
-                await set_payment_admin_message(
-                    payment_id=payment_id, admin_chat_id=payment_chat_id,
-                    admin_message_id=admin_message.message_id,
-                    admin_message_thread_id=payment_topic_id,
-                )
-                if file_id:
-                    await getattr(message.bot, f"send_{file_type}")(
-                        **{file_type: file_id}, chat_id=payment_chat_id,
-                        message_thread_id=payment_topic_id,
-                    )
-            except Exception as exc:
-                # Submission already committed. The finance panel remains the
-                # source of truth even when Telegram delivery is unavailable.
-                logger.warning("Payment %s Topic delivery failed: %s", payment_id, type(exc).__name__)
-
+            await _notify_payment_reviewers(message, result, offer)
         await state.clear()
         await message.answer(
             (
@@ -1192,6 +1202,12 @@ def _parse_admin_payment_id(callback: CallbackQuery) -> int | None:
 
 
 async def _ensure_admin(callback: CallbackQuery) -> bool:
+    if not isinstance(callback.message, Message) or callback.message.chat.type != "private":
+        await callback.answer(
+            _tr("رسید را در گفت‌وگوی خصوصی ربات، از پنل مدیریت ← پرداخت‌ها بررسی کنید."),
+            show_alert=True,
+        )
+        return False
     try:
         context = await get_admin_context(callback.from_user.id)
         permissions = set(context.get("permissions", []))
@@ -1210,7 +1226,7 @@ async def _ensure_admin(callback: CallbackQuery) -> bool:
 
 
 async def _ensure_message_admin(message: Message) -> bool:
-    if message.from_user is None:
+    if message.from_user is None or message.chat.type != "private":
         return False
 
     try:
@@ -1278,10 +1294,17 @@ async def approve_payment_callback(
         status_line = (
             f"{_tr('✅ وضعیت: <b>تأیید شد</b>\n👮 مدیر: <code>')}{callback.from_user.id}{_tr('</code>\n📅 اعتبار تا: <code>')}{_format_datetime(subscription.get('expires_at'))}</code>"
         )
-        await _edit_receipt_status(callback.message, status_line)
         await state.clear()
 
         if not result.get("already_reviewed"):
+            payment = {**result["payment"],
+                       "user_telegram_id": result["user"]["telegram_id"],
+                       "first_name": result["user"].get("first_name"),
+                       "last_name": result["user"].get("last_name")}
+            try:
+                await _report_approved_payment(callback.message, payment)
+            except Exception as exc:
+                logger.warning("Payment %s report notification failed: %s", payment_id, type(exc).__name__)
             try:
                 await _notify_user_approved(callback.message, result)
             except Exception as exc:
@@ -1289,6 +1312,13 @@ async def approve_payment_callback(
                     f"{_tr('⚠️ پرداخت تأیید شد، اما پیام نتیجه به کاربر نرسید: <code>')}{html.escape(str(exc)[:250])}</code>",
                     parse_mode="HTML",
                 )
+
+        # Financial review is committed. A stale/deleted Telegram message must
+        # not prevent the Topic report or customer notification.
+        try:
+            await _edit_receipt_status(callback.message, status_line)
+        except Exception as exc:
+            logger.warning("Payment %s status edit failed: %s", payment_id, type(exc).__name__)
 
         callback_text = (
             _tr("این پرداخت قبلاً تأیید شده بود.")
@@ -1307,6 +1337,8 @@ async def cancel_approval_confirmation(
     callback: CallbackQuery,
     state: FSMContext,
 ) -> None:
+    if not await _ensure_admin(callback):
+        return
     await state.clear()
     payment_id = _parse_admin_payment_id(callback)
     if isinstance(callback.message, Message) and payment_id is not None:
@@ -1314,6 +1346,28 @@ async def cancel_approval_confirmation(
             reply_markup=build_admin_payment_keyboard(payment_id)
         )
     await callback.answer(_tr("تأیید پرداخت لغو شد."))
+
+
+@router.callback_query(F.data.startswith("payment_admin:report:"))
+async def retry_payment_report(callback: CallbackQuery) -> None:
+    if not await _ensure_admin(callback):
+        return
+    payment_id = _parse_admin_payment_id(callback)
+    if payment_id is None:
+        return
+    try:
+        payment = await get_admin_payment(actor_telegram_id=callback.from_user.id, payment_id=payment_id)
+        if payment.get("status") != "approved":
+            await callback.answer(_tr("فقط پرداخت تأییدشده گزارش می‌شود."), show_alert=True)
+            return
+        sent = await send_approval_report(callback.bot, _approval_report(payment))
+        if sent:
+            await callback.message.edit_text(_tr("✅ گزارش تأیید به تاپیک Payment ارسال شد."), reply_markup=None)
+            await callback.answer()
+        else:
+            await callback.answer(_tr("ارسال گزارش انجام نشد؛ تنظیمات تاپیک Payment را بررسی کنید."), show_alert=True)
+    except BackendAPIError as exc:
+        await callback.answer(str(exc.detail)[:180], show_alert=True)
 
 
 @router.callback_query(F.data.startswith("payment_admin:reject:"))
@@ -1407,16 +1461,19 @@ async def confirm_payment_rejection(callback: CallbackQuery, state: FSMContext):
             result["payment"].get("rejection_reason")
             or reason
         )
-        await _edit_receipt_status_by_id(
-            message,
-            chat_id=int(state_data["receipt_chat_id"]),
-            message_id=int(state_data["receipt_message_id"]),
-            original_content=state_data.get("receipt_content"),
-            is_media=bool(state_data.get("receipt_is_media")),
-            status_line=(
-                f"{_tr('❌ وضعیت: <b>رد شد</b>\n👮 مدیر: <code>')}{admin_id}{_tr('</code>\n📝 دلیل: ')}{html.escape(actual_reason)}"
-            ),
-        )
+        try:
+            await _edit_receipt_status_by_id(
+                message,
+                chat_id=int(state_data["receipt_chat_id"]),
+                message_id=int(state_data["receipt_message_id"]),
+                original_content=state_data.get("receipt_content"),
+                is_media=bool(state_data.get("receipt_is_media")),
+                status_line=(
+                    f"{_tr('❌ وضعیت: <b>رد شد</b>\n👮 مدیر: <code>')}{admin_id}{_tr('</code>\n📝 دلیل: ')}{html.escape(actual_reason)}"
+                ),
+            )
+        except Exception as exc:
+            logger.warning("Payment %s status edit failed: %s", payment_id, type(exc).__name__)
 
         if not result.get("already_reviewed"):
             try:
