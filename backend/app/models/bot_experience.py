@@ -65,6 +65,10 @@ class RequiredChannel(Base, TimestampMixin):
     __tablename__ = "required_channels"
     __table_args__ = (
         CheckConstraint(
+            "language IN ('all', 'fa', 'en')",
+            name="ck_required_channels_language",
+        ),
+        CheckConstraint(
             "sort_order >= 0",
             name="ck_required_channels_sort_order_nonnegative",
         ),
@@ -80,6 +84,9 @@ class RequiredChannel(Base, TimestampMixin):
     chat_id: Mapped[str] = mapped_column(String(100), unique=True, nullable=False)
     title: Mapped[str] = mapped_column(String(120), nullable=False)
     invite_url: Mapped[str] = mapped_column(String(500), nullable=False)
+    language: Mapped[str] = mapped_column(
+        String(3), default="all", server_default="all", nullable=False
+    )
     sort_order: Mapped[int] = mapped_column(
         Integer, default=0, server_default="0", nullable=False
     )

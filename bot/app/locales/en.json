@@ -1122,5 +1122,11 @@
   "این عملیات تأیید شود؟": "Confirm this action?",
   "✅ تأیید": "✅ Confirm",
   "🔄 دانلود مجدد": "🔄 Download again",
-  "📋 جزئیات": "📋 Details"
+  "📋 جزئیات": "📋 Details",
+  "هر دو زبان": "Both languages",
+  "🌐 تغییر زبان کانال": "🌐 Change channel language",
+  "زبان کاربران: ": "User language: ",
+  "🌐 این کانال برای کاربران کدام زبان اجباری باشد؟\nزبان انتخابی کاربر در ربات ملاک است.": "🌐 Which users should be required to join this channel?\nThis follows the language they select in the bot.",
+  "🌐 زبان کاربران این کانال را انتخاب کنید:": "🌐 Choose the user language for this channel:",
+  "زبان کانال ذخیره شد.": "Channel language saved."
 }

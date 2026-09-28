@@ -300,7 +300,10 @@ class BotExperienceService:
         )
         channel_result = await self.session.execute(
             select(RequiredChannel)
-            .where(RequiredChannel.is_active.is_(True))
+            .where(
+                RequiredChannel.is_active.is_(True),
+                RequiredChannel.language.in_(("all", normalized)),
+            )
             .order_by(RequiredChannel.sort_order, RequiredChannel.id)
         )
         return {
@@ -335,6 +338,7 @@ class BotExperienceService:
             "chat_id": row.chat_id,
             "title": row.title,
             "invite_url": row.invite_url,
+            "language": row.language,
             "sort_order": row.sort_order,
             "is_active": row.is_active,
             "created_at": row.created_at,
@@ -494,6 +498,7 @@ class BotExperienceService:
             "chat_id": row.chat_id,
             "title": row.title,
             "invite_url": row.invite_url,
+            "language": row.language,
             "sort_order": row.sort_order,
             "is_active": row.is_active,
             **changes,
@@ -523,6 +528,9 @@ class BotExperienceService:
 
     @staticmethod
     def _validate_channel(data: dict[str, Any]) -> dict[str, Any]:
+        language = data.get("language", "all")
+        if language not in {"all", "fa", "en"}:
+            raise BotExperienceError("Channel language must be all, fa or en")
         try:
             order = int(data.get("sort_order", 0))
         except (TypeError, ValueError) as exc:
@@ -533,6 +541,7 @@ class BotExperienceService:
             "chat_id": _normalize_chat_id(data.get("chat_id")),
             "title": _clean_text(data.get("title"), field="Channel title", maximum=120),
             "invite_url": _normalize_https_url(data.get("invite_url"), telegram_only=True),
+            "language": language,
             "sort_order": order,
             "is_active": bool(data.get("is_active", True)),
         }

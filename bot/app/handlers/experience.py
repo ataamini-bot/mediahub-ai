@@ -2,7 +2,7 @@ from app.localization import tr as _tr, localized_collection as _localized_colle
 import html
 
 from aiogram import F, Router
-from aiogram.exceptions import TelegramAPIError
+from aiogram.exceptions import TelegramAPIError, TelegramBadRequest
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, ForceReply, Message, InlineKeyboardButton, InlineKeyboardMarkup
 
@@ -24,6 +24,7 @@ from app.keyboards.payment import build_home_reply_keyboard
 from app.runtime_config import (
     runtime_configuration,
     runtime_content,
+    required_channels_for_language,
 )
 from app.services.backend import (
     BackendAPIError,
@@ -153,7 +154,7 @@ async def perform_custom_button(
 
 async def missing_required_channels(bot, telegram_id: int, configuration: dict) -> list[dict]:
     missing: list[dict] = []
-    for channel in configuration.get("required_channels", []):
+    for channel in required_channels_for_language(configuration):
         chat_id = channel.get("chat_id")
         if not chat_id:
             continue
@@ -192,10 +193,12 @@ async def enforce_required_membership(
     missing = await missing_required_channels(message.bot, telegram_id, configuration)
     if not missing:
         return True
-    prompt_configuration = {**configuration, "required_channels": missing}
     await message.answer(
         runtime_content(configuration, "forced_join"),
-        reply_markup=build_required_membership_keyboard(prompt_configuration, return_home=return_home),
+        reply_markup=build_required_membership_keyboard(
+            configuration, return_home=return_home,
+            missing_chat_ids={str(channel["chat_id"]) for channel in missing},
+        ),
     )
     return False
 
@@ -508,6 +511,19 @@ async def check_membership(callback: CallbackQuery) -> None:
             "بررسی عضویت موقتاً در دسترس نیست؛ دوباره تلاش کنید.", show_alert=True)
         return
     if missing:
+        # Rebuild from fresh configuration: additions, removals and a changed
+        # language must not leave the user stuck with an obsolete channel list.
+        markup = build_required_membership_keyboard(
+            configuration, return_home=callback.data == "membership:check:home",
+            missing_chat_ids={str(channel["chat_id"]) for channel in missing},
+        )
+        text = runtime_content(configuration, "forced_join")
+        if callback.message.text != text or callback.message.reply_markup != markup:
+            try:
+                await callback.message.edit_text(text, reply_markup=markup)
+            except TelegramBadRequest as exc:
+                if "message is not modified" not in str(exc).lower():
+                    raise
         await callback.answer("Membership in all channels is not confirmed yet." if normalize_language(configuration.get("language")) == "en" else _tr("عضویت در همه کانال‌ها هنوز تأیید نشده است."), show_alert=True)
         return
     await callback.message.edit_text(runtime_content(configuration, "membership_verified"))

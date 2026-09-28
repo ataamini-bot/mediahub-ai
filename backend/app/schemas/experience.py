@@ -18,6 +18,7 @@ ButtonStyle = Literal["default", "primary", "success", "danger"]
 SupportCategory = Literal["download", "payment", "subscription", "account", "other"]
 SupportFileType = Literal["photo", "document", "video", "voice"]
 SupportStatus = Literal["new", "in_progress", "waiting_user", "answered", "closed"]
+ChannelLanguage = Literal["all", "fa", "en"]
 
 
 class BotConfigurationResponse(BaseModel):
@@ -76,6 +77,7 @@ class RequiredChannelCreate(BaseModel):
     chat_id: str = Field(min_length=6, max_length=100)
     title: str = Field(min_length=1, max_length=120)
     invite_url: str = Field(min_length=10, max_length=500)
+    language: ChannelLanguage = "all"
     sort_order: int = Field(default=0, ge=0, le=100_000)
     is_active: bool = True
 
@@ -85,11 +87,14 @@ class RequiredChannelUpdate(BaseModel):
     chat_id: str | None = Field(default=None, min_length=6, max_length=100)
     title: str | None = Field(default=None, min_length=1, max_length=120)
     invite_url: str | None = Field(default=None, min_length=10, max_length=500)
+    language: ChannelLanguage | None = None
     sort_order: int | None = Field(default=None, ge=0, le=100_000)
     is_active: bool | None = None
 
     @model_validator(mode="after")
     def at_least_one_change(self):
+        if "language" in self.model_fields_set and self.language is None:
+            raise ValueError("Channel language cannot be null")
         if self.model_fields_set == {"actor_telegram_id"}:
             raise ValueError("At least one required channel field must change")
         return self
@@ -100,6 +105,7 @@ class RequiredChannelResponse(BaseModel):
     chat_id: str
     title: str
     invite_url: str
+    language: ChannelLanguage
     sort_order: int
     is_active: bool
     created_at: datetime

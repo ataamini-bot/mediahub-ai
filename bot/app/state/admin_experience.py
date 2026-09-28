@@ -14,4 +14,4 @@ class AdminExperienceStates(StatesGroup):
     waiting_for_channel_chat_id = State()
     waiting_for_channel_title = State()
     waiting_for_channel_invite_url = State()
-
+    selecting_channel_language = State()

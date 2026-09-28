@@ -97,6 +97,15 @@ def fallback_configuration(language: str) -> dict[str, Any]:
     }
 
 
+def required_channels_for_language(configuration: dict) -> list[dict]:
+    language = normalize_language(configuration.get("language")) or "fa"
+    return [
+        channel for channel in configuration.get("required_channels", [])
+        if channel.get("is_active", True)
+        and channel.get("language", "all") in {"all", language}
+    ]
+
+
 async def runtime_configuration(
     language: str,
     *,

@@ -10,6 +10,7 @@ import pytest
 
 BASE = "c8a94d6dd84b145f1666091dcef5bf31bba4fd3e"
 PREPARED = "f6de11031c88b9848f5ffcb806eb686fb99e1793"
+LAUNCHED = "7d9dd72b85bd74086c6b80ef6c1300a9f86832ae"
 TARGET = "a" * 40
 SCRIPT = Path(__file__).resolve().parents[2] / "scripts/deploy_launch_operations.sh"
 SERVICES = ("backend", "bot", "worker", "monitor")
@@ -111,7 +112,7 @@ def deploy(tmp_path, **scenario):
     return result, json.loads(state_path.read_text())
 
 
-@pytest.mark.parametrize("head", [BASE, PREPARED, TARGET])
+@pytest.mark.parametrize("head", [BASE, PREPARED, LAUNCHED, TARGET])
 def test_clean_prepared_checkout_still_builds_and_backs_up_before_migration(tmp_path, head):
     result, state = deploy(tmp_path, head=head)
     assert result.returncode == 0, result.stdout + result.stderr

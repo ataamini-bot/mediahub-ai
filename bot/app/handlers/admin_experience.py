@@ -13,6 +13,8 @@ from app.keyboards.admin_experience import (
     CONTENT_LABELS,
     build_channel_delete_keyboard,
     build_channel_detail_keyboard,
+    build_channel_language_keyboard,
+    channel_language_label,
     build_channels_admin_keyboard,
     build_copy_cancel_keyboard,
     build_copy_items_keyboard,
@@ -300,6 +302,7 @@ async def _find_channel(actor_telegram_id: int, channel_id: int) -> dict | None:
 def _channel_text(channel: dict) -> str:
     return (
         f"{_tr('📢 <b>مشخصات کانال اجباری</b>\n\nعنوان: <b>')}{html.escape(str(channel.get('title') or '—'))}{_tr('</b>\nشناسه: <code>')}{html.escape(str(channel.get('chat_id') or '—'))}{_tr('</code>\nلینک عضویت: <code>')}{html.escape(str(channel.get('invite_url') or '—'))}{_tr('</code>\nوضعیت: <b>')}{(_tr('فعال ✅') if channel.get('is_active') else _tr('غیرفعال ⛔️'))}</b>"
+        + "\n" + _tr("زبان کاربران: ") + channel_language_label(channel.get("language", "all"))
     )
 
 
@@ -1153,27 +1156,86 @@ async def channel_invite_url(message: Message, state: FSMContext) -> None:
     if not re.fullmatch(r"https://(?:www\.)?(?:t\.me|telegram\.me)/\S+", value):
         await message.answer(_tr("لینک معتبر تلگرام باید با https://t.me/ شروع شود."))
         return
+    await state.update_data(channel_invite_url=value)
+    await state.set_state(AdminExperienceStates.selecting_channel_language)
+    await message.answer(
+        _tr("🌐 این کانال برای کاربران کدام زبان اجباری باشد؟\nزبان انتخابی کاربر در ربات ملاک است."),
+        reply_markup=build_channel_language_keyboard(),
+    )
+
+
+@router.callback_query(
+    AdminExperienceStates.selecting_channel_language,
+    F.data.regexp(r"^admin:channel:set-language:create:(fa|en|all)$"),
+)
+async def create_channel_with_language(callback: CallbackQuery, state: FSMContext) -> None:
+    if not callback.data or not isinstance(callback.message, Message):
+        return
     data = await state.get_data()
     try:
         channel = await create_required_channel(
-            actor_telegram_id=message.from_user.id,
+            actor_telegram_id=callback.from_user.id,
             data={
                 "chat_id": str(data.get("channel_chat_id") or ""),
                 "title": str(data.get("channel_title") or ""),
-                "invite_url": value,
+                "invite_url": str(data.get("channel_invite_url") or ""),
+                "language": callback.data.rsplit(":", 1)[-1],
                 "sort_order": 0,
                 "is_active": True,
             },
         )
         clear_runtime_configuration_cache()
         await state.clear()
-        await message.answer(
+        await callback.message.edit_text(
             _tr("✅ کانال ذخیره شد.\n\n") + _channel_text(channel),
             parse_mode="HTML",
             reply_markup=build_channel_detail_keyboard(channel),
         )
+        await callback.answer()
     except BackendAPIError as exc:
-        await message.answer(f"❌ {_api_error(exc)}")
+        await callback.answer(_api_error(exc), show_alert=True)
+
+
+@router.callback_query(F.data.regexp(r"^admin:channel:language:[0-9]+$"))
+async def choose_channel_language(callback: CallbackQuery, state: FSMContext) -> None:
+    if not callback.data or not isinstance(callback.message, Message):
+        return
+    try:
+        channel_id = int(callback.data.rsplit(":", 1)[-1])
+        channel = await _find_channel(callback.from_user.id, channel_id)
+        if channel is None:
+            await callback.answer(_tr("کانال پیدا نشد."), show_alert=True)
+            return
+        await state.clear()
+        await callback.message.edit_text(
+            _channel_text(channel) + "\n\n" + _tr("🌐 زبان کاربران این کانال را انتخاب کنید:"),
+            parse_mode="HTML",
+            reply_markup=build_channel_language_keyboard(channel_id),
+        )
+        await callback.answer()
+    except BackendAPIError as exc:
+        await callback.answer(_api_error(exc), show_alert=True)
+
+
+@router.callback_query(F.data.regexp(r"^admin:channel:set-language:[0-9]+:(fa|en|all)$"))
+async def change_channel_language(callback: CallbackQuery, state: FSMContext) -> None:
+    if not callback.data or not isinstance(callback.message, Message):
+        return
+    _prefix, channel_id, language = callback.data.rsplit(":", 2)
+    try:
+        channel = await update_required_channel(
+            actor_telegram_id=callback.from_user.id,
+            channel_id=int(channel_id), changes={"language": language},
+        )
+        clear_runtime_configuration_cache()
+        await state.clear()
+        await callback.message.edit_text(
+            _channel_text(channel), parse_mode="HTML",
+            reply_markup=build_channel_detail_keyboard(channel),
+        )
+        await callback.answer(_tr("زبان کانال ذخیره شد."))
+    except BackendAPIError as exc:
+        await callback.answer(_api_error(exc), show_alert=True)
 
 
 @router.callback_query(F.data.regexp(r"^admin:channel:toggle:[0-9]+$"))

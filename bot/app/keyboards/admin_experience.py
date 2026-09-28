@@ -383,6 +383,21 @@ def build_home_button_delete_keyboard(button_id: int) -> InlineKeyboardMarkup:
     )
 
 
+def channel_language_label(language: str) -> str:
+    return {"fa": _tr("فارسی"), "en": "English", "all": _tr("هر دو زبان")}.get(language, _tr("هر دو زبان"))
+
+
+def build_channel_language_keyboard(channel_id: int | None = None) -> InlineKeyboardMarkup:
+    target = str(channel_id) if channel_id is not None else "create"
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=channel_language_label(language),
+                              callback_data=f"admin:channel:set-language:{target}:{language}")]
+        for language in ("fa", "en", "all")
+    ] + [[InlineKeyboardButton(text=_tr("انصراف"), callback_data=(
+        f"admin:channel:{channel_id}" if channel_id is not None else "admin:channels"
+    ))]])
+
+
 def build_channels_admin_keyboard(channels: list[dict]) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = []
     for channel in channels:
@@ -390,7 +405,7 @@ def build_channels_admin_keyboard(channels: list[dict]) -> InlineKeyboardMarkup:
         rows.append(
             [
                 InlineKeyboardButton(
-                    text=f"{status} {str(channel.get('title') or _tr('بدون نام'))[:50]}",
+                    text=f"{status} {str(channel.get('title') or _tr('بدون نام'))[:38]} · {channel_language_label(channel.get('language', 'all'))}",
                     callback_data=f"admin:channel:{channel['id']}",
                 )
             ]
@@ -409,6 +424,10 @@ def build_channel_detail_keyboard(channel: dict) -> InlineKeyboardMarkup:
     toggle = _tr("⛔️ غیرفعال‌کردن") if channel.get("is_active") else _tr("✅ فعال‌کردن")
     return InlineKeyboardMarkup(
         inline_keyboard=[
+            [InlineKeyboardButton(
+                text=_tr("🌐 تغییر زبان کانال"),
+                callback_data=f"admin:channel:language:{channel_id}",
+            )],
             [
                 InlineKeyboardButton(
                     text=toggle,

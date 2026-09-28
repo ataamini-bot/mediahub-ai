@@ -1,7 +1,7 @@
 from app.localization import tr as _tr, localized_collection as _localized_collection
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
-from app.runtime_config import runtime_button, runtime_button_style
+from app.runtime_config import runtime_button, runtime_button_style, required_channels_for_language
 
 
 SUPPORT_CATEGORY_LABELS = {
@@ -233,10 +233,15 @@ def build_required_membership_keyboard(
     configuration: dict,
     *,
     return_home: bool = False,
+    missing_chat_ids: set[str] | None = None,
 ) -> InlineKeyboardMarkup:
     rows = [
-        [InlineKeyboardButton(text=str(channel["title"])[:64], url=channel["invite_url"])]
-        for channel in configuration.get("required_channels", [])
+        [InlineKeyboardButton(
+            text=(("✅ " if str(channel.get("chat_id")) not in missing_chat_ids else "➕ ")
+                  if missing_chat_ids is not None else "") + str(channel["title"])[:60],
+            url=channel["invite_url"],
+        )]
+        for channel in required_channels_for_language(configuration)
         if channel.get("invite_url")
     ]
     rows.append(
