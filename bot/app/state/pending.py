@@ -23,7 +23,13 @@ def add_pending_selection(
     | None = None,
     playlist_index: int | None = None,
     media_info: dict | None = None,
+    telegram_id: int | None = None,
+    source_job_id: int | None = None,
 ) -> str:
+
+    if telegram_id is None:
+        from app.middleware.interface import ui_actor
+        telegram_id = ui_actor.get()
 
     token = (
         uuid.uuid4()
@@ -51,6 +57,8 @@ def add_pending_selection(
     PENDING_SELECTIONS[
         token
     ] = {
+        "telegram_id": telegram_id,
+        "source_job_id": source_job_id,
         "source_url":
             source_url,
 

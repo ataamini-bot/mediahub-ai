@@ -15,6 +15,8 @@ from fastapi.responses import (
 from sqlalchemy.ext.asyncio import (
     AsyncSession,
 )
+from sqlalchemy import select
+from app.models.user import User
 
 from app.core.internal_auth import require_internal_api_key
 from app.db.session import (
@@ -193,6 +195,7 @@ async def get_download(
     db: AsyncSession = Depends(
         get_db
     ),
+    telegram_id: int | None = Query(default=None, gt=0),
 ):
     service = DownloadService(
         db
@@ -201,6 +204,11 @@ async def get_download(
     job = await service.get_job(
         job_id
     )
+
+    if job is not None and telegram_id is not None:
+        owner_id = await db.scalar(select(User.id).where(User.telegram_id == telegram_id))
+        if owner_id is None or job.user_id != owner_id:
+            job = None
 
     if job is None:
 

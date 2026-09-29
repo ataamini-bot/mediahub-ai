@@ -7,6 +7,7 @@ import mimetypes
 import os
 import re
 import socket
+from uuid import uuid4
 from pathlib import Path
 from urllib.parse import urljoin, urlparse
 
@@ -31,6 +32,7 @@ from aiogram.types import (
 from app.keyboards.download import (
     build_active_download_keyboard,
     build_completed_download_keyboard,
+    build_selection_output_keyboard,
     build_paused_download_keyboard,
 )
 
@@ -124,6 +126,7 @@ from app.services.backend import (
     resume_download_job,
 )
 from app.utils.media_conversion import AUDIO_FORMATS, normalize_format
+from app.utils.filenames import media_filename
 
 
 TOKEN = os.getenv(
@@ -3062,11 +3065,7 @@ async def send_downloaded_file(
         or ".mp4"
     )
 
-    filename = (
-        f"MediaHub-"
-        f"{job_id}"
-        f"{suffix}"
-    )
+    filename = media_filename((media_info or {}).get("title"), suffix)
 
     document = (
         FSInputFile(
@@ -3090,7 +3089,9 @@ async def send_downloaded_file(
             ),
             parse_mode="HTML",
             reply_markup=build_completed_download_keyboard(
-                job_id
+                job_id,
+                media_type=str(job.get("media_type") or "video"),
+                source_media_type="image" if job.get("media_type") == "image" else _source_media_type(media_info),
             ),
         )
 
@@ -3517,6 +3518,123 @@ async def download_cancel_callback(
 # Delivered-file actions
 # ============================================================
 
+def _source_media_type(media_info: dict | None) -> str:
+    info = media_info or {}
+    kind = str(info.get("media_type") or "").lower()
+    if kind in {"audio", "image"}:
+        return kind
+    formats = [item for item in (info.get("formats") or []) if isinstance(item, dict)]
+    if formats and not any(item.get("has_video") for item in formats) and any(item.get("has_audio") for item in formats):
+        return "audio"
+    return "video"
+
+
+async def _download_actions_allowed(callback: CallbackQuery) -> bool:
+    try:
+        entitlement = await get_download_entitlement(callback.from_user.id)
+        if entitlement.get("forced_join_required"):
+            configuration = await runtime_configuration(ui_language.get())
+            return await enforce_required_membership(
+                callback.message, telegram_id=callback.from_user.id, configuration=configuration,
+            )
+        return True
+    except Exception as exc:
+        await callback.message.answer(
+            html.escape(download_error_text(exc)) if isinstance(exc, BackendAPIError) else (
+                "❌ Access could not be checked. Please try again."
+                if ui_language.get() == "en" else "❌ بررسی دسترسی انجام نشد؛ دوباره تلاش کنید."
+            ), parse_mode="HTML", reply_markup=download_error_markup(exc),
+        )
+        return False
+
+
+async def _selection_for_callback(callback: CallbackQuery, token: str) -> dict | None:
+    selection = PENDING_SELECTIONS.get(token)
+    if not selection or selection.get("telegram_id") not in {None, callback.from_user.id}:
+        await callback.answer(
+            _tr("⏰ این درخواست منقضی شده است. لطفاً لینک را دوباره ارسال کنید."), show_alert=True,
+        )
+        return None
+    if not await _download_actions_allowed(callback):
+        await callback.answer()
+        return None
+    return selection
+
+
+def _selection_output_keyboard(selection: dict, token: str, output: str) -> InlineKeyboardMarkup:
+    source_type = _source_media_type(selection.get("media_info"))
+    if selection.get("source_job_id"):
+        return build_completed_download_keyboard(
+            selection["source_job_id"], media_type=output, source_media_type=source_type,
+        )
+    return build_selection_output_keyboard(token, media_type=output, source_media_type=source_type)
+
+
+async def _open_source_picker(message: Message, selection: dict, token: str, output: str) -> None:
+    english = ui_language.get() == "en"
+    if output == "audio":
+        text = "🎵 <b>Extract audio</b>\n\nChoose the output format:" if english else "🎵 <b>استخراج صدا</b>\n\nفرمت خروجی را انتخاب کنید:"
+        markup = _audio_picker_keyboard(token, ui_language.get())
+    else:
+        options = normalize_quality_options(extract_available_quality_options(selection.get("media_info") or {}))
+        selection["sizes"] = dict(options)
+        text = "🎬 <b>Choose video quality</b>" if english else "🎬 <b>کیفیت ویدئو را انتخاب کنید</b>"
+        if not options:
+            text = "ℹ️ No video qualities are available for this media." if english else "ℹ️ کیفیت ویدئویی برای این رسانه در دسترس نیست."
+        markup = build_quality_keyboard(
+            options, token, audio_token=token, cover_token=token, description_token=token,
+            language=ui_language.get(),
+        )
+    # Files keep their caption and controls; selectors always get a new message.
+    await message.answer(text, parse_mode="HTML", reply_markup=markup)
+
+
+@dp.callback_query(F.data.startswith("download_more:"))
+async def download_more_callback(callback: CallbackQuery) -> None:
+    if not callback.data or not isinstance(callback.message, Message):
+        return
+    if callback.message.chat.type != "private" or callback.message.chat.id != callback.from_user.id:
+        await callback.answer(
+            "Open this file in your private bot chat." if ui_language.get() == "en"
+            else "این فایل را در گفت‌وگوی خصوصی خودتان با ربات باز کنید.", show_alert=True,
+        )
+        return
+    match = re.fullmatch(r"download_more:(video|audio|cover|description):([1-9][0-9]*)", callback.data)
+    if not match:
+        await callback.answer(
+            "Invalid media action." if ui_language.get() == "en" else "درخواست رسانه نامعتبر است.",
+            show_alert=True,
+        )
+        return
+    output, job_id = match[1], int(match[2])
+    await callback.answer("Loading…" if ui_language.get() == "en" else "در حال دریافت…")
+    try:
+        original = await get_download_job(job_id, telegram_id=callback.from_user.id)
+        if original.get("status") != "completed" or original.get("media_type") == "convert":
+            raise ValueError("This source is not available for another media output.")
+        if not await _download_actions_allowed(callback):
+            return
+        source_url = str(original.get("source_url") or "")
+        info = await get_media_info(source_url=source_url, playlist_index=original.get("playlist_index"))
+        token = add_pending_selection(
+            source_url, playlist_index=original.get("playlist_index"), media_info=info,
+            telegram_id=callback.from_user.id, source_job_id=job_id,
+        )
+        selection = PENDING_SELECTIONS[token]
+        if output == "cover":
+            await _send_media_cover(callback.message, selection, token)
+        elif output == "description":
+            await _send_media_description(callback.message, selection, token)
+        else:
+            await _open_source_picker(callback.message, selection, token, output)
+    except Exception as exc:
+        print(f"Completed-media action failed: {type(exc).__name__}: {exc}")
+        await callback.message.answer(
+            "❌ This media could not be loaded. Try again or send its link again."
+            if ui_language.get() == "en" else "❌ دریافت این رسانه انجام نشد؛ دوباره تلاش کنید یا لینک را دوباره بفرستید."
+        )
+
+
 @dp.callback_query(F.data.startswith("download_details:"))
 async def download_details_callback(
     callback: CallbackQuery,
@@ -3547,7 +3665,7 @@ async def download_details_callback(
     try:
 
         job = await get_download_job(
-            job_id
+            job_id, telegram_id=callback.from_user.id
         )
 
     except Exception as exc:
@@ -3608,7 +3726,7 @@ async def download_again_callback(
     try:
 
         original = await get_download_job(
-            original_job_id
+            original_job_id, telegram_id=callback.from_user.id
         )
 
         if str(
@@ -3653,6 +3771,10 @@ async def download_again_callback(
                 else "برای تبدیل دوباره، فایل اصلی را دوباره ارسال کنید.",
                 show_alert=True,
             )
+            return
+
+        if not await _download_actions_allowed(callback):
+            await callback.answer()
             return
 
         await callback.answer(
@@ -4734,189 +4856,107 @@ def _description_chunks(
     return chunks
 
 
-@dp.callback_query(F.data.startswith("media:cover:"))
-async def media_cover_callback(callback: CallbackQuery) -> None:
+async def _send_media_cover(message: Message, selection: dict, token: str) -> None:
+    info = selection.get("media_info") or {}
+    cover_url = str(info.get("thumbnail") or "").strip()
+    markup = _selection_output_keyboard(selection, token, "cover")
+    english = ui_language.get() == "en"
+    if not cover_url:
+        await message.answer(
+            "ℹ️ No cover image is available for this media." if english else "ℹ️ کاوری برای این رسانه در دسترس نیست.",
+            reply_markup=markup,
+        )
+        return
+    cover_path = await _download_cover_file(cover_url, uuid4().hex)
+    title = str(info.get("title") or _source_label(selection.get("source_url"))).strip()
+    filename = media_filename(info.get("title"), cover_path.suffix or ".jpg", cover=True)
+    caption = (
+        "🖼 <b>Cover — highest available quality</b>\n\n"
+        if english else "🖼 <b>کاور با بالاترین کیفیت موجود</b>\n\n"
+    ) + html.escape(title[:300])
+    try:
+        # A document preserves the original cover bytes and its chosen filename.
+        await message.answer_document(
+            document=FSInputFile(str(cover_path), filename=filename),
+            caption=caption, parse_mode="HTML", reply_markup=markup,
+            disable_content_type_detection=True,
+        )
+    finally:
+        cover_path.unlink(missing_ok=True)
+
+
+async def _send_media_description(message: Message, selection: dict, token: str) -> None:
+    info = selection.get("media_info") or {}
+    description = str(info.get("description") or "").strip()
+    markup = _selection_output_keyboard(selection, token, "description")
+    english = ui_language.get() == "en"
+    if not description:
+        await message.answer(
+            "ℹ️ No description was provided for this media." if english else "ℹ️ برای این رسانه توضیحی در دسترس نیست.",
+            reply_markup=markup,
+        )
+        return
+    # Each Unicode character can occupy two Telegram UTF-16 units.
+    chunks = _description_chunks(description, maximum_length=1700)
+    for index, chunk in enumerate(chunks):
+        if index == 0:
+            header = "📝 <b>Media description</b>\n\n" if english else "📝 <b>توضیحات رسانه</b>\n\n"
+        else:
+            header = "📝 <b>Description (continued)</b>\n\n" if english else "📝 <b>ادامهٔ توضیحات</b>\n\n"
+        await message.answer(
+            header + html.escape(chunk), parse_mode="HTML",
+            reply_markup=markup if index == len(chunks) - 1 else None,
+        )
+
+
+async def _media_selection_action(callback: CallbackQuery, output: str) -> None:
     if not callback.data or not isinstance(callback.message, Message):
         return
-
     token = callback.data.split(":", 2)[-1]
-    selection = PENDING_SELECTIONS.get(token)
-
+    selection = await _selection_for_callback(callback, token)
     if not selection:
-        await callback.answer(
-            _tr("⏰ این درخواست منقضی شده است. لطفاً لینک را دوباره ارسال کنید."),
-            show_alert=True,
-        )
         return
-
-    language = ui_language.get()
-    await callback.answer(
-        "Downloading the highest-quality cover…"
-        if language == "en"
-        else "در حال دریافت کاور با بالاترین کیفیت…"
-    )
-
+    await callback.answer("Loading…" if ui_language.get() == "en" else "در حال دریافت…")
     try:
-
-        media_info = await _selection_media_info(
-            selection
-        )
-        cover_url = str(
-            media_info.get(
-                "thumbnail"
-            )
-            or ""
-        ).strip()
-
-        if not cover_url:
-
-            raise RuntimeError(
-                "No cover image is available for this media"
-            )
-
-        cover_path = await _download_cover_file(
-            cover_url,
-            token,
-        )
-        title = str(
-            media_info.get(
-                "title"
-            )
-            or _source_label(
-                selection.get(
-                    "source_url"
-                )
-            )
-        ).strip()
-        caption = (
-            "🖼 <b>Cover — highest available quality</b>\n\n"
-            f"📌 <b>Title:</b> {html.escape(title[:700])}"
-            if language == "en"
-            else "🖼 <b>کاور با بالاترین کیفیت موجود</b>\n\n"
-            f"📌 <b>عنوان:</b> {html.escape(title[:700])}"
-        )
-
-        try:
-
-            await callback.message.answer_photo(
-                photo=FSInputFile(
-                    str(
-                        cover_path
-                    ),
-                    filename=(
-                        f"MediaHub-cover{cover_path.suffix.lower() or '.jpg'}"
-                    ),
-                ),
-                caption=caption,
-                parse_mode="HTML",
-            )
-
-        except Exception:
-
-            await callback.message.answer_document(
-                document=FSInputFile(
-                    str(
-                        cover_path
-                    ),
-                    filename=(
-                        f"MediaHub-cover{cover_path.suffix.lower() or '.jpg'}"
-                    ),
-                ),
-                caption=caption,
-                parse_mode="HTML",
-            )
-
-        finally:
-
-            cover_path.unlink(
-                missing_ok=True
-            )
-
+        selection["media_info"] = await _selection_media_info(selection)
+        if output == "cover":
+            await _send_media_cover(callback.message, selection, token)
+        elif output == "description":
+            await _send_media_description(callback.message, selection, token)
+        elif output == "video":
+            await _open_source_picker(callback.message, selection, token, "video")
+        else:
+            info = selection.get("media_info") or {}
+            text = ("📋 <b>Media details</b>" if ui_language.get() == "en" else "📋 <b>جزئیات رسانه</b>")
+            text += "\n\n" + html.escape(str(info.get("title") or "")[:700])
+            text += "\n" + html.escape(str(selection.get("source_url") or "")[:2048])
+            await callback.message.answer(text, parse_mode="HTML")
     except Exception as exc:
-
-        print(
-            "Cover extraction failed: "
-            f"{type(exc).__name__}: {exc}"
-        )
+        print(f"Media action failed: {type(exc).__name__}: {exc}")
         await callback.message.answer(
-            (
-                "❌ I could not download this media cover."
-                if language == "en"
-                else "❌ دریافت کاور این رسانه انجام نشد."
-            )
+            "❌ This media could not be loaded. Please try again."
+            if ui_language.get() == "en" else "❌ دریافت این رسانه انجام نشد؛ دوباره تلاش کنید."
         )
+
+
+@dp.callback_query(F.data.startswith("media:cover:"))
+async def media_cover_callback(callback: CallbackQuery) -> None:
+    await _media_selection_action(callback, "cover")
 
 
 @dp.callback_query(F.data.startswith("media:description:"))
 async def media_description_callback(callback: CallbackQuery) -> None:
-    if not callback.data or not isinstance(callback.message, Message):
-        return
+    await _media_selection_action(callback, "description")
 
-    token = callback.data.split(":", 2)[-1]
-    selection = PENDING_SELECTIONS.get(token)
 
-    if not selection:
-        await callback.answer(
-            _tr("⏰ این درخواست منقضی شده است. لطفاً لینک را دوباره ارسال کنید."),
-            show_alert=True,
-        )
-        return
+@dp.callback_query(F.data.startswith("media:video:"))
+async def media_video_callback(callback: CallbackQuery) -> None:
+    await _media_selection_action(callback, "video")
 
-    language = ui_language.get()
-    await callback.answer(
-        "Loading description…"
-        if language == "en"
-        else "در حال دریافت توضیحات…"
-    )
 
-    media_info = await _selection_media_info(
-        selection
-    )
-    description = str(
-        media_info.get(
-            "description"
-        )
-        or ""
-    ).strip()
-
-    if not description:
-
-        await callback.message.answer(
-            (
-                "ℹ️ No description was provided for this media."
-                if language == "en"
-                else "ℹ️ برای این رسانه توضیحی در دسترس نیست."
-            )
-        )
-        return
-
-    chunks = _description_chunks(
-        description
-    )
-    header = (
-        "📝 <b>Media description</b>\n\n"
-        if language == "en"
-        else "📝 <b>توضیحات رسانه</b>\n\n"
-    )
-
-    for index, chunk in enumerate(chunks):
-
-        prefix = (
-            header
-            if index == 0
-            else (
-                "📝 <b>Description (continued)</b>\n\n"
-                if language == "en"
-                else "📝 <b>ادامهٔ توضیحات</b>\n\n"
-            )
-        )
-
-        await callback.message.answer(
-            prefix + html.escape(
-                chunk
-            ),
-            parse_mode="HTML",
-        )
+@dp.callback_query(F.data.startswith("media:details:"))
+async def media_details_callback(callback: CallbackQuery) -> None:
+    await _media_selection_action(callback, "details")
 
 
 @dp.callback_query(F.data.startswith("audio:open:"))
@@ -4924,27 +4964,11 @@ async def audio_open_callback(callback: CallbackQuery) -> None:
     if not callback.data or not isinstance(callback.message, Message):
         return
     token = callback.data.split(":", 2)[-1]
-    selection = PENDING_SELECTIONS.get(token)
+    selection = await _selection_for_callback(callback, token)
     if not selection:
-        await callback.answer(
-            _tr("⏰ این درخواست منقضی شده است. لطفاً لینک را دوباره ارسال کنید."),
-            show_alert=True,
-        )
         return
-
-    language = ui_language.get()
-    await callback.answer(
-        "Choose an audio format." if language == "en" else "فرمت صوتی را انتخاب کنید."
-    )
-    await safe_edit_message(
-        callback.message,
-        (
-            "🎵 <b>Extract audio</b>\n\nChoose the output format:"
-            if language == "en"
-            else "🎵 <b>استخراج صدا</b>\n\nفرمت خروجی را انتخاب کنید:"
-        ),
-        reply_markup=_audio_picker_keyboard(token, language),
-    )
+    await callback.answer("Choose an audio format." if ui_language.get() == "en" else "فرمت صوتی را انتخاب کنید.")
+    await _open_source_picker(callback.message, selection, token, "audio")
 
 
 @dp.callback_query(F.data.startswith("audio:cancel:"))
@@ -4952,35 +4976,11 @@ async def audio_cancel_callback(callback: CallbackQuery) -> None:
     if not callback.data or not isinstance(callback.message, Message):
         return
     token = callback.data.split(":", 2)[-1]
-    selection = PENDING_SELECTIONS.get(token)
+    selection = await _selection_for_callback(callback, token)
     if not selection:
-        await callback.answer(_tr("⏰ این درخواست منقضی شده است."), show_alert=True)
         return
-    quality_options = [
-        (int(height), size)
-        for height, size in (selection.get("sizes") or {}).items()
-        if str(height).isdigit()
-    ]
-    language = ui_language.get()
-    await callback.answer(
-        "Back to quality selection." if language == "en" else "بازگشت به انتخاب کیفیت."
-    )
-    await safe_edit_message(
-        callback.message,
-        (
-            "🎬 <b>Choose video quality</b>"
-            if language == "en"
-            else "🎬 <b>کیفیت ویدئو را انتخاب کنید</b>"
-        ),
-        reply_markup=build_quality_keyboard(
-            quality_options=quality_options,
-            token=token,
-            audio_token=token,
-            cover_token=token,
-            description_token=token,
-            language=language,
-        ),
-    )
+    await callback.answer("Back to quality selection." if ui_language.get() == "en" else "بازگشت به انتخاب کیفیت.")
+    await _open_source_picker(callback.message, selection, token, "video")
 
 
 @dp.callback_query(F.data.startswith("audio:format:"))
@@ -4996,8 +4996,10 @@ async def audio_format_callback(callback: CallbackQuery) -> None:
     if output_format not in AUDIO_FORMATS:
         await callback.answer("Unsupported audio format.", show_alert=True)
         return
-    selection = PENDING_SELECTIONS.pop(token, None)
+    selection = await _selection_for_callback(callback, token)
     if not selection:
+        return
+    if PENDING_SELECTIONS.pop(token, None) is None:
         await callback.answer(_tr("⏰ این درخواست منقضی شده است."), show_alert=True)
         return
 
@@ -5130,22 +5132,8 @@ async def quality_callback(
         height_text,
     ) = parts
 
-    selection = (
-        PENDING_SELECTIONS.get(
-            token
-        )
-    )
-
+    selection = await _selection_for_callback(callback, token)
     if not selection:
-
-        await callback.answer(
-            (
-                _tr("⏰ این درخواست منقضی شده است. "
-                "لطفاً لینک را دوباره ارسال کنید.")
-            ),
-            show_alert=True,
-        )
-
         return
 
     source_url = (
@@ -5294,16 +5282,11 @@ async def quality_callback(
 
         return
 
-    await callback.answer(
-        (
-            f"{_tr('کیفیت ')}{quality}{_tr(' انتخاب شد.')}"
-        )
-    )
+    if PENDING_SELECTIONS.pop(token, None) is None:
+        await callback.answer(_tr("⏰ این درخواست منقضی شده است."), show_alert=True)
+        return
 
-    PENDING_SELECTIONS.pop(
-        token,
-        None,
-    )
+    await callback.answer(f"{_tr('کیفیت ')}{quality}{_tr(' انتخاب شد.')}")
 
     message = (
         callback.message

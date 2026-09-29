@@ -910,6 +910,7 @@ async def create_download_job(
 
 async def get_download_job(
     job_id: int,
+    *, telegram_id: int | None = None,
 ) -> dict:
 
     timeout = (
@@ -927,6 +928,7 @@ async def get_download_job(
                 f"{BACKEND_URL}"
                 f"/downloads/{job_id}"
             ),
+            params={"telegram_id": telegram_id} if telegram_id is not None else {},
             headers=_internal_headers(),
         ) as response:
 

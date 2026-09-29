@@ -139,6 +139,37 @@ def make_job(
 
 
 @pytest.mark.asyncio
+async def test_delivered_media_lookup_is_scoped_to_requesting_telegram_user():
+    from fastapi import HTTPException
+    from app.api.downloads import get_download
+
+    async with AsyncSessionLocal() as session:
+        transaction = await session.begin()
+        try:
+            owner = await add_user(session)
+            other = await add_user(session)
+            job = make_job(owner, status=DownloadJobStatus.COMPLETED)
+            session.add(job)
+            await session.flush()
+            found = await get_download(job.id, session, telegram_id=owner.telegram_id)
+            assert found.id == job.id
+            for requester in (other.telegram_id, unique_telegram_id()):
+                with pytest.raises(HTTPException) as denied:
+                    await get_download(job.id, session, telegram_id=requester)
+                assert denied.value.status_code == 404
+            # Internal worker polling remains compatible without an end-user scope.
+            assert (await get_download(job.id, session, telegram_id=None)).id == job.id
+            job.user_id = None
+            await session.flush()
+            with pytest.raises(HTTPException) as deleted_owner:
+                await get_download(job.id, session, telegram_id=owner.telegram_id)
+            assert deleted_owner.value.status_code == 404
+        finally:
+            await transaction.rollback()
+            await engine.dispose()
+
+
+@pytest.mark.asyncio
 async def test_free_plan_rejects_quality_and_estimated_size_above_limits():
     async with AsyncSessionLocal() as session:
         transaction = await session.begin()
