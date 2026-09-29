@@ -14,12 +14,14 @@ from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMar
 ui_actor = ContextVar("ui_actor", default=None)
 ui_state = ContextVar("ui_state", default=None)
 ui_language = ContextVar("ui_language", default="fa")
+ui_passthrough = ContextVar("ui_passthrough", default=False)
 
 # These callbacks already follow a review screen. Wrap their final button.
 FINAL = re.compile(
     r"^(?:admin:(?:change:(?:confirm|final)|finance:confirm|setting:confirm|"
     r"plan:[a-z_]+:confirm|homebutton:delete:[0-9]+|channel:delete:[0-9]+)|"
-    r"payment_admin:(?:approve-confirm|reject-confirm):[0-9]+|ops:confirm|customer:confirm|backup:confirm)$"
+    r"payment_admin:(?:approve-confirm|reject-confirm):[0-9]+|ops:confirm|customer:confirm|backup:confirm|"
+    r"broadcast:confirm|broadcast:action:(?:resume|cancel):[0-9]+)$"
 )
 # These legacy actions previously wrote immediately from a detail screen.
 DIRECT = re.compile(
@@ -73,6 +75,8 @@ class InterfaceRequests(BaseRequestMiddleware):
         self.redis = redis
 
     async def __call__(self, make_request, bot, method):
+        if ui_passthrough.get():
+            return await make_request(bot, method)
         markup = getattr(method, "reply_markup", None)
         body = getattr(method, "text", None)
         long_text = isinstance(body, str) and len(body.encode('utf-16-le')) > 7800

@@ -23,6 +23,7 @@ from app.models.subscription import Subscription
 from app.models.user import User
 from app.models.wallet import Wallet
 from app.models.customer_action import CustomerAction
+from app.models.broadcast import Broadcast, BroadcastRecipient
 
 __all__ = [
     "AdminAccount",
@@ -47,6 +48,8 @@ __all__ = [
     "Subscription",
     "Wallet",
     "CustomerAction",
+    "Broadcast",
+    "BroadcastRecipient",
     "DownloadJob",
     "DownloadJobStatus",
 ]

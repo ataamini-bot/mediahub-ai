@@ -6,6 +6,7 @@ base=c8a94d6dd84b145f1666091dcef5bf31bba4fd3e
 prepared=f6de11031c88b9848f5ffcb806eb686fb99e1793
 launched=7d9dd72b85bd74086c6b80ef6c1300a9f86832ae
 channel_languages=f52fb5be34a46ecc4c6d5a3a66fd0b4f86d6c928
+private_payments=506c5989a138785a16a55cc08fdb9588c836b7ca
 branch=feature/admin-foundation
 target="${1:-}"
 [[ "$target" =~ ^[0-9a-f]{40}$ ]] || { printf 'Provide the full release commit.\n'; exit 1; }
@@ -16,7 +17,7 @@ original_head="$(git rev-parse HEAD)"
 [[ -z "$(git status --porcelain)" ]] || {
   printf 'DEPLOYMENT=ABORTED_LOCAL_CHANGES\n'; exit 1;
 }
-[[ "$original_head" == "$base" || "$original_head" == "$prepared" || "$original_head" == "$launched" || "$original_head" == "$channel_languages" || "$original_head" == "$target" ]] || {
+[[ "$original_head" == "$base" || "$original_head" == "$prepared" || "$original_head" == "$launched" || "$original_head" == "$channel_languages" || "$original_head" == "$private_payments" || "$original_head" == "$target" ]] || {
   printf 'DEPLOYMENT=ABORTED_UNEXPECTED_HEAD HEAD=%s\n' "$original_head"; exit 1;
 }
 printf 'SOURCE_HEAD=%s TARGET_HEAD=%s\n' "$original_head" "$target"
@@ -128,7 +129,9 @@ from sqlalchemy import text
 from app.db.session import engine
 async def check():
     async with engine.connect() as conn:
-        assert await conn.scalar(text("SELECT version_num FROM alembic_version")) == "fc2d3e4f5a6b"
+        assert await conn.scalar(text("SELECT version_num FROM alembic_version")) == "fd3e4f5a6b7c"
+        await conn.execute(text("SELECT status, confirmation_token FROM broadcasts LIMIT 0"))
+        await conn.execute(text("SELECT claim_token, lease_until FROM broadcast_recipients LIMIT 0"))
         await conn.execute(text("SELECT language FROM required_channels LIMIT 0"))
         await conn.execute(text("SELECT quota_reset_at, conversion_quota_reset_at FROM users LIMIT 0"))
         await conn.execute(text("SELECT request_id FROM customer_actions LIMIT 0"))

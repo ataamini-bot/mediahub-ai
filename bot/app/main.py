@@ -52,6 +52,8 @@ from app.keyboards.payment import (
 from app.handlers.operations import router as operations_router
 from app.handlers.customers import router as customers_router
 from app.handlers.backups import router as backups_router
+from app.handlers.broadcasts import router as broadcasts_router
+from app.services.broadcast_sender import run_broadcast_sender
 from app.handlers.conversion import (
     cleanup_staged_state,
     configure_download_runtime,
@@ -174,6 +176,7 @@ dp.callback_query.outer_middleware(InterfaceCallbacks(dp.storage.redis))
 dp.include_router(operations_router)
 dp.include_router(customers_router)
 dp.include_router(backups_router)
+dp.include_router(broadcasts_router)
 dp.include_router(conversion_router)
 dp.include_router(
     experience_router
@@ -5975,6 +5978,7 @@ async def main():
         )
     )
 
+    broadcast_task = None
     try:
 
         # Telegram owns the area beside Attach, so a bot cannot put an
@@ -5983,11 +5987,17 @@ async def main():
         # after a user has manually collapsed it.
         await configure_telegram_menu_button(bot)
 
+        broadcast_task = asyncio.create_task(run_broadcast_sender(bot))
+
         await dp.start_polling(
             bot
         )
 
     finally:
+
+        if broadcast_task is not None:
+            broadcast_task.cancel()
+            await asyncio.gather(broadcast_task, return_exceptions=True)
 
         await (
             dp.storage.close()

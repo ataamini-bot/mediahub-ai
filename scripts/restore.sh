@@ -32,13 +32,15 @@ from sqlalchemy import update
 from app.db.session import AsyncSessionLocal, engine
 from app.models.download_job import DownloadJob, DownloadJobStatus
 from app.services.audit import AuditService
+from app.services.broadcasts import cancel_restored_broadcasts
 async def reconcile():
     async with AsyncSessionLocal() as db:
         result = await db.execute(update(DownloadJob).where(DownloadJob.status.in_([
             DownloadJobStatus.PENDING, DownloadJobStatus.PROCESSING, DownloadJobStatus.PAUSED
         ])).values(status=DownloadJobStatus.CANCELLED))
+        broadcasts = await cancel_restored_broadcasts(db)
         AuditService(db).record(action="system.database_restored", target_type="database",
-            details={"unfinished_jobs_cancelled": result.rowcount})
+            details={"unfinished_jobs_cancelled": result.rowcount, **broadcasts})
         await db.commit()
     await engine.dispose()
 asyncio.run(reconcile())
