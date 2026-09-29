@@ -9,6 +9,7 @@ channel_languages=f52fb5be34a46ecc4c6d5a3a66fd0b4f86d6c928
 private_payments=506c5989a138785a16a55cc08fdb9588c836b7ca
 broadcasts=0322acc644817859c737abbd165421218a488ab8
 internal_credit=88ffc9ac64b378d0bf0869967629c0c6314e486b
+media_outputs=2b5be6e8b3173d548974ae3ac404560e67a36375
 branch=feature/admin-foundation
 target="${1:-}"
 [[ "$target" =~ ^[0-9a-f]{40}$ ]] || { printf 'Provide the full release commit.\n'; exit 1; }
@@ -19,7 +20,7 @@ original_head="$(git rev-parse HEAD)"
 [[ -z "$(git status --porcelain)" ]] || {
   printf 'DEPLOYMENT=ABORTED_LOCAL_CHANGES\n'; exit 1;
 }
-[[ "$original_head" == "$base" || "$original_head" == "$prepared" || "$original_head" == "$launched" || "$original_head" == "$channel_languages" || "$original_head" == "$private_payments" || "$original_head" == "$broadcasts" || "$original_head" == "$internal_credit" || "$original_head" == "$target" ]] || {
+[[ "$original_head" == "$base" || "$original_head" == "$prepared" || "$original_head" == "$launched" || "$original_head" == "$channel_languages" || "$original_head" == "$private_payments" || "$original_head" == "$broadcasts" || "$original_head" == "$internal_credit" || "$original_head" == "$media_outputs" || "$original_head" == "$target" ]] || {
   printf 'DEPLOYMENT=ABORTED_UNEXPECTED_HEAD HEAD=%s\n' "$original_head"; exit 1;
 }
 printf 'SOURCE_HEAD=%s TARGET_HEAD=%s\n' "$original_head" "$target"
@@ -131,7 +132,11 @@ from sqlalchemy import text
 from app.db.session import engine
 async def check():
     async with engine.connect() as conn:
-        assert await conn.scalar(text("SELECT version_num FROM alembic_version")) == "fe4f5a6b7c8d"
+        assert await conn.scalar(text("SELECT version_num FROM alembic_version")) == "ff5a6b7c8d9e"
+        await conn.execute(text("SELECT code, currency, version FROM coupons LIMIT 0"))
+        await conn.execute(text("SELECT status, snapshot FROM coupon_uses LIMIT 0"))
+        await conn.execute(text("SELECT payload_hash FROM coupon_actions LIMIT 0"))
+        await conn.execute(text("SELECT discount_snapshot FROM payments LIMIT 0"))
         await conn.execute(text("SELECT balance, version FROM credit_accounts LIMIT 0"))
         await conn.execute(text("SELECT delta, balance_after FROM credit_entries LIMIT 0"))
         assert await conn.scalar(text("SELECT count(*) FROM pg_trigger WHERE tgname='credit_entries_append_only' AND tgenabled='O'")) == 1

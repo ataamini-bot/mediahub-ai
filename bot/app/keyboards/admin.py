@@ -13,6 +13,10 @@ def build_admin_home_keyboard(
     rows: list[list[InlineKeyboardButton]] = []
 
     from app.middleware.interface import ui_language
+    if is_superadmin or "coupons.manage" in permissions:
+        rows.append([InlineKeyboardButton(
+            text="🎟 Discount codes" if ui_language.get() == "en" else "🎟 کدهای تخفیف",
+            callback_data="coupon:home:1")])
     if is_superadmin or "balances.manage" in permissions:
         rows.append([InlineKeyboardButton(
             text="💰 Internal credit" if ui_language.get() == "en" else "💰 اعتبار کاربران",

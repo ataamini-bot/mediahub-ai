@@ -8,9 +8,11 @@ from pydantic import BaseModel, Field, computed_field, field_validator, model_va
 
 from app.core.language import effective_language as resolve_effective_language
 from app.models.payment import PaymentStatus
+from app.schemas.coupon import normalize_coupon_code
 
 
 class PaymentOfferResponse(BaseModel):
+    coupon: dict[str, Any] = Field(default_factory=dict)
     code: str
     label: str
     duration_days: int = Field(gt=0)
@@ -133,6 +135,7 @@ class PaymentReject(PaymentAdminReview):
 
 
 class PaymentResponse(BaseModel):
+    discount_snapshot: dict[str, Any] = Field(default_factory=dict)
     id: int
     order_id: UUID | None = None
     user_id: int
@@ -208,6 +211,13 @@ class PaymentActionResponse(BaseModel):
 
 
 class PaymentOrderCreate(BaseModel):
+    coupon_code: str | None = None
+
+    @field_validator("coupon_code", mode="before")
+    @classmethod
+    def coupon(cls, value):
+        return None if value is None else normalize_coupon_code(value)
+
     telegram_id: int = Field(gt=0)
     offer_code: str = Field(min_length=3, max_length=100)
     currency: Literal["IRT", "USDT"]

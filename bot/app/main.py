@@ -57,6 +57,8 @@ from app.handlers.backups import router as backups_router
 from app.handlers.broadcasts import router as broadcasts_router
 from app.services.broadcast_sender import run_broadcast_sender
 from app.handlers.credit import router as credit_router
+from app.handlers.coupons import router as coupons_router
+from app.handlers.coupon_checkout import router as coupon_checkout_router
 from app.services.credit_notices import run_credit_notices
 from app.handlers.conversion import (
     cleanup_staged_state,
@@ -183,6 +185,8 @@ dp.include_router(customers_router)
 dp.include_router(backups_router)
 dp.include_router(broadcasts_router)
 dp.include_router(credit_router)
+dp.include_router(coupons_router)
+dp.include_router(coupon_checkout_router)
 dp.include_router(conversion_router)
 dp.include_router(
     experience_router

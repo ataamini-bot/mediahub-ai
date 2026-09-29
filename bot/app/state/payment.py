@@ -2,6 +2,7 @@ from aiogram.fsm.state import State, StatesGroup
 
 
 class PaymentStates(StatesGroup):
+    waiting_for_coupon = State()
     confirming_offer = State()
     selecting_usdt_destination = State()
     waiting_for_receipt = State()

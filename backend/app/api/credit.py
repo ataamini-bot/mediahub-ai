@@ -11,6 +11,7 @@ from app.schemas.credit import CreditChange, CreditNoticeAck
 from app.schemas.payment import PaymentOrderActor
 from app.services.admin_access import AdminAccessDenied
 from app.services.credit import CreditError, CreditService
+from app.services.coupons import CouponError
 from app.services.payment_orders import PaymentOrderError
 from app.services.managed_settings import PublicOperationDisabled
 
@@ -22,14 +23,14 @@ async def result(db, operation):
         value = await operation
         await db.commit()
         return value
-    except (CreditError, PaymentOrderError, AdminAccessDenied, LookupError, PermissionError, PublicOperationDisabled) as exc:
+    except (CouponError, CreditError, PaymentOrderError, AdminAccessDenied, LookupError, PermissionError, PublicOperationDisabled) as exc:
         await db.rollback()
         code = 403 if isinstance(exc, PermissionError) else 404 if isinstance(exc, LookupError) else 409
         if isinstance(exc, PaymentOrderError):
             raise HTTPException(exc.status_code, exc.detail) from exc
         if isinstance(exc, PublicOperationDisabled):
             raise HTTPException(503, {"code": exc.code}) from exc
-        raise HTTPException(code, {"code": exc.code if isinstance(exc, CreditError) else str(exc)}) from exc
+        raise HTTPException(code, {"code": exc.code if isinstance(exc, (CreditError, CouponError)) else str(exc)}) from exc
 
 
 @router.get("/credit/me")

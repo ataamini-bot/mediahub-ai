@@ -1146,10 +1146,11 @@ async def create_manual_payment(
 
 
 async def create_payment_order(*, telegram_id: int, offer_code: str, currency: str,
-                               usdt_destination_id: int | None = None) -> dict:
+                               usdt_destination_id: int | None = None, coupon_code: str | None = None) -> dict:
     return await _payment_request("POST", "/payments/orders", payload={
         "telegram_id": telegram_id, "offer_code": offer_code, "currency": currency,
         "usdt_destination_id": usdt_destination_id,
+        **({"coupon_code": coupon_code} if coupon_code else {}),
     })
 
 

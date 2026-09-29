@@ -93,6 +93,8 @@ class Payment(Base, TimestampMixin):
         nullable=False,
     )
 
+    discount_snapshot: Mapped[dict] = mapped_column(JSON, default=dict, server_default=text("'{}'::json"), nullable=False)
+
     offer_code: Mapped[str] = mapped_column(
         String(100),
         nullable=False,

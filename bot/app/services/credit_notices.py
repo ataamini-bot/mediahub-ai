@@ -30,10 +30,14 @@ def user_text(notice):
 
 
 def report_text(notice):
+    discount = notice.get("discount_snapshot") or {}
+    details = (f"\nکد تخفیف: {discount['code']}\n"
+               f"مبلغ اولیه: {amount(discount['original_price'], notice['currency'])}\n"
+               f"تخفیف: {amount(discount['discount_amount'], notice['currency'])}") if discount else ""
     return (f"✅ خرید تأییدشده با اعتبار داخلی\nپرداخت: {notice['payment_id']}\n"
             f"Telegram ID: {notice['telegram_id']}\nپلن: {notice['plan_name']}\n"
             f"مدت: {notice['duration_days']} روز\nمبلغ: {amount(-Decimal(notice['delta']), notice['currency'])}\n"
-            "روش: اعتبار داخلی؛ واریز خارجی جدید نیست.")
+            "روش: اعتبار داخلی؛ واریز خارجی جدید نیست." + details)
 
 
 async def send_notice(bot, notice):

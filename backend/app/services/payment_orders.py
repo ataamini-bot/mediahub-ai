@@ -10,6 +10,7 @@ from app.models.payment_order import PaymentOrder
 from app.models.user import User, UserStatus
 from app.schemas.payment import PaymentOfferResponse, PaymentOrderCreate
 from app.services.audit import AuditService
+from app.services.coupons import CouponService
 from app.services.managed_settings import ensure_public_operation, get_receipt_max_size_mb
 from app.services.payment_offers import get_payment_offer
 from app.services.payment_management import (
@@ -76,6 +77,7 @@ class PaymentOrderService:
         if existing is not None:
             if (existing.currency == data.currency
                     and existing.offer_snapshot["code"] == data.offer_code
+                    and (existing.offer_snapshot.get("coupon") or {}).get("code") == data.coupon_code
                     and (existing.destination_snapshot.get("type") == "credit") == (data.method == "credit")
                     and (data.method == "credit" or data.currency == "IRT" or existing.destination_snapshot["id"] == data.usdt_destination_id)):
                 # A retry must not consult a changed catalog or rotate again.
@@ -85,6 +87,9 @@ class PaymentOrderService:
 
         await ensure_public_operation(self.session, "payments")
         offer = await get_payment_offer(self.session, data.offer_code, currency=data.currency)
+        discount = None
+        if data.coupon_code:
+            _, discount = await CouponService(self.session).eligible(data.coupon_code, data.currency, user.id, offer)
         management = PaymentManagementService(self.session)
         card_id = None
         if data.method == "credit":
@@ -111,6 +116,9 @@ class PaymentOrderService:
             from decimal import Decimal
             unit = Decimal("0.0001") if data.currency == "USDT" else Decimal("1")
             snapshot["price"] = str(offer.price.quantize(unit, rounding=ROUND_CEILING))
+        if discount:
+            snapshot["coupon"] = discount
+            snapshot["price"] = discount["final_price"]
         order = PaymentOrder(
             user_id=user.id, plan_id=offer.plan_id, payment_card_id=card_id,
             currency=data.currency, offer_snapshot=snapshot, destination_snapshot=destination,
@@ -119,6 +127,8 @@ class PaymentOrderService:
         )
         self.session.add(order)
         await self.session.flush()
+        if discount:
+            await CouponService(self.session).reserve(order, discount, user.telegram_id)
         AuditService(self.session).record(action="payment_order.created", actor_user_id=user.id,
             actor_telegram_id=user.telegram_id, target_type="payment_order", target_id=str(order.id),
             details={"currency": data.currency, "plan_id": offer.plan_id})
@@ -133,6 +143,7 @@ class PaymentOrderService:
             raise PaymentOrderError("payment_order_submitted")
         if order.status == "open":
             order.status = "cancelled"
+            await CouponService(self.session).transition(order.id, "released", actor=telegram_id)
             AuditService(self.session).record(action="payment_order.cancelled", actor_user_id=user.id,
                 actor_telegram_id=user.telegram_id, target_type="payment_order", target_id=str(order.id))
         await self.session.commit()

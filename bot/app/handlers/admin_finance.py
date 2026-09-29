@@ -23,6 +23,7 @@ from app.keyboards.admin_finance import (
     build_usdt_keyboard,
 )
 from app.keyboards.payment import format_toman, format_usdt
+from app.utils.coupons import discount_text
 from app.services.backend import (
     BackendAPIError,
     create_payment_card,
@@ -301,7 +302,7 @@ def _payment_caption(payment: dict) -> str:
         )
     return (
         f"{_tr('🧾 <b>جزئیات پرداخت</b>\n\nشناسه: <code>')}{int(payment['id'])}{_tr('</code>\nوضعیت: <b>')}{statuses.get(str(payment.get('status')), _tr('نامشخص'))}{_tr('</b>\nکاربر: ')}{html.escape(full_name)} — {html.escape(identity)}\nTelegram ID: <code>{int(payment['user_telegram_id'])}{_tr('</code>\n\nپلن: <b>')}{html.escape(str(payment.get('plan_name_snapshot') or '—'))}{_tr('</b>\nمدت: <code>')}{int(payment.get('duration_days', 0))}{_tr(' روز</code>\nمبلغ: <b>')}{amount_text}</b>{card_line}{usdt_line}{_tr('\nثبت: <code>')}{_format_datetime(payment.get('created_at'))}</code>{rejection}"
-    )
+    ) + discount_text(payment.get("discount_snapshot"))
 
 
 @router.callback_query(F.data == "admin:payments")

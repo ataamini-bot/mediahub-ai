@@ -58,6 +58,7 @@ def serialize_payment(record: AdminPaymentRecord) -> AdminPaymentListItem:
         id=payment.id,
         status=payment.status,
         amount=payment.amount,
+        discount_snapshot=payment.discount_snapshot or {},
         payment_method=payment.payment_method,
         plan_name_snapshot=payment.plan_name_snapshot,
         duration_days=payment.duration_days,

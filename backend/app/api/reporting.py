@@ -119,13 +119,15 @@ async def finance_csv(actor_telegram_id: int = Query(gt=0), period: str = "month
     stream = io.StringIO(newline="")
     writer = csv.writer(stream)
     writer.writerow(["payment_id", "telegram_id", "plan", "duration_days", "method", "currency", "amount",
-        "status", "change_type", "created_at_utc", "reviewed_at_utc", "reviewed_by_telegram_id"])
+        "status", "change_type", "created_at_utc", "reviewed_at_utc", "reviewed_by_telegram_id", "coupon_code", "original_amount", "discount_amount"])
     for payment, telegram_id in rows:
         writer.writerow([csv_cell(x) for x in [payment.id, telegram_id, payment.plan_name_snapshot,
             payment.duration_days, payment.payment_method, "USDT" if payment.payment_method in {"usdt", "credit_usdt"} else "IRT",
             payment.amount, payment.status.value, payment.subscription_change_type,
             payment.created_at.isoformat(), payment.reviewed_at.isoformat() if payment.reviewed_at else None,
-            payment.reviewed_by_telegram_id]])
+            payment.reviewed_by_telegram_id, (payment.discount_snapshot or {}).get("code"),
+            (payment.discount_snapshot or {}).get("original_price", str(payment.amount)),
+            (payment.discount_snapshot or {}).get("discount_amount", "0")]])
     AuditService(db).record(action="finance.csv_exported", actor_user_id=context.user_id,
         actor_telegram_id=actor_telegram_id, target_type="financial_report", details={"rows": count, "period": period})
     await db.commit()
@@ -152,7 +154,8 @@ async def audit(actor_telegram_id: int = Query(gt=0), page: int = Query(default=
         .offset((page-1)*page_size).limit(page_size))).scalars()
     activity = (await db.execute(select(AuditLog.actor_telegram_id, func.count(AuditLog.id),
         func.count(AuditLog.id).filter(AuditLog.success.is_(False))).where(*filters, AuditLog.actor_telegram_id.is_not(None),
-        ~AuditLog.action.in_(("support.ticket_created", "user.language_changed", "payment.credit_paid", "credit.purchase")),
+        ~AuditLog.action.in_(("support.ticket_created", "user.language_changed", "payment.credit_paid", "credit.purchase",
+                             "coupon.reserved", "coupon.redeemed", "coupon.released")),
         ~AuditLog.action.like("payment_order.%"))
         .group_by(AuditLog.actor_telegram_id).order_by(func.count(AuditLog.id).desc(), AuditLog.actor_telegram_id)
         .offset((page-1)*page_size).limit(page_size))).all()

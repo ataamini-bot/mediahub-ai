@@ -26,6 +26,7 @@ from app.services.managed_settings import (
 from app.services.payment_management import PaymentManagementService
 from app.services.download_access import quota_window_start_utc
 from app.services.audit import AuditService
+from app.services.coupons import CouponService
 
 
 ALLOWED_RECEIPT_DOCUMENT_MIME_TYPES = {
@@ -339,6 +340,7 @@ class PaymentService:
             user_id=user.id,
             plan_id=offer.plan_id,
             amount=offer.price,
+            discount_snapshot=(order.offer_snapshot.get("coupon") or {}) if order is not None else {},
             offer_code=offer.code,
             duration_months=None,
             duration_days=offer.duration_days,
@@ -366,6 +368,8 @@ class PaymentService:
                 actor_telegram_id=user.telegram_id, target_type="payment_order", target_id=str(order.id))
 
         try:
+            await self.session.flush()
+            await CouponService(self.session).attach_payment(payment.order_id, payment.id)
             await self.session.commit()
         except IntegrityError as exc:
             await self.session.rollback()
@@ -575,6 +579,9 @@ class PaymentService:
         payment.rejection_reason = None
         payment.subscription_id = subscription.id
 
+        await CouponService(self.session).transition(payment.order_id, "redeemed",
+            actor=admin_telegram_id or user.telegram_id, payment_id=payment.id)
+
         AuditService(self.session).record(action="payment.approved" if admin_telegram_id else "payment.credit_paid",
             actor_telegram_id=admin_telegram_id or user.telegram_id,
             target_type="payment", target_id=payment.id,
@@ -626,6 +633,8 @@ class PaymentService:
         payment.reviewed_by_telegram_id = admin_telegram_id
         payment.reviewed_at = datetime.now(timezone.utc)
         payment.rejection_reason = reason.strip()
+        await CouponService(self.session).transition(payment.order_id, "released",
+            actor=admin_telegram_id, payment_id=payment.id)
         AuditService(self.session).record(action="payment.rejected", actor_telegram_id=admin_telegram_id,
             target_type="payment", target_id=payment.id, details={"reason": reason.strip()})
 

@@ -59,6 +59,7 @@ from app.services.backend import (
 from app.state.payment import AdminPaymentStates, PaymentStates
 from app.utils.formatting import format_date_for_language, format_quality_limit
 from app.utils.payment_qr import build_usdt_address_qr
+from app.utils.coupons import coupon_error, discount_text
 
 
 router = Router(name="payments")
@@ -152,6 +153,8 @@ def _format_datetime(value: str | None, language: str = "fa") -> str:
 
 def _payment_error_message(exc: BackendAPIError, language: str = "fa") -> str:
     code = exc.detail.get("code") if isinstance(exc.detail, dict) else None
+    if str(code).startswith("coupon_"):
+        return coupon_error(exc, language)
     order_errors = {
         "backend_unavailable": ("Payment service is temporarily unavailable. Try again; a saved order or submitted payment will not be duplicated.", "سرویس پرداخت موقتاً در دسترس نیست. دوباره تلاش کن؛ سفارش یا پرداخت ثبت‌شده تکراری ساخته نمی‌شود."),
         "open_payment_order_exists": ("An unfinished purchase is saved. Open Buy subscription to resume or cancel it.", "یک خرید ناتمام ذخیره شده است. از «خرید اشتراک» آن را ادامه بده یا لغو کن."),
@@ -258,7 +261,7 @@ def _build_admin_caption(result: dict, offer: dict) -> str:
 
     return (
         f"{_tr('🧾 <b>رسید جدید خرید اشتراک</b>\n\n🆔 شناسه پرداخت: <code>')}{payment['id']}{_tr('</code>\n👤 نام: ')}{html.escape(full_name)}{_tr('\n🔗 نام کاربری: ')}{html.escape(username_text)}\n📱 Telegram ID: <code>{user['telegram_id']}{_tr('</code>\n\n💎 بسته: <b>')}{html.escape(offer['label'])}{_tr('</b>\n💰 مبلغ: <b>')}{amount_text}</b>{destination_text}{_tr('\n📅 مدت: <code>')}{payment['duration_days']}{_tr(' روز</code>\n📎 پیوست: <code>')}{payment.get('receipt_file_type') or _tr('بدون اسکرین\u200cشات')}{_tr('</code>\n\n⏳ وضعیت: <b>در انتظار بررسی</b>')}"
-    )
+    ) + discount_text(payment.get("discount_snapshot"))
 
 
 async def _notify_payment_reviewers(message: Message, result: dict, offer: dict) -> None:
@@ -304,7 +307,7 @@ def _approval_report(payment: dict) -> str:
         f"{_tr('📅 مدت (روز):')} {int(payment.get('duration_days') or 0)}",
         f"{_tr('👮 تأییدکننده:')} <code>{reviewer}</code>",
         f"{_tr('🕒 زمان تأیید:')} {_format_datetime(payment.get('reviewed_at'), ui_language.get())}",
-    ])
+    ]) + discount_text(payment.get("discount_snapshot"))
 
 
 async def _report_approved_payment(message: Message, payment: dict) -> None:
@@ -380,7 +383,7 @@ def _offer_details_text(offer: dict, language: str) -> str:
         if language == "en" else
         "\n\nقوانین تغییر پلن: تمدید همان پلن، مدت و سهمیهٔ همان بازه را جمع می‌کند. ارتقا پس از تأیید آغاز می‌شود و زمان باقی‌مانده حفظ می‌شود. تنزل یا تغییر ترکیبی پس از پایان اشتراک‌های خریداری‌شده شروع می‌شود."
     )
-    return text + rules
+    return text + discount_text(offer.get("coupon"), language) + rules
 
 
 def _payment_destination_text(offer: dict, destination: dict, receipt_rules: dict, language: str) -> str:
@@ -585,6 +588,7 @@ async def _show_payment_order(message: Message, state: FSMContext, order: dict, 
         payment_card_id=destination.get("id") if order["currency"] == "IRT" else None,
         usdt_destination_id=destination.get("id") if order["currency"] == "USDT" else None, receipt_rules=receipt)
     text = _payment_destination_text(offer, destination, receipt, language)
+    text += discount_text(offer.get("coupon"), language)
     text += (f"\n\nOrder: <code>{order_id}</code>" if language == "en" else f"\n\nسفارش: <code>{order_id}</code>")
     keyboard = build_receipt_cancel_keyboard(language, order_id)
     if order["currency"] == "USDT":
@@ -861,7 +865,8 @@ async def continue_payment_offer(callback: CallbackQuery, state: FSMContext) -> 
                 "The address and QR code shown next will belong to the network you select.",
                 parse_mode="HTML", reply_markup=build_usdt_destination_keyboard(configuration["destinations"]))
         else:
-            order = await create_payment_order(telegram_id=callback.from_user.id, offer_code=offer["code"], currency="IRT")
+            order = await create_payment_order(telegram_id=callback.from_user.id, offer_code=offer["code"], currency="IRT",
+                                               **({"coupon_code": data["coupon_code"]} if data.get("coupon_code") else {}))
             await _show_payment_order(callback.message, state, order, language, callback.from_user.id)
         await callback.answer()
     except BackendAPIError as exc:
@@ -880,14 +885,16 @@ async def select_usdt_destination(callback: CallbackQuery, state: FSMContext) ->
         language = normalize_language(user.get("effective_language"))
         if language != "en":
             raise BackendAPIError(status_code=403, detail={"code": "payment_order_language"})
-        offer_code = (await state.get_data()).get("offer_code")
+        data = await state.get_data()
+        offer_code = data.get("offer_code")
         if not offer_code:
             await callback.answer("Choose a plan again.", show_alert=True)
             return
         # The backend validates the network and commits its snapshot before
         # either the address or its QR is sent to Telegram.
         order = await create_payment_order(telegram_id=callback.from_user.id, offer_code=offer_code,
-                                           currency="USDT", usdt_destination_id=destination_id)
+                                           currency="USDT", usdt_destination_id=destination_id,
+                                           **({"coupon_code": data["coupon_code"]} if data.get("coupon_code") else {}))
         await _show_payment_order(callback.message, state, order, language, callback.from_user.id)
         await callback.answer()
     except (TypeError, ValueError):
@@ -927,6 +934,7 @@ async def select_payment_offer(
         await state.update_data(
             offer=offer,
             offer_code=offer_code,
+            coupon_code=None, coupon_base_offer=None, order_id=None,
         )
         await callback.message.edit_text(
             _offer_details_text(offer, language),

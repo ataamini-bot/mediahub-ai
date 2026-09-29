@@ -34,6 +34,7 @@ from app.services.payment_offers import (
 from app.services.managed_settings import PublicOperationDisabled
 from app.services.payment_management import PaymentDestinationValidation, PaymentManagementService
 from app.services.payment_orders import PaymentOrderService, PaymentOrderError
+from app.services.coupons import CouponError
 
 
 router = APIRouter(
@@ -66,9 +67,11 @@ async def order_response(db, operation):
     try:
         order = await operation
         return await PaymentOrderService(db).payload(order)
-    except (PaymentOrderError, PaymentConfigurationError, PaymentDestinationValidation,
+    except (CouponError, PaymentOrderError, PaymentConfigurationError, PaymentDestinationValidation,
             LookupError, PermissionError, PublicOperationDisabled) as exc:
         await db.rollback()
+        if isinstance(exc, CouponError):
+            raise HTTPException(409, {"code": exc.code}) from exc
         if isinstance(exc, PaymentOrderError):
             raise HTTPException(exc.status_code, exc.detail) from exc
         if isinstance(exc, PublicOperationDisabled):
@@ -136,6 +139,9 @@ async def create_payment(
 
     try:
         return serialize_action(await service.create_payment(data))
+    except CouponError as exc:
+        await db.rollback()
+        raise HTTPException(409, {"code": exc.code}) from exc
     except PaymentOrderError as exc:
         await db.rollback()
         raise HTTPException(exc.status_code, exc.detail) from exc
@@ -193,6 +199,9 @@ async def set_payment_admin_message(
         return serialize_action(result)
     except PaymentNotFound as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except CouponError as exc:
+        await db.rollback()
+        raise HTTPException(409, {"code": exc.code}) from exc
     except PaymentConflict as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
@@ -237,6 +246,9 @@ async def approve_payment(
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except PermissionError as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except CouponError as exc:
+        await db.rollback()
+        raise HTTPException(409, {"code": exc.code}) from exc
     except PaymentConflict as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
@@ -264,6 +276,9 @@ async def reject_payment(
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except PermissionError as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except CouponError as exc:
+        await db.rollback()
+        raise HTTPException(409, {"code": exc.code}) from exc
     except PaymentConflict as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 

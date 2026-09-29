@@ -25,8 +25,10 @@ from app.models.wallet import Wallet
 from app.models.customer_action import CustomerAction
 from app.models.broadcast import Broadcast, BroadcastRecipient
 from app.models.credit import CreditAccount, CreditEntry, CreditNotice
+from app.models.coupon import Coupon, CouponUse, CouponAction
 
 __all__ = [
+    "Coupon", "CouponUse", "CouponAction",
     "AdminAccount",
     "AdminPermission",
     "AdminRole",

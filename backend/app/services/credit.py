@@ -152,6 +152,7 @@ class CreditService:
         if account.balance < amount:
             raise CreditError("credit_insufficient")
         payment = Payment(order_id=order.id, user_id=user.id, plan_id=order.plan_id, amount=amount,
+            discount_snapshot=snapshot.get("coupon") or {},
             offer_code=snapshot["code"], duration_days=snapshot["duration_days"],
             plan_name_snapshot=snapshot["label"], plan_limits_snapshot={key: snapshot[key] for key in (
                 "daily_download_limit", "max_file_size_mb", "max_quality", "max_concurrent_downloads",
@@ -196,6 +197,7 @@ class CreditService:
             "currency": account.currency, "delta": str(entry.delta), "balance_after": str(entry.balance_after),
             "entry_id": str(entry.id), "entry_kind": entry.kind,
             "payment_id": entry.payment_id, "plan_name": payment.plan_name_snapshot if payment else None,
+            "discount_snapshot": payment.discount_snapshot if payment else {},
             "duration_days": payment.duration_days if payment else None}
 
     async def ack_notice(self, notice_id, data):

@@ -13,6 +13,7 @@ from app.handlers.customers import SupportFormInput
 from app.handlers.operations import keyboard
 from app.middleware.interface import ui_language
 from app.services.backend import BackendAPIError, _payment_request, get_admin_context, get_telegram_user
+from app.utils.coupons import coupon_error, discount_text
 
 router = Router(name="credit")
 router.message.filter(F.chat.type == "private")
@@ -31,6 +32,8 @@ def money(value, currency):
 def error_text(exc):
     detail = exc.detail if isinstance(exc, BackendAPIError) else {}
     code = detail.get("code") if isinstance(detail, dict) else detail
+    if str(code).startswith("coupon_"):
+        return coupon_error(exc)
     return {
         "credit_insufficient": tr("اعتبار کافی نیست؛ کل مبلغ سفارش باید از اعتبار همان ارز پرداخت شود.", "Insufficient credit. The full order total must be paid in the same currency."),
         "credit_stale_balance": tr("موجودی تغییر کرده؛ حساب را دوباره باز و تغییر را بررسی کنید.", "The balance changed. Reopen the account and review the adjustment."),
@@ -327,6 +330,7 @@ async def preview_purchase(message, state, actor, order):
             f"{tr('موجودی', 'Balance')}: {money(account['balance'], currency)}\n")
     text += tr("با تأیید، کل مبلغ کسر و اشتراک فعال یا طبق دوره‌های فعلی تمدید/زمان‌بندی می‌شود.",
                "Confirming deducts the full amount and activates, renews or schedules your subscription based on existing periods.") if enough else error_text(BackendAPIError(status_code=409, detail={"code": "credit_insufficient"}))
+    text += discount_text(offer.get("coupon"), language)
     await message.answer(text, parse_mode="HTML", reply_markup=markup)
 
 
@@ -337,7 +341,8 @@ async def start_purchase(callback: CallbackQuery, state: FSMContext):
         user = await get_telegram_user(callback.from_user.id)
         currency = "USDT" if user.get("effective_language") == "en" else "IRT"
         order = await _payment_request("POST", "/payments/orders", payload={"telegram_id": callback.from_user.id,
-            "offer_code": data["offer"]["code"], "currency": currency, "method": "credit"})
+            "offer_code": data["offer"]["code"], "currency": currency, "method": "credit",
+            **({"coupon_code": data["coupon_code"]} if data.get("coupon_code") else {})})
         await preview_purchase(callback.message, state, callback.from_user.id, order)
         await callback.answer()
     except (KeyError, BackendAPIError) as exc:

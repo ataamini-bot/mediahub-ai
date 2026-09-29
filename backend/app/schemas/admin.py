@@ -58,6 +58,7 @@ class AdminPaymentSummaryResponse(BaseModel):
 
 
 class AdminPaymentListItem(BaseModel):
+    discount_snapshot: dict = Field(default_factory=dict)
     id: int
     status: PaymentStatus
     amount: Decimal
