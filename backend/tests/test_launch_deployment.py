@@ -13,6 +13,7 @@ PREPARED = "f6de11031c88b9848f5ffcb806eb686fb99e1793"
 LAUNCHED = "7d9dd72b85bd74086c6b80ef6c1300a9f86832ae"
 CHANNEL_LANGUAGES = "f52fb5be34a46ecc4c6d5a3a66fd0b4f86d6c928"
 PRIVATE_PAYMENTS = "506c5989a138785a16a55cc08fdb9588c836b7ca"
+BROADCASTS = "0322acc644817859c737abbd165421218a488ab8"
 TARGET = "a" * 40
 SCRIPT = Path(__file__).resolve().parents[2] / "scripts/deploy_launch_operations.sh"
 SERVICES = ("backend", "bot", "worker", "monitor")
@@ -114,7 +115,7 @@ def deploy(tmp_path, **scenario):
     return result, json.loads(state_path.read_text())
 
 
-@pytest.mark.parametrize("head", [BASE, PREPARED, LAUNCHED, CHANNEL_LANGUAGES, PRIVATE_PAYMENTS, TARGET])
+@pytest.mark.parametrize("head", [BASE, PREPARED, LAUNCHED, CHANNEL_LANGUAGES, PRIVATE_PAYMENTS, BROADCASTS, TARGET])
 def test_clean_prepared_checkout_still_builds_and_backs_up_before_migration(tmp_path, head):
     result, state = deploy(tmp_path, head=head)
     assert result.returncode == 0, result.stdout + result.stderr

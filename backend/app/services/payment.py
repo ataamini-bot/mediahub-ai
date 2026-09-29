@@ -227,6 +227,8 @@ class PaymentService:
         order = None
         if data.order_id is not None:
             order = await PaymentOrderService(self.session).get(data.order_id, user.id, lock=True)
+            if order.destination_snapshot.get("type") == "credit":
+                raise PaymentOrderError("payment_order_credit_required")
             if order.currency != data.currency or order.offer_snapshot["code"] != data.offer_code:
                 raise PaymentOrderError("payment_order_mismatch")
             if order.status == "submitted":
@@ -428,6 +430,10 @@ class PaymentService:
         await self.ensure_admin(admin_telegram_id)
         payment = await self._get_payment_for_update(payment_id)
         user = await self._get_user_for_update(payment.user_id)
+        return await self._activate(payment, user, admin_telegram_id=admin_telegram_id, commit=True)
+
+    async def _activate(self, payment, user, *, admin_telegram_id, commit):
+        """Shared subscription engine; caller has authorized and locked the payment/user."""
         plan_result = await self.session.execute(
             select(Plan).where(Plan.id == payment.plan_id)
         )
@@ -569,12 +575,16 @@ class PaymentService:
         payment.rejection_reason = None
         payment.subscription_id = subscription.id
 
-        AuditService(self.session).record(action="payment.approved", actor_telegram_id=admin_telegram_id,
+        AuditService(self.session).record(action="payment.approved" if admin_telegram_id else "payment.credit_paid",
+            actor_telegram_id=admin_telegram_id or user.telegram_id,
             target_type="payment", target_id=payment.id,
             details={"subscription_id": subscription.id, "change_type": payment.subscription_change_type})
-        await self.session.commit()
-        await self.session.refresh(payment)
-        await self.session.refresh(subscription)
+        if commit:
+            await self.session.commit()
+            await self.session.refresh(payment)
+            await self.session.refresh(subscription)
+        else:
+            await self.session.flush()
 
         return PaymentActionResult(
             payment=payment,

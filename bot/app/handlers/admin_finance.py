@@ -1,3 +1,4 @@
+from app.middleware.interface import ui_language
 from app.localization import tr as _tr, localized_collection as _localized_collection
 import html
 from datetime import datetime
@@ -280,10 +281,10 @@ def _payment_caption(payment: dict) -> str:
         if card_number
         else ""
     )
-    is_usdt = str(payment.get("payment_method") or "") == "usdt"
+    is_usdt = payment.get("payment_method") in {"usdt", "credit_usdt"}
     usdt_line = (
         f"{_tr('\n💵 مقصد USDT: <code>')}{html.escape(str(destination.get('network_code') or '—'))}</code> — <code>{html.escape(str(destination.get('address') or '—'))}</code>"
-        if is_usdt
+        if payment.get("payment_method") == "usdt"
         else ""
     )
     amount_text = (
@@ -291,6 +292,8 @@ def _payment_caption(payment: dict) -> str:
         if is_usdt
         else format_toman(payment.get("amount"))
     )
+    if str(payment.get("payment_method", "")).startswith("credit_"):
+        card_line = "\n💰 Internal credit" if ui_language.get() == "en" else "\n💰 اعتبار داخلی"
     rejection = ""
     if payment.get("rejection_reason"):
         rejection = (

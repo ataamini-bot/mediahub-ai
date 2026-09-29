@@ -7,6 +7,7 @@ from sqlalchemy import func, or_, select
 
 from app.models.admin import AdminAccount
 from app.models.customer_action import CustomerAction
+from app.models.credit import CreditAccount
 from app.models.download_job import DownloadJob, DownloadJobStatus
 from app.models.payment import Payment, PaymentStatus
 from app.models.plan import Plan
@@ -96,11 +97,13 @@ class CustomerService:
             usage_filters.append(or_(DownloadJob.media_type.is_(None), DownloadJob.media_type != "convert"))
         used = await self.db.scalar(select(func.count()).select_from(DownloadJob).where(*usage_filters))
         pending = await self.db.scalar(select(func.count()).select_from(Payment).where(Payment.user_id == user.id, Payment.status == PaymentStatus.PENDING))
+        credits = (await self.db.scalars(select(CreditAccount).where(CreditAccount.user_id == user.id))).all()
         return {"telegram_id": user.telegram_id, "name": " ".join(filter(None, (user.first_name, user.last_name))),
             "username": user.username, "status": user.status.value,
             "language": user.preferred_language or "fa", "revision": await self.revision(user),
             "plan_name": entitlement.plan_name, "used": used, "limit": entitlement.daily_download_limit,
             "period": entitlement.download_limit_period, "pending_payments": pending,
+            "credits": {row.currency: str(row.balance) for row in credits},
             "subscriptions": [subscription_data(s, p) for s, p in rows
                               if s.expires_at > now and s.status in (SubscriptionStatus.ACTIVE, SubscriptionStatus.SCHEDULED)],
             "history": [{"action": a.action, "reason": a.reason, "actor": a.actor_telegram_id,

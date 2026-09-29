@@ -24,6 +24,7 @@ from app.models.user import User
 from app.models.wallet import Wallet
 from app.models.customer_action import CustomerAction
 from app.models.broadcast import Broadcast, BroadcastRecipient
+from app.models.credit import CreditAccount, CreditEntry, CreditNotice
 
 __all__ = [
     "AdminAccount",
@@ -50,6 +51,9 @@ __all__ = [
     "CustomerAction",
     "Broadcast",
     "BroadcastRecipient",
+    "CreditAccount",
+    "CreditEntry",
+    "CreditNotice",
     "DownloadJob",
     "DownloadJobStatus",
 ]

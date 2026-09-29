@@ -220,7 +220,7 @@ class PaymentManagementService:
                         case(
                             (
                                 (Payment.status == PaymentStatus.APPROVED)
-                                & (Payment.payment_method != "usdt"),
+                                & (Payment.payment_method.not_in(["usdt", "credit_usdt"])),
                                 Payment.amount,
                             ),
                             else_=0,
@@ -233,7 +233,7 @@ class PaymentManagementService:
                         case(
                             (
                                 (Payment.status == PaymentStatus.APPROVED)
-                                & (Payment.payment_method == "usdt"),
+                                & (Payment.payment_method.in_(["usdt", "credit_usdt"])),
                                 Payment.amount,
                             ),
                             else_=0,

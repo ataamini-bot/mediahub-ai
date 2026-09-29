@@ -100,7 +100,7 @@ class AdminStatisticsService:
         active_subscriptions = int(await self._scalar(select(func.count(Subscription.id)).where(Subscription.status.in_((SubscriptionStatus.ACTIVE, SubscriptionStatus.SCHEDULED)), Subscription.started_at <= self.now, Subscription.expires_at > self.now)) or 0)
         expired_subscriptions = int(await self._scalar(select(func.count(Subscription.id)).where((Subscription.status == SubscriptionStatus.EXPIRED) | (Subscription.expires_at < self.now))) or 0)
         approved = Payment.status == PaymentStatus.APPROVED
-        sales = await self._scalar(select(func.coalesce(func.sum(case((Payment.payment_method == "card", Payment.amount), else_=0)), 0)).where(approved))
+        sales = await self._scalar(select(func.coalesce(func.sum(case((Payment.payment_method.in_(["card", "credit_irt"]), Payment.amount), else_=0)), 0)).where(approved))
         purchases = int(await self._scalar(select(func.count(Payment.id)).where(approved)) or 0)
         downloads = int(await self._scalar(select(func.count(DownloadJob.id))) or 0)
         return {
@@ -193,7 +193,7 @@ class AdminStatisticsService:
         successful = int(await self._scalar(select(func.count(Payment.id)).where(Payment.status == PaymentStatus.APPROVED)) or 0)
         failed = int(await self._scalar(select(func.count(Payment.id)).where(Payment.status == PaymentStatus.REJECTED)) or 0)
         total_irt = revenue["all"]["irt"]
-        paying_users = int(await self._scalar(select(func.count(distinct(Payment.user_id))).where(Payment.status == PaymentStatus.APPROVED, Payment.payment_method != "usdt")) or 0)
+        paying_users = int(await self._scalar(select(func.count(distinct(Payment.user_id))).where(Payment.status == PaymentStatus.APPROVED, Payment.payment_method.not_in(["usdt", "credit_usdt"]))) or 0)
         renewal_irt = (await self._revenue_by_renewal())["irt"]
         start = _period_start(self.now, period)
         selected = await self._currency_finance(start)
@@ -224,7 +224,7 @@ class AdminStatisticsService:
                 func.count(Payment.id).filter(Payment.status == PaymentStatus.PENDING),
                 func.coalesce(func.sum(Payment.amount).filter(approved), 0),
                 func.coalesce(func.sum(Payment.amount).filter(approved & renewal), 0),
-            ).where(Payment.payment_method == method, event_time >= start, event_time <= self.now))).one()
+            ).where(Payment.payment_method.in_([method, "credit_usdt" if currency == "USDT" else "credit_irt"]), event_time >= start, event_time <= self.now))).one()
             total, renewed = Decimal(row[3]), Decimal(row[4])
             result[currency] = {"successful": int(row[0]), "rejected": int(row[1]), "pending": int(row[2]),
                 "total": str(total), "renewal": str(renewed), "initial": str(total - renewed),
@@ -236,7 +236,7 @@ class AdminStatisticsService:
         where = [Payment.status == PaymentStatus.APPROVED, func.coalesce(Payment.reviewed_at, Payment.created_at) >= start]
         if end is not None:
             where.append(func.coalesce(Payment.reviewed_at, Payment.created_at) < end)
-        statement = select(func.coalesce(func.sum(case((Payment.payment_method == "usdt", 0), else_=Payment.amount)), 0), func.coalesce(func.sum(case((Payment.payment_method == "usdt", Payment.amount), else_=0)), 0)).where(*where)
+        statement = select(func.coalesce(func.sum(case((Payment.payment_method.in_(["usdt", "credit_usdt"]), 0), else_=Payment.amount)), 0), func.coalesce(func.sum(case((Payment.payment_method.in_(["usdt", "credit_usdt"]), Payment.amount), else_=0)), 0)).where(*where)
         result = await self.session.execute(statement)
         row = result.one()
         return {"irt": float(row[0] or 0), "usdt": float(row[1] or 0)}
@@ -245,7 +245,7 @@ class AdminStatisticsService:
         from sqlalchemy.orm import aliased
         prior = aliased(Payment)
         exists_prior = select(prior.id).where(prior.user_id == Payment.user_id, prior.status == PaymentStatus.APPROVED, prior.created_at < Payment.created_at).exists()
-        result = await self.session.execute(select(func.coalesce(func.sum(case((Payment.payment_method == "usdt", 0), else_=Payment.amount)), 0)).where(Payment.status == PaymentStatus.APPROVED, exists_prior))
+        result = await self.session.execute(select(func.coalesce(func.sum(case((Payment.payment_method.in_(["usdt", "credit_usdt"]), 0), else_=Payment.amount)), 0)).where(Payment.status == PaymentStatus.APPROVED, exists_prior))
         return {"irt": float(result.scalar_one() or 0)}
 
     async def downloads(self, period="1mo", page=1) -> dict[str, Any]:

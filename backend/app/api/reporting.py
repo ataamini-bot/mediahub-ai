@@ -69,7 +69,7 @@ def payment_filters(lower, upper):
 
 
 def currency_expression():
-    return case((Payment.payment_method == "usdt", "USDT"), else_="IRT")
+    return case((Payment.payment_method.in_(["usdt", "credit_usdt"]), "USDT"), else_="IRT")
 
 
 @router.get("/finance")
@@ -122,7 +122,7 @@ async def finance_csv(actor_telegram_id: int = Query(gt=0), period: str = "month
         "status", "change_type", "created_at_utc", "reviewed_at_utc", "reviewed_by_telegram_id"])
     for payment, telegram_id in rows:
         writer.writerow([csv_cell(x) for x in [payment.id, telegram_id, payment.plan_name_snapshot,
-            payment.duration_days, payment.payment_method, "USDT" if payment.payment_method == "usdt" else "IRT",
+            payment.duration_days, payment.payment_method, "USDT" if payment.payment_method in {"usdt", "credit_usdt"} else "IRT",
             payment.amount, payment.status.value, payment.subscription_change_type,
             payment.created_at.isoformat(), payment.reviewed_at.isoformat() if payment.reviewed_at else None,
             payment.reviewed_by_telegram_id]])
@@ -152,7 +152,7 @@ async def audit(actor_telegram_id: int = Query(gt=0), page: int = Query(default=
         .offset((page-1)*page_size).limit(page_size))).scalars()
     activity = (await db.execute(select(AuditLog.actor_telegram_id, func.count(AuditLog.id),
         func.count(AuditLog.id).filter(AuditLog.success.is_(False))).where(*filters, AuditLog.actor_telegram_id.is_not(None),
-        ~AuditLog.action.in_(("support.ticket_created", "user.language_changed")),
+        ~AuditLog.action.in_(("support.ticket_created", "user.language_changed", "payment.credit_paid", "credit.purchase")),
         ~AuditLog.action.like("payment_order.%"))
         .group_by(AuditLog.actor_telegram_id).order_by(func.count(AuditLog.id).desc(), AuditLog.actor_telegram_id)
         .offset((page-1)*page_size).limit(page_size))).all()

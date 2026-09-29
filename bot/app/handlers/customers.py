@@ -61,6 +61,11 @@ async def show_profile(message, actor_id, telegram_id):
         lines.append(f"#{sub['id']} · {html.escape(sub['plan_name'])}\n{sub['started_at'][:10]} → {sub['expires_at'][:10]} (UTC)")
     rows = []
     actions = []
+    from app.handlers.credit import money
+    for currency in ("IRT", "USDT"):
+        lines.append(tr("اعتبار: ", "Credit: ") + money(result.get("credits", {}).get(currency, "0"), currency))
+    if result.get("can_manage_credit"):
+        rows.append([(tr("💰 مدیریت اعتبار", "💰 Manage credit"), f"credit:admin:view:{telegram_id}:IRT:1")])
     if result["can_manage_users"]:
         actions += ["unblock" if result["status"] == "blocked" else "block", "reset_quota", "note"]
     if result["can_manage_subscriptions"]:

@@ -1,5 +1,6 @@
 """One durable open checkout per customer; rotation occurs once per order."""
 from uuid import UUID
+from decimal import ROUND_CEILING
 
 from sqlalchemy import select
 
@@ -31,7 +32,7 @@ class PaymentOrderService:
     async def user(self, telegram_id, *, lock=False):
         query = select(User).where(User.telegram_id == telegram_id)
         if lock:
-            query = query.with_for_update()
+            query = query.with_for_update().execution_options(populate_existing=True)
         user = (await self.session.execute(query)).scalar_one_or_none()
         if user is None:
             raise PaymentOrderError("payment_order_not_found", status_code=404)
@@ -75,7 +76,8 @@ class PaymentOrderService:
         if existing is not None:
             if (existing.currency == data.currency
                     and existing.offer_snapshot["code"] == data.offer_code
-                    and (data.currency == "IRT" or existing.destination_snapshot["id"] == data.usdt_destination_id)):
+                    and (existing.destination_snapshot.get("type") == "credit") == (data.method == "credit")
+                    and (data.method == "credit" or data.currency == "IRT" or existing.destination_snapshot["id"] == data.usdt_destination_id)):
                 # A retry must not consult a changed catalog or rotate again.
                 await self.session.commit()
                 return existing
@@ -85,7 +87,9 @@ class PaymentOrderService:
         offer = await get_payment_offer(self.session, data.offer_code, currency=data.currency)
         management = PaymentManagementService(self.session)
         card_id = None
-        if data.currency == "USDT":
+        if data.method == "credit":
+            destination = {"type": "credit"}
+        elif data.currency == "USDT":
             destination = await management.usdt_destination_for_submission(data.usdt_destination_id)
         else:
             card = await management.select_card()
@@ -103,6 +107,10 @@ class PaymentOrderService:
             description=offer.localized_description(language),
             description_fa=offer.description, description_en=offer.description_en,
         ).model_dump(mode="json")
+        if data.method == "credit":
+            from decimal import Decimal
+            unit = Decimal("0.0001") if data.currency == "USDT" else Decimal("1")
+            snapshot["price"] = str(offer.price.quantize(unit, rounding=ROUND_CEILING))
         order = PaymentOrder(
             user_id=user.id, plan_id=offer.plan_id, payment_card_id=card_id,
             currency=data.currency, offer_snapshot=snapshot, destination_snapshot=destination,

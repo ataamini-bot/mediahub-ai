@@ -29,7 +29,7 @@ class PaymentOfferResponse(BaseModel):
 
 
 class PaymentDestinationResponse(BaseModel):
-    type: Literal["card", "usdt"] = "card"
+    type: Literal["card", "usdt", "credit"] = "card"
     id: int | None = None
     label: str | None = None
     card_number: str | None = None
@@ -211,12 +211,13 @@ class PaymentOrderCreate(BaseModel):
     telegram_id: int = Field(gt=0)
     offer_code: str = Field(min_length=3, max_length=100)
     currency: Literal["IRT", "USDT"]
+    method: Literal["manual", "credit"] = "manual"
     usdt_destination_id: int | None = Field(default=None, gt=0)
 
     @model_validator(mode="after")
     def validate_destination(self):
         self.offer_code = self.offer_code.strip().lower()
-        if (self.currency == "USDT") != (self.usdt_destination_id is not None):
+        if (self.currency == "USDT" and self.method == "manual") != (self.usdt_destination_id is not None):
             raise ValueError("Choose a network for USDT only")
         return self
 

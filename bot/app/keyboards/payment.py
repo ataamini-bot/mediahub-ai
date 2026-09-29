@@ -36,8 +36,8 @@ def _inline_button(*, text: str, callback_data: str, style: str = "default") -> 
 
 def format_toman(value: object) -> str:
     try:
-        amount = int(float(str(value)))
-    except (TypeError, ValueError):
+        amount = int(Decimal(str(value)))
+    except (InvalidOperation, TypeError, ValueError, OverflowError):
         return str(value)
 
     return f"{amount:,}{_tr(' تومان')}"
@@ -242,6 +242,8 @@ def build_payment_offer_detail_keyboard(language: str = "fa") -> InlineKeyboardM
     is_fa = language != "en"
     return InlineKeyboardMarkup(
         inline_keyboard=[
+            [InlineKeyboardButton(text="💰 پرداخت با اعتبار داخلی" if is_fa else "💰 Pay with internal credit",
+                                  callback_data="credit:pay:start")],
             [
                 InlineKeyboardButton(
                     text=_tr("✅ ادامه پرداخت") if is_fa else "✅ Continue to payment",
@@ -257,6 +259,12 @@ def build_payment_offer_detail_keyboard(language: str = "fa") -> InlineKeyboardM
             ],
         ]
     )
+
+
+def build_credit_balance_keyboard(language="fa"):
+    return InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(
+        text="💰 موجودی و گردش اعتبار" if language != "en" else "💰 Credit balance and history",
+        callback_data="credit:mine:1")]])
 
 
 def build_usdt_destination_keyboard(

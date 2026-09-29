@@ -54,6 +54,8 @@ from app.handlers.customers import router as customers_router
 from app.handlers.backups import router as backups_router
 from app.handlers.broadcasts import router as broadcasts_router
 from app.services.broadcast_sender import run_broadcast_sender
+from app.handlers.credit import router as credit_router
+from app.services.credit_notices import run_credit_notices
 from app.handlers.conversion import (
     cleanup_staged_state,
     configure_download_runtime,
@@ -177,6 +179,7 @@ dp.include_router(operations_router)
 dp.include_router(customers_router)
 dp.include_router(backups_router)
 dp.include_router(broadcasts_router)
+dp.include_router(credit_router)
 dp.include_router(conversion_router)
 dp.include_router(
     experience_router
@@ -5979,6 +5982,7 @@ async def main():
     )
 
     broadcast_task = None
+    credit_task = None
     try:
 
         # Telegram owns the area beside Attach, so a bot cannot put an
@@ -5988,6 +5992,7 @@ async def main():
         await configure_telegram_menu_button(bot)
 
         broadcast_task = asyncio.create_task(run_broadcast_sender(bot))
+        credit_task = asyncio.create_task(run_credit_notices(bot))
 
         await dp.start_polling(
             bot
@@ -5998,6 +6003,9 @@ async def main():
         if broadcast_task is not None:
             broadcast_task.cancel()
             await asyncio.gather(broadcast_task, return_exceptions=True)
+        if credit_task is not None:
+            credit_task.cancel()
+            await asyncio.gather(credit_task, return_exceptions=True)
 
         await (
             dp.storage.close()

@@ -14,6 +14,7 @@ from app.api.users import router as users_router
 from app.api.customers import router as customers_router
 from app.api.backups import router as backups_router
 from app.api.broadcasts import router as broadcasts_router
+from app.api.credit import router as credit_router
 from app.services.system_monitor import (
     notify_backend_started,
     notify_backend_stopping,
@@ -53,6 +54,7 @@ app.include_router(reporting_router)
 app.include_router(customers_router)
 app.include_router(backups_router)
 app.include_router(broadcasts_router)
+app.include_router(credit_router)
 
 
 @app.get("/")

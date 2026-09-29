@@ -28,6 +28,7 @@ from app.keyboards.payment import (
     build_payment_approval_confirmation_keyboard,
     build_home_reply_keyboard,
     build_payment_offer_detail_keyboard,
+    build_credit_balance_keyboard,
     build_payment_offers_keyboard,
     build_receipt_cancel_keyboard,
     build_usdt_destination_keyboard,
@@ -289,9 +290,10 @@ async def _notify_payment_reviewers(message: Message, result: dict, offer: dict)
 
 
 def _approval_report(payment: dict) -> str:
-    amount = (format_usdt(payment["amount"]) if payment.get("payment_method") == "usdt"
+    amount = (format_usdt(payment["amount"]) if payment.get("payment_method") in {"usdt", "credit_usdt"}
               else format_toman(payment["amount"]))
     full_name = " ".join(str(payment.get(key) or "") for key in ("first_name", "last_name")).strip()
+    reviewer = str(int(payment["reviewed_by_telegram_id"])) if payment.get("reviewed_by_telegram_id") else ("Internal credit" if ui_language.get() == "en" else "اعتبار داخلی")
     return "\n".join([
         _tr("✅ <b>گزارش تأیید پرداخت</b>"),
         f"{_tr('🆔 پرداخت:')} <code>{int(payment['id'])}</code>",
@@ -300,7 +302,7 @@ def _approval_report(payment: dict) -> str:
         f"{_tr('💎 پلن:')} <b>{html.escape(str(payment.get('plan_name_snapshot') or '—'))}</b>",
         f"{_tr('💰 مبلغ:')} <b>{amount}</b>",
         f"{_tr('📅 مدت (روز):')} {int(payment.get('duration_days') or 0)}",
-        f"{_tr('👮 تأییدکننده:')} <code>{int(payment['reviewed_by_telegram_id'])}</code>",
+        f"{_tr('👮 تأییدکننده:')} <code>{reviewer}</code>",
         f"{_tr('🕒 زمان تأیید:')} {_format_datetime(payment.get('reviewed_at'), ui_language.get())}",
     ])
 
@@ -563,12 +565,18 @@ def _saved_order_summary(order: dict, language: str):
     return text, InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-async def _show_payment_order(message: Message, state: FSMContext, order: dict, language: str):
+async def _show_payment_order(message: Message, state: FSMContext, order: dict, language: str, actor_id=None):
     if order["status"] != "open":
         code = "payment_order_submitted" if order["status"] == "submitted" else "payment_order_closed"
         raise BackendAPIError(status_code=409, detail={"code": code})
     if order["currency"] != ("USDT" if language == "en" else "IRT"):
         raise BackendAPIError(status_code=403, detail={"code": "payment_order_language"})
+    if order["destination"].get("type") == "credit":
+        from app.handlers.credit import preview_purchase
+        if not actor_id:
+            raise BackendAPIError(status_code=403, detail={"code": "credit_owner_required"})
+        await preview_purchase(message, state, actor_id, order)
+        return
     order_id = str(order["id"])
     offer, destination, receipt = order["offer"], order["destination"], order["receipt"]
     await state.clear()
@@ -609,7 +617,7 @@ async def saved_payment_order_action(callback: CallbackQuery, state: FSMContext)
         _, _, action, order_id = callback.data.split(":", 3)
         if action == "resume":
             order = await get_payment_order(order_id, callback.from_user.id)
-            await _show_payment_order(callback.message, state, order, language)
+            await _show_payment_order(callback.message, state, order, language, callback.from_user.id)
         else:
             active_id = (await state.get_data()).get("order_id")
             if active_id and active_id != order_id:
@@ -734,6 +742,8 @@ async def send_subscription_status(
             parse_mode="HTML",
             reply_markup=await _user_home_reply_keyboard(user),
         )
+        await message.answer("💰 Internal credit" if language == "en" else "💰 اعتبار داخلی",
+                             reply_markup=build_credit_balance_keyboard(language))
         if result.get("scheduled"):
             await message.answer(
                 "📅 Scheduled plans" if language == "en" else "📅 اشتراک‌های زمان‌بندی‌شده",
@@ -806,14 +816,14 @@ async def payment_status(callback: CallbackQuery) -> None:
 
         # Main navigation lives in the persistent ReplyKeyboard. Only the
         # context-specific scheduled-plans action remains inline here.
-        keyboard = None
+        keyboard = build_credit_balance_keyboard(language)
         if result.get("scheduled"):
-            keyboard = InlineKeyboardMarkup(inline_keyboard=[[
+            keyboard.inline_keyboard.append([
                 InlineKeyboardButton(
                     text="📅 Scheduled plans" if language == "en" else "📅 اشتراک‌های زمان‌بندی‌شده",
                     callback_data="subscription:schedule:1",
                 )
-            ]])
+            ])
         await callback.message.edit_text(
             _subscription_status_text(result, language),
             parse_mode="HTML",
@@ -852,7 +862,7 @@ async def continue_payment_offer(callback: CallbackQuery, state: FSMContext) -> 
                 parse_mode="HTML", reply_markup=build_usdt_destination_keyboard(configuration["destinations"]))
         else:
             order = await create_payment_order(telegram_id=callback.from_user.id, offer_code=offer["code"], currency="IRT")
-            await _show_payment_order(callback.message, state, order, language)
+            await _show_payment_order(callback.message, state, order, language, callback.from_user.id)
         await callback.answer()
     except BackendAPIError as exc:
         await callback.answer("Could not open payment." if language == "en" else "بازکردن پرداخت ممکن نشد.", show_alert=True)
@@ -878,7 +888,7 @@ async def select_usdt_destination(callback: CallbackQuery, state: FSMContext) ->
         # either the address or its QR is sent to Telegram.
         order = await create_payment_order(telegram_id=callback.from_user.id, offer_code=offer_code,
                                            currency="USDT", usdt_destination_id=destination_id)
-        await _show_payment_order(callback.message, state, order, language)
+        await _show_payment_order(callback.message, state, order, language, callback.from_user.id)
         await callback.answer()
     except (TypeError, ValueError):
         await callback.answer("Invalid network selection.", show_alert=True)

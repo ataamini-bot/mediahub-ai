@@ -62,6 +62,7 @@ async def profile(telegram_id: int, actor_telegram_id: int = Query(gt=0), db: As
         result = await CustomerService(db).profile(telegram_id)
         result["can_manage_users"] = context.has_permission("users.manage")
         result["can_manage_subscriptions"] = context.has_permission("subscriptions.manage")
+        result["can_manage_credit"] = context.has_permission("balances.manage")
         return result
     except LookupError as exc:
         raise HTTPException(404, str(exc)) from exc

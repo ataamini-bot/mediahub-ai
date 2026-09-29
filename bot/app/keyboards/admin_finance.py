@@ -130,7 +130,7 @@ def build_payment_list_keyboard(
                     text=(
                         f"{status_icons.get(status, '•')} #{payment['id']} "
                         f"{identity[:18]} — "
-                        f"{format_usdt(payment['amount']) if payment.get('payment_method') == 'usdt' else format_toman(payment['amount'])}"
+                        f"{format_usdt(payment['amount']) if payment.get('payment_method') in {'usdt', 'credit_usdt'} else format_toman(payment['amount'])}"
                     )[:60],
                     callback_data=(
                         f"admin:pay:view:{int(payment['id'])}:"
