@@ -22,6 +22,10 @@ async def report():
         pending = await conn.scalar(text("SELECT count(*) FROM payments WHERE status::text='PENDING'"))
         print(f"PAYMENTS_PENDING={pending}")
         print("MIGRATION=" + str(await conn.scalar(text("SELECT version_num FROM alembic_version"))))
+        cleanup = await conn.scalar(text("""SELECT count(*) FROM download_jobs WHERE files_removed_at IS NULL
+            AND (status::text IN ('FAILED','CANCELLED','EXPIRED') OR
+            (status::text='COMPLETED' AND (delivered_at IS NOT NULL OR coalesce(completed_at,created_at) < now()-interval '24 hours')))"""))
+        print(f"MEDIA_FILES_PENDING_CLEANUP={cleanup}")
     await engine.dispose()
 asyncio.run(report())
 status = backup_status()

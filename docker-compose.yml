@@ -59,7 +59,7 @@ services:
       - --api-id=${TELEGRAM_API_ID}
       - --api-hash=${TELEGRAM_API_HASH}
       - --http-port=8081
-      # Keep Local Bot API uploads under the volume mounted read-only in the
+      # Keep Local Bot API uploads under the volume shared with the
       # Bot container. This is required for large audio/video files, which
       # cannot safely rely on Telegram's public 20 MB file endpoint.
       - --dir=/var/lib/telegram-bot-api
@@ -133,7 +133,9 @@ services:
       - temp_data:/app/tmp
       # Local Bot API returns a local file path. The Bot must see the same
       # data directory to stream an uploaded conversion input safely.
-      - telegram_api_data:/var/lib/telegram-bot-api:ro
+      # Remove fetched media after staging it for conversion. Session/database
+      # files are excluded from the Bot's cleanup targets.
+      - telegram_api_data:/var/lib/telegram-bot-api
 
     networks:
       - mediahub

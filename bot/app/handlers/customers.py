@@ -59,7 +59,7 @@ async def show_profile(message, actor_id, telegram_id):
         f"{tr('پرداخت منتظر بررسی', 'Pending payments')}: {result['pending_payments']}"]
     for sub in result["subscriptions"]:
         lines.append(f"#{sub['id']} · {html.escape(sub['plan_name'])}\n{sub['started_at'][:10]} → {sub['expires_at'][:10]} (UTC)")
-    rows = []
+    rows = [[(tr("🧾 فعالیت دانلود", "🧾 Download activity"), f"customer:downloads:{telegram_id}:1")]]
     actions = []
     from app.handlers.credit import money
     for currency in ("IRT", "USDT"):
@@ -80,6 +80,44 @@ async def show_profile(message, actor_id, telegram_id):
             lines.append(f"{label(row['action'])} · {row['actor']}\n{html.escape(row['reason'][:160])}")
     rows += [[(tr("جست‌وجوی مشتری", "Search customers"), "customer:open")], [(tr("پنل مدیریت", "Admin panel"), "admin:open")]]
     await message.edit_text("\n".join(lines), parse_mode="HTML", reply_markup=keyboard(rows))
+
+
+@router.callback_query(F.data.regexp(r"^customer:downloads:([1-9][0-9]*):([1-9][0-9]*)$"))
+async def download_activity(callback: CallbackQuery):
+    from urllib.parse import urlsplit
+    from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+    telegram_id, page = map(int, callback.data.split(":")[-2:])
+    try:
+        data = await api("GET", f"/admin/customers/{telegram_id}/downloads?page={page}", callback.from_user.id)
+    except BackendAPIError:
+        await callback.answer(tr("دسترسی یا ارتباط با سرور بررسی شود.", "Check access or backend connection."), show_alert=True)
+        return
+    lines = [tr("🧾 فعالیت دانلود کاربر", "🧾 User download activity"), f"Telegram ID: {telegram_id}",
+             tr("تعداد: ", "Total: ") + str(data["total"])]
+    rows = []
+    for item in data["items"]:
+        lines.extend(["", f"#{item['id']} · {html.escape(item['status'])} · {html.escape(item.get('media_type') or 'media')}",
+                      item["created_at"][:19].replace("T", " ") + " (UTC)"])
+        source = str(item.get("source_url") or "")
+        if urlsplit(source).scheme in {"http", "https"}:
+            lines.append(html.escape(source[:280]) + ("…" if len(source) > 280 else ""))
+            rows.append([InlineKeyboardButton(text=tr("🔗 لینک درخواست ", "🔗 Request link ") + str(item["id"]), url=source)])
+        else:
+            lines.append(tr("فایل ارسالی کاربر", "User-uploaded file"))
+        lines.append(tr("فایل حذف شده", "File removed") if item.get("files_removed_at") else tr("فایل موقت / در انتظار پاک‌سازی", "Temporary file / cleanup pending"))
+    if not data["items"]:
+        lines.append(tr("درخواستی ثبت نشده است.", "No download requests recorded."))
+    nav = []
+    if data["page"] > 1:
+        nav.append(InlineKeyboardButton(text="◀️", callback_data=f"customer:downloads:{telegram_id}:{data['page']-1}"))
+    if data["page"] * 5 < data["total"]:
+        nav.append(InlineKeyboardButton(text="▶️", callback_data=f"customer:downloads:{telegram_id}:{data['page']+1}"))
+    if nav:
+        rows.append(nav)
+    rows.append([InlineKeyboardButton(text=tr("بازگشت به مشتری", "Back to customer"), callback_data=f"customer:view:{telegram_id}")])
+    await callback.message.edit_text("\n".join(lines), parse_mode="HTML", disable_web_page_preview=True,
+                                      reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))
+    await callback.answer()
 
 
 @router.callback_query(F.data == "customer:open")

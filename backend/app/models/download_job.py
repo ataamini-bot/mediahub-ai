@@ -46,6 +46,9 @@ class DownloadJob(
 ):
     __tablename__ = "download_jobs"
 
+    # File lifecycle only. Source links, ownership and activity remain for admins.
+    files_removed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
+
     # ========================================================
     # Primary key
     # ========================================================

@@ -1,4 +1,5 @@
-from contextlib import asynccontextmanager
+import asyncio
+from contextlib import asynccontextmanager, suppress
 
 from fastapi import FastAPI
 
@@ -28,10 +29,15 @@ async def lifespan(
 ):
 
     notify_backend_started()
+    from app.services.media_files import cleanup_loop
+    cleanup_task = asyncio.create_task(cleanup_loop())
 
     try:
         yield
     finally:
+        cleanup_task.cancel()
+        with suppress(asyncio.CancelledError):
+            await cleanup_task
         notify_backend_stopping()
 
 

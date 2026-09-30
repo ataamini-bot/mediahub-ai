@@ -1037,6 +1037,10 @@ async def cancel_download_job(
     )
 
 
+async def release_download_files(job_id: int):
+    return await _post_job_action(job_id, "release-files", "Temporary file cleanup failed")
+
+
 async def mark_download_delivered(
     job_id: int,
 ) -> dict:

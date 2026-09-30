@@ -73,6 +73,20 @@ class CustomerService:
         return (await self.db.execute(select(Subscription, Plan).join(Plan, Plan.id == Subscription.plan_id)
                 .where(Subscription.user_id == user.id).order_by(Subscription.started_at, Subscription.id))).all()
 
+    async def download_activity(self, telegram_id, page=1):
+        user = await self.user(telegram_id)
+        scope = DownloadJob.user_id == user.id
+        total = int(await self.db.scalar(select(func.count()).select_from(DownloadJob).where(scope)) or 0)
+        page = min(max(1, page), max(1, (total + 4) // 5))
+        rows = (await self.db.scalars(select(DownloadJob).where(scope).order_by(DownloadJob.id.desc())
+                                     .offset((page-1)*5).limit(5))).all()
+        return {"telegram_id": telegram_id, "total": total, "page": page, "page_size": 5,
+            "items": [{"id": job.id, "source_url": job.source_url, "status": job.status.value,
+                "media_type": job.media_type, "quality": job.quality, "output_format": job.output_format,
+                "file_size": job.file_size, "created_at": job.created_at.isoformat(),
+                "delivered_at": job.delivered_at.isoformat() if job.delivered_at else None,
+                "files_removed_at": job.files_removed_at.isoformat() if job.files_removed_at else None} for job in rows]}
+
     async def snapshot(self, user):
         return {"status": user.status.value, "quota_reset": user.quota_reset_at.isoformat() if user.quota_reset_at else None,
             "conversion_reset": user.conversion_quota_reset_at.isoformat() if user.conversion_quota_reset_at else None,

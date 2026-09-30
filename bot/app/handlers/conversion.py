@@ -251,6 +251,8 @@ async def _copy_local_telegram_file(
                     continue
                 await asyncio.to_thread(_copy_local_file, candidate, destination)
                 if _file_is_complete(destination, expected_size):
+                    from app.utils.telegram_cache import release_cached_file
+                    release_cached_file(candidate)
                     return True
                 destination.unlink(missing_ok=True)
             except (OSError, ValueError) as exc:

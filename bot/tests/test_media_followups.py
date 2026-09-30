@@ -56,6 +56,7 @@ def ui(monkeypatch):
     monkeypatch.setattr(main, "get_download_entitlement", AsyncMock(return_value={"forced_join_required": False}))
     monkeypatch.setattr(main, "safe_edit_message", AsyncMock())
     monkeypatch.setattr(main, "mark_download_delivered", AsyncMock())
+    monkeypatch.setattr(main, "release_download_files", AsyncMock())
     monkeypatch.setattr(main, "_download_cover_file", AsyncMock(side_effect=AssertionError("Unexpected cover fetch")))
     monkeypatch.setattr(main, "create_download_job", AsyncMock(return_value={"id": 429}))
     monkeypatch.setattr(main, "wait_for_download", AsyncMock(return_value={"id": 429, "status": "cancelled"}))
@@ -237,3 +238,77 @@ async def test_cover_first_still_allows_audio_and_quality_selection(ui):
             f"media:details:{token}"} <= actions(Message.answer.await_args.kwargs["reply_markup"])
     await main.media_video_callback(callback(f"media:video:{token}"))
     assert any(action.startswith(f"quality:{token}:") for action in actions(Message.answer.await_args.kwargs["reply_markup"]))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('language', ['fa', 'en'])
+async def test_file_is_deleted_before_delivery_ack_and_notice_only_mentions_media(ui, tmp_path, language):
+    context = ui_language.set(language)
+    path = tmp_path / '428.mp4'; path.write_bytes(b'video')
+    async def acknowledge(job_id):
+        assert not path.exists()
+    main.mark_download_delivered.side_effect = acknowledge
+    try:
+        await main.send_downloaded_file(message(), message(), job(file_path=str(path)), media_info())
+        caption = Message.answer_document.await_args.kwargs['caption']
+        assert ('media files' in caption) if language=='en' else ('فایل‌های رسانه‌ای' in caption)
+        assert 'تمامی داده' not in caption and 'all data' not in caption.lower()
+        assert 'https://example.com/post' not in caption
+        main.release_download_files.assert_awaited_once_with(428)
+    finally:
+        ui_language.reset(context)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('failure', ['upload', 'empty', 'delivery_ack', 'cleanup_endpoint'])
+async def test_files_are_removed_on_failure_and_related_buttons_keep_job_context(ui, tmp_path, monkeypatch, failure):
+    path = tmp_path / '428.mp4'; path.write_bytes(b'' if failure=='empty' else b'video')
+    monkeypatch.setattr(main.asyncio, 'sleep', AsyncMock())
+    if failure=='upload':
+        Message.answer_document.side_effect = RuntimeError('Telegram unreachable')
+    if failure=='delivery_ack':
+        main.mark_download_delivered.side_effect = RuntimeError('Backend unreachable')
+    if failure=='cleanup_endpoint':
+        main.release_download_files.side_effect = RuntimeError('Backend unreachable')
+    if failure in {'upload','empty'}:
+        with pytest.raises(RuntimeError):
+            await main.send_downloaded_file(message(), message(), job(file_path=str(path)), media_info())
+        main.mark_download_delivered.assert_not_awaited()
+    else:
+        await main.send_downloaded_file(message(), message(), job(file_path=str(path)), media_info())
+        markup = Message.answer_document.await_args.kwargs['reply_markup']
+        assert {'download_again:428', 'download_details:428', 'download_more:audio:428'} <= actions(markup)
+    assert not path.exists()
+    main.release_download_files.assert_awaited_once_with(428)
+
+
+def test_telegram_cache_deletion_excludes_session_files_and_other_bots(tmp_path, monkeypatch):
+    from app.utils.telegram_cache import release_cached_file
+    monkeypatch.setenv('TELEGRAM_BOT_API_DATA_DIR', str(tmp_path))
+    monkeypatch.setenv('TELEGRAM_BOT_TOKEN', '123:test-cache')
+    media = tmp_path/'123:test-cache'/'documents'/'file.mp4'
+    media.parent.mkdir(parents=True); media.write_bytes(b'video')
+    database = tmp_path/'123:test-cache'/'td.binlog'; database.write_bytes(b'session')
+    other = tmp_path/'other-token'/'documents'/'file.mp4'
+    other.parent.mkdir(parents=True); other.write_bytes(b'other')
+    link = media.parent/'link'; link.symlink_to(database)
+    for path in (media, database, other, link):
+        release_cached_file(path)
+    assert not media.exists() and database.exists() and other.exists() and link.exists()
+
+
+@pytest.mark.asyncio
+async def test_admin_activity_escapes_links_and_requires_backend_authorization(ui, monkeypatch):
+    from app.handlers import customers
+    monkeypatch.setattr(customers, 'api', AsyncMock(return_value={'total':1,'page':1,'items':[
+        {'id':428,'status':'completed','media_type':'video','created_at':'2026-09-30T10:00:00+00:00',
+         'source_url':'https://example.com/post?x=<literal>','files_removed_at':'2026-09-30T10:01:00+00:00'}]}))
+    await customers.download_activity(callback('customer:downloads:42:1'))
+    assert '&lt;literal&gt;' in Message.edit_text.await_args.args[0]
+    markup = Message.edit_text.await_args.kwargs['reply_markup']
+    assert markup.inline_keyboard[0][0].url=='https://example.com/post?x=<literal>'
+    Message.edit_text.reset_mock()
+    customers.api.side_effect=BackendAPIError(status_code=403,detail='Forbidden')
+    await customers.download_activity(callback('customer:downloads:42:1'))
+    Message.edit_text.assert_not_awaited()
+    assert CallbackQuery.answer.await_args.kwargs['show_alert']

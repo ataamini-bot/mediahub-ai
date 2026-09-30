@@ -77,7 +77,7 @@ def test_bot_can_read_uploads_exposed_by_the_local_telegram_api():
     compose_path = Path(__file__).resolve().parents[2] / "docker-compose.yml"
     compose = compose_path.read_text(encoding="utf-8")
 
-    assert "telegram_api_data:/var/lib/telegram-bot-api:ro" in compose
+    assert "telegram_api_data:/var/lib/telegram-bot-api" in compose
     assert "--dir=/var/lib/telegram-bot-api" in compose
 
 

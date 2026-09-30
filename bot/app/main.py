@@ -123,12 +123,14 @@ from app.services.backend import (
     get_download_entitlement,
     get_media_info,
     mark_download_delivered,
+    release_download_files,
     pause_download_job,
     register_telegram_user,
     resume_download_job,
 )
 from app.utils.media_conversion import AUDIO_FORMATS, normalize_format
 from app.utils.filenames import media_filename
+from app.utils.media_notice import media_file_notice
 
 
 TOKEN = os.getenv(
@@ -1764,9 +1766,8 @@ def _completed_file_caption(
         ]
     )
 
-    return "\n".join(
-        lines
-    )
+    lines.extend(["", media_file_notice(ui_language.get())])
+    return "\n".join(lines)
 
 
 def _queued_download_text(
@@ -2981,184 +2982,65 @@ async def send_downloaded_file(
     job: dict,
     media_info: dict | None = None,
 ) -> None:
+    job_id = int(job["id"])
+    path = Path(job["file_path"]) if job.get("file_path") else None
 
-    job_id = (
-        job[
-            "id"
-        ]
-    )
-
-    file_path = (
-        job.get(
-            "file_path"
-        )
-    )
-
-    if not file_path:
-
-        raise RuntimeError(
-            "Downloaded file path is missing"
-        )
-
-    path = Path(
-        file_path
-    )
-
-    if not path.exists():
-
-        raise FileNotFoundError(
-            f"File not found: "
-            f"{path}"
-        )
-
-    file_size = (
-        path.stat()
-        .st_size
-    )
-
-    if (
-        file_size <= 0
-    ):
-
-        raise RuntimeError(
-            "Downloaded file is empty"
-        )
-
-    if (
-        file_size
-        > MAX_DOWNLOAD_SIZE_BYTES
-    ):
-
+    def unlink_output():
+        if path is None:
+            return
         try:
+            path.unlink(missing_ok=True)
+        except OSError as exc:
+            print(f"Temporary output cleanup requires retry: job={job_id}, {type(exc).__name__}")
 
-            path.unlink()
-
-        except Exception:
-
-            pass
-
-        raise RuntimeError(
-            "Downloaded file exceeds "
-            f"{MAX_DOWNLOAD_SIZE_MB} MB limit"
-        )
-
-    size_label = (
-        format_file_size(
-            file_size
-        )
-        or
-        f"{file_size} bytes"
-    )
-
-    await safe_edit_message(
-        status_message,
-        (
+    try:
+        if path is None:
+            raise RuntimeError("Downloaded file path is missing")
+        if not path.is_file():
+            raise FileNotFoundError("Downloaded file is no longer available")
+        file_size = path.stat().st_size
+        if file_size <= 0:
+            raise RuntimeError("Downloaded file is empty")
+        if file_size > MAX_DOWNLOAD_SIZE_BYTES:
+            raise RuntimeError(f"Downloaded file exceeds {MAX_DOWNLOAD_SIZE_MB} MB limit")
+        size_label = format_file_size(file_size) or f"{file_size} bytes"
+        await safe_edit_message(status_message, (
             "✅ <b>Download complete</b>\n\n"
             f"📦 File size: <b>{size_label}</b>\n\n"
             "📤 <b>Sending file to Telegram...</b>"
-            if ui_language.get() == "en"
-            else "✅ <b>دانلود کامل شد</b>\n\n"
+            if ui_language.get() == "en" else
+            "✅ <b>دانلود کامل شد</b>\n\n"
             f"📦 حجم فایل: <b>{size_label}</b>\n\n"
             "📤 <b>در حال ارسال فایل به تلگرام...</b>"
-        ),
-        reply_markup=None,
-    )
-
-    suffix = (
-        path.suffix
-        or ".mp4"
-    )
-
-    filename = media_filename((media_info or {}).get("title"), suffix)
-
-    document = (
-        FSInputFile(
-            path=str(
-                path
-            ),
-            filename=filename,
-        )
-    )
-
-    try:
-
+        ), reply_markup=None)
+        filename = media_filename((media_info or {}).get("title"), path.suffix or ".mp4")
         await message.answer_document(
-            document=document,
+            document=FSInputFile(str(path), filename=filename),
             disable_content_type_detection=True,
-            caption=_completed_file_caption(
-                filename=filename,
-                size_label=size_label,
-                job=job,
-                media_info=media_info,
-            ),
+            caption=_completed_file_caption(filename, size_label, job, media_info),
             parse_mode="HTML",
-            reply_markup=build_completed_download_keyboard(
-                job_id,
+            reply_markup=build_completed_download_keyboard(job_id,
                 media_type=str(job.get("media_type") or "video"),
-                source_media_type="image" if job.get("media_type") == "image" else _source_media_type(media_info),
-            ),
+                source_media_type="image" if job.get("media_type") == "image" else _source_media_type(media_info)),
         )
-
-        delivery_confirmed = False
+        # Remove the bytes immediately after Telegram accepts the file, even
+        # when delivery accounting is temporarily unreachable.
+        unlink_output()
         for attempt in range(3):
             try:
                 await mark_download_delivered(job_id)
-                delivery_confirmed = True
                 break
             except Exception as exc:
-                print(
-                    "Delivery confirmation failed: "
-                    f"job={job_id}, attempt={attempt + 1}, "
-                    f"{type(exc).__name__}: {exc}"
-                )
+                print(f"Delivery confirmation failed: job={job_id}, attempt={attempt+1}, {type(exc).__name__}")
                 if attempt < 2:
                     await asyncio.sleep(1)
-
-        if not delivery_confirmed:
-            print(
-                "Delivery confirmation requires reconciliation: "
-                f"job={job_id}"
-            )
-
-        print(
-            "Successfully sent file: "
-            f"{path}"
-        )
-
     finally:
-
+        # Also covers empty files, upload errors and cancellation of the handler.
+        unlink_output()
         try:
-
-            path.unlink()
-
-            print(
-                "Deleted downloaded file: "
-                f"{path}"
-            )
-
-        except FileNotFoundError:
-
-            pass
-
+            await release_download_files(job_id)
         except Exception as exc:
-
-            print(
-                "Failed to delete file "
-                f"{path}: "
-                f"{type(exc).__name__}: "
-                f"{exc}"
-            )
-
-
-# Conversion callbacks share the ordinary download progress and delivery
-# implementation.  Register it here rather than importing this entrypoint
-# from a router while it is already executing as ``__main__``.
-configure_download_runtime(
-    wait_for_download=wait_for_download,
-    send_downloaded_file=send_downloaded_file,
-    download_error_text=download_error_text,
-    download_error_markup=download_error_markup,
-)
+            print(f"Temporary media cleanup queued for retry: job={job_id}, {type(exc).__name__}")
 
 
 # ============================================================
@@ -4877,7 +4759,7 @@ async def _send_media_cover(message: Message, selection: dict, token: str) -> No
     caption = (
         "🖼 <b>Cover — highest available quality</b>\n\n"
         if english else "🖼 <b>کاور با بالاترین کیفیت موجود</b>\n\n"
-    ) + html.escape(title[:300])
+    ) + html.escape(title[:300]) + "\n\n" + media_file_notice(ui_language.get())
     try:
         # A document preserves the original cover bytes and its chosen filename.
         await message.answer_document(
@@ -5970,6 +5852,7 @@ async def main():
 
     broadcast_task = None
     credit_task = None
+    cache_task = None
     try:
 
         # Telegram owns the area beside Attach, so a bot cannot put an
@@ -5980,6 +5863,8 @@ async def main():
 
         broadcast_task = asyncio.create_task(run_broadcast_sender(bot))
         credit_task = asyncio.create_task(run_credit_notices(bot))
+        from app.utils.telegram_cache import cleanup_loop
+        cache_task = asyncio.create_task(cleanup_loop())
 
         await dp.start_polling(
             bot
@@ -5994,6 +5879,9 @@ async def main():
             credit_task.cancel()
             await asyncio.gather(credit_task, return_exceptions=True)
 
+        if cache_task is not None:
+            cache_task.cancel()
+            await asyncio.gather(cache_task, return_exceptions=True)
         await (
             dp.storage.close()
         )

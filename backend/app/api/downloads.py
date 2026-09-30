@@ -37,6 +37,7 @@ from app.services.download_access import (
     DownloadAccessService,
 )
 from app.models.download_job import (
+    DownloadJob,
     DownloadJobStatus,
 )
 from app.services.managed_settings import (
@@ -117,6 +118,19 @@ async def mark_download_delivered(
 # ============================================================
 # Media info
 # ============================================================
+
+@router.post("/{job_id}/release-files")
+async def release_download_files(job_id: int, db: AsyncSession = Depends(get_db)):
+    from app.services.media_files import release_files, TERMINAL
+    job = await db.scalar(select(DownloadJob).where(DownloadJob.id == job_id).with_for_update())
+    if job is None:
+        return {"released": True}
+    if job.status not in TERMINAL:
+        raise HTTPException(409, "The download is still running")
+    await db.run_sync(lambda session: release_files(session, job))
+    await db.commit()
+    return {"released": True}
+
 
 @router.get(
     "/info",

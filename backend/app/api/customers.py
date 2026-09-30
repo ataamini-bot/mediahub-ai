@@ -68,6 +68,16 @@ async def profile(telegram_id: int, actor_telegram_id: int = Query(gt=0), db: As
         raise HTTPException(404, str(exc)) from exc
 
 
+@router.get("/{telegram_id}/downloads")
+async def download_activity(telegram_id: int, actor_telegram_id: int = Query(gt=0),
+                            page: int = Query(default=1, ge=1), db: AsyncSession = Depends(get_db)):
+    await actor(db, actor_telegram_id, "users.view")
+    try:
+        return await CustomerService(db).download_activity(telegram_id, page)
+    except LookupError as exc:
+        raise HTTPException(404, str(exc)) from exc
+
+
 @router.post("/{telegram_id}/actions")
 async def change(telegram_id: int, data: CustomerChange, db: AsyncSession = Depends(get_db)):
     try:
