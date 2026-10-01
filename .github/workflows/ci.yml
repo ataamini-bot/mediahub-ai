@@ -7,6 +7,7 @@ on:
       - "feature/**"
       - "fix/**"
   pull_request:
+  workflow_call:
 
 permissions:
   contents: read
@@ -91,8 +92,24 @@ jobs:
           PYTHONPATH: bot
         run: python -m pytest bot/tests -q
 
+      - name: Test installation and recovery console
+        run: python -m pytest scripts/tests -q
+
       - name: Validate release scripts and build backup image
         run: |
-          bash -n scripts/deploy_launch_operations.sh scripts/backup.sh scripts/restore.sh scripts/check_launch.sh
+          for file in install.sh scripts/*.sh; do bash -n "$file"; done
           docker build -f backup/Dockerfile -t mediahub-backup:ci .
           docker run --rm mediahub-backup:ci --help
+
+  install-smoke:
+    needs: test
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install python-dotenv==1.2.3
+      - name: Fresh Docker stack and portable recovery
+        run: python scripts/ci_install_smoke.py

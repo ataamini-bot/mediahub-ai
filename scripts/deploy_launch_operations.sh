@@ -11,6 +11,7 @@ broadcasts=0322acc644817859c737abbd165421218a488ab8
 internal_credit=88ffc9ac64b378d0bf0869967629c0c6314e486b
 media_outputs=2b5be6e8b3173d548974ae3ac404560e67a36375
 coupons=a0800c62a3a7dc4f817f7a27a91178c6f37ef692
+media_privacy=d415f0bd01259f910ec2de6cdfdbf72be7db7ee4
 branch=feature/admin-foundation
 target="${1:-}"
 [[ "$target" =~ ^[0-9a-f]{40}$ ]] || { printf 'Provide the full release commit.\n'; exit 1; }
@@ -21,7 +22,7 @@ original_head="$(git rev-parse HEAD)"
 [[ -z "$(git status --porcelain)" ]] || {
   printf 'DEPLOYMENT=ABORTED_LOCAL_CHANGES\n'; exit 1;
 }
-[[ "$original_head" == "$base" || "$original_head" == "$prepared" || "$original_head" == "$launched" || "$original_head" == "$channel_languages" || "$original_head" == "$private_payments" || "$original_head" == "$broadcasts" || "$original_head" == "$internal_credit" || "$original_head" == "$media_outputs" || "$original_head" == "$coupons" || "$original_head" == "$target" ]] || {
+[[ "$original_head" == "$base" || "$original_head" == "$prepared" || "$original_head" == "$launched" || "$original_head" == "$channel_languages" || "$original_head" == "$private_payments" || "$original_head" == "$broadcasts" || "$original_head" == "$internal_credit" || "$original_head" == "$media_outputs" || "$original_head" == "$coupons" || "$original_head" == "$media_privacy" || "$original_head" == "$target" ]] || {
   printf 'DEPLOYMENT=ABORTED_UNEXPECTED_HEAD HEAD=%s\n' "$original_head"; exit 1;
 }
 printf 'SOURCE_HEAD=%s TARGET_HEAD=%s\n' "$original_head" "$target"

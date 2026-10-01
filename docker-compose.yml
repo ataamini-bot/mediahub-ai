@@ -208,6 +208,7 @@ services:
     volumes:
       - ./backups:/backups
       - ./.env:/config/mediahub.env:ro
+      - ./release.json:/config/release.json:ro
       - ./secrets:/config/secrets:ro
     networks:
       - mediahub

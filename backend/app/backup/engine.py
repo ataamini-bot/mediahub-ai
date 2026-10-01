@@ -169,10 +169,15 @@ def create_backup(kind="manual", backup_id=None):
                     snapshot = conn.execute("SELECT pg_export_snapshot()").fetchone()[0]
                     counts = table_counts(conn)
                     version = conn.execute("SHOW server_version_num").fetchone()[0]
+                    schema = (conn.execute("SELECT version_num FROM alembic_version").fetchone()[0]
+                              if conn.execute("SELECT to_regclass('public.alembic_version')").fetchone()[0] else None)
                     run_pg(["pg_dump", "--format=custom", "--no-owner", "--no-privileges",
                             "--snapshot=" + snapshot, "--file=" + str(dump)])
                 manifest = {"format": 1, "created_at": info["created_at"], "counts": counts,
-                            "postgres_version": version, "id": backup_id}
+                            "postgres_version": version, "schema_version": schema, "id": backup_id}
+                release_file = Path("/config/release.json")
+                if release_file.is_file():
+                    manifest["application_version"] = json.loads(release_file.read_text()).get("version")
                 atomic_json(directory / "manifest.json", manifest)
                 plain = directory / "archive.tar"
                 with tarfile.open(plain, "w") as archive:
@@ -422,10 +427,11 @@ def main():
     else:
         if not args.output or Path(args.output).exists():
             raise ValueError("Choose a new private output directory")
-        with opened_backup(args.backup_id) as (directory, _):
+        with opened_backup(args.backup_id) as (directory, manifest):
             shutil.copytree(directory / "config", args.output)
             Path(args.output).chmod(0o700)
-        result = {"config_extracted": True}
+        result = {"config_extracted": True, "schema_version": manifest.get("schema_version"),
+                  "application_version": manifest.get("application_version")}
     print(json.dumps(result))
 
 
