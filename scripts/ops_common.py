@@ -68,12 +68,12 @@ def ask(label, default=None, *, secret=False, pattern=None):
             value = str(default)
         if value and (pattern is None or re.fullmatch(pattern, value)):
             return value
-        print("مقدار واردشده معتبر نیست؛ دوباره وارد کنید.")
+        print("Invalid value. Please try again.")
 
 
 def confirm(label, token="YES"):
-    if input(f"{label}\nبرای ادامه {token} را بنویسید: ").strip() != token:
-        raise OperationError("عملیات لغو شد؛ تأیید دریافت نشد.")
+    if input(f"{label}\nType {token} to continue: ").strip() != token:
+        raise OperationError("Operation cancelled: confirmation was not provided.")
 
 
 def run(args, *, cwd=None, capture=False, data=None, env=None, timeout=None):
@@ -104,7 +104,7 @@ class BotAPI:
             except (ValueError, OSError):
                 raise OperationError(f"Telegram {method}: HTTP {exc.code}") from None
         except (OSError, ValueError):
-            raise OperationError(f"Telegram {method}: ارتباط نامشخص؛ نتیجه را در تلگرام بررسی کنید.") from None
+            raise OperationError(f"Telegram {method}: connection failed; check the result in Telegram before retrying.") from None
         if not result.get("ok"):
             detail = str(result.get("description", "request failed")).replace(self.token, "[hidden]")[:180]
             raise OperationError(f"Telegram {method}: {detail}")

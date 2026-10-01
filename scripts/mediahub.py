@@ -46,10 +46,10 @@ class Console:
 
     def clean(self):
         if self.git("status", "--porcelain"):
-            raise OperationError("فایل‌های پروژه تغییر محلی دارند؛ ابتدا تغییرات را نگه‌داری و بررسی کنید.")
+            raise OperationError("Project files have local changes. Save and review them before continuing.")
         override = self.root / "docker-compose.override.yml"
         if override.exists() and not read_json(override, {}).get("x-mediahub-managed"):
-            raise OperationError("Compose override سفارشی باید قبل از نصب بررسی شود.")
+            raise OperationError("Review the custom Compose override before installation.")
 
     def images_override(self, images):
         save_json(self.root / "docker-compose.override.yml", {"x-mediahub-managed": True,
@@ -89,7 +89,7 @@ class Console:
             'exec psql -X -At -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c "$1"',
             "sh", sql, capture=True)
         if count != "0":
-            raise OperationError(f"ACTIVE_OR_PAUSED_DOWNLOAD_JOBS={count}; درخواست‌ها را تکمیل یا لغو کنید.")
+            raise OperationError(f"ACTIVE_OR_PAUSED_DOWNLOAD_JOBS={count}; finish or cancel these requests first.")
 
     def health(self):
         for attempt in range(60):
@@ -130,7 +130,7 @@ class Console:
         self.backup(verify=True)
         self.register()
         save_json(self.state / "install.json", {"phase": "complete", "head": self.git("rev-parse", "HEAD")})
-        print("INSTALLATION=OK\nبرای مدیریت بعدی: sudo mediahub")
+        print("INSTALLATION=OK\nTo open the management menu later, run: sudo mediahub")
 
     def register(self):
         path = str(self.root)
@@ -144,12 +144,12 @@ class Console:
         self.clean()
         progress = self.state / "install.json"
         if read_json(progress, {}).get("phase") == "restoring":
-            raise OperationError("بازیابی ناتمام است؛ گزینه ورود بکاپ و بازیابی را ادامه دهید.")
+            raise OperationError("Recovery is incomplete. Continue with Import backup and restore.")
         if (self.root / ".env").exists() and not progress.exists():
-            raise OperationError("این سرور قبلاً تنظیم شده؛ از Update یا تنظیمات تلگرام استفاده کنید.")
+            raise OperationError("This server is already configured. Use Update or Telegram setup.")
         if read_json(progress, {}).get("phase") == "complete":
             self.register()
-            print("نصب قبلاً کامل شده؛ از منوی مدیریت استفاده کنید.")
+            print("Installation is already complete. Use the management menu.")
             return
         for directory in ("backups", "secrets"):
             (self.root / directory).mkdir(exist_ok=True, mode=0o700)
@@ -159,13 +159,13 @@ class Console:
             volumes = run(["docker", "volume", "ls", "--filter", "label=com.docker.compose.project=mediahub-ai", "-q"], capture=True)
             if volumes:
                 raise OperationError("Existing MediaHub volumes found: use Restore or recover the original .env")
-            token = ask("Bot Token از BotFather", secret=True, pattern=r"[0-9]+:[A-Za-z0-9_-]{30,}")
+            token = ask("Bot Token from BotFather", secret=True, pattern=r"[0-9]+:[A-Za-z0-9_-]{30,}")
             me = BotAPI(token).call("getMe")
-            print("ربات انتخاب‌شده: @" + me["username"])
-            api_id = ask("Telegram API ID از my.telegram.org", pattern=r"[1-9][0-9]*")
+            print("Selected bot: @" + me["username"])
+            api_id = ask("Telegram API ID from my.telegram.org", pattern=r"[1-9][0-9]*")
             api_hash = ask("Telegram API Hash", secret=True, pattern=r"[a-fA-F0-9]{32}")
-            admin = ask("Telegram ID عددی اولین سوپرادمین", pattern=r"[1-9][0-9]*")
-            timezone = ask("منطقه زمانی", "Asia/Tehran")
+            admin = ask("Numeric Telegram user ID of the first superadmin", pattern=r"[1-9][0-9]*")
+            timezone = ask("Timezone", "Asia/Tehran")
             ZoneInfo(timezone)
             password = secrets.token_hex(32)
             values = read_env(self.root / ".env.example")
@@ -178,7 +178,7 @@ class Console:
                           DATA_ENCRYPTION_KEY=base64.urlsafe_b64encode(secrets.token_bytes(32)).decode(),
                           POSTGRES_PASSWORD=password, DISPLAY_TIMEZONE=timezone, QUOTA_TIMEZONE=timezone,
                           DATABASE_URL=f"postgresql+asyncpg://mediahub:{password}@postgres:5432/mediahub")
-            confirm("نصب این ربات و ساخت اطلاعات جدید روی این سرور انجام شود؟")
+            confirm("Install this bot and create a new configuration on this server?")
             save_json(progress, {"phase": "prepared"})
             write_env(self.root / ".env", values)
             private_write(self.state / "recovery-key.txt", values["DATA_ENCRYPTION_KEY"] + "\n")
@@ -194,9 +194,9 @@ class Console:
             save_json(progress, {"phase": "cloud_logged_out"})
         self.compose("up", "-d", "--wait", "--wait-timeout", "120", "postgres", "redis", "telegram-api")
         self.activate()
-        print("کلید بازیابی را جدا از بکاپ، در محل امن خارج از سرور نگه دارید: " + str(self.state / "recovery-key.txt"))
-        print("اکنون ربات را در تلگرام Start کنید؛ سپس گروه گزارش‌ها را تنظیم کنید.")
-        if ask("راه‌اندازی گروه و تاپیک‌ها اکنون؟ yes/no", "yes", pattern=r"yes|no") == "yes":
+        print("Keep a secure off-server copy of the recovery key, separate from your backups: " + str(self.state / "recovery-key.txt"))
+        print("Start the bot in Telegram, then configure the reporting group.")
+        if ask("Set up the reporting group and topics now? yes/no", "yes", pattern=r"yes|no") == "yes":
             self.telegram()
 
     def telegram(self):
@@ -206,10 +206,10 @@ class Console:
         api = LocalBotAPI(self)
         routes = configure_forum(values["TELEGRAM_BOT_TOKEN"], self.state / "telegram.json", current, api=api)
         self.local({"action": "forum", "routes": routes})
-        print("TELEGRAM_TOPICS=OK; مقصدها در دیتابیس ثبت شدند.")
-        while ask("افزودن کانال عضویت اجباری؟ yes/no", "no", pattern=r"yes|no") == "yes":
+        print("TELEGRAM_TOPICS=OK; notification destinations saved to the database.")
+        while ask("Add a required membership channel? yes/no", "no", pattern=r"yes|no") == "yes":
             self.local({"action": "channel", "channel": required_channel(values["TELEGRAM_BOT_TOKEN"], api=api)})
-        print("قیمت، کارت، کیف پول، پلن‌ها و تنظیمات دیگر از پنل مدیریت ربات قابل تنظیم‌اند.")
+        print("Manage prices, payment cards, wallets, plans, and other settings in the bot admin panel.")
 
     def snapshot(self):
         images = {}
@@ -234,7 +234,7 @@ class Console:
     def update(self, version=None):
         self.clean()
         if (self.state / "update-pending.json").exists():
-            raise OperationError("به‌روزرسانی قبلی ناتمام است؛ ابتدا گزینه بازگشت نسخه را اجرا کنید.")
+            raise OperationError("The previous update is incomplete. Run Roll back application first.")
         source = read_json(self.root / "secrets/update-source.json", {}).get("repository") or self.git("remote", "get-url", "origin")
         validate_source(source)
         if not version:
@@ -242,20 +242,20 @@ class Console:
             versions = [line.rsplit("/", 1)[-1] for line in available.splitlines()]
             stable = [v for v in versions if re.fullmatch(r"v\d+\.\d+\.\d+", v)]
             if not stable:
-                raise OperationError("هنوز نسخه پایدار تگ‌شده منتشر نشده است.")
+                raise OperationError("No stable release tag has been published yet.")
             version = max(stable, key=lambda v: tuple(map(int, v[1:].split("."))))
         if not VERSION.fullmatch(version):
-            raise OperationError("نسخه دقیق مانند v1.0.0 را وارد کنید.")
+            raise OperationError("Enter an exact version, such as v1.0.0.")
         self.git("fetch", source, "refs/tags/" + version)
         target = self.git("rev-parse", "FETCH_HEAD^{commit}")
         if target == self.git("rev-parse", "HEAD"):
-            print("نسخه انتخاب‌شده نصب است.")
+            print("The selected version is already installed.")
             return
         self.git("merge-base", "--is-ancestor", "HEAD", target)
         manifest = json.loads(self.git("show", target + ":release.json"))
         if manifest.get("version") != version:
             raise OperationError("Release metadata does not match its tag")
-        confirm(f"به‌روزرسانی به {version} ({target[:12]}) با بکاپ و آزمون بازیابی؟")
+        confirm(f"Update to {version} ({target[:12]}) with a backup and restore verification?")
         self.idle()
         previous = self.snapshot()
         previous.update(installed_head=target, application_rollback_safe=manifest.get("application_rollback_safe") is True)
@@ -288,18 +288,18 @@ class Console:
                     self.compose("start", "bot")
                 (self.state / "update-pending.json").unlink(missing_ok=True)
             else:
-                print("UPDATE=FAILED; برنامه‌ها متوقف‌اند. بکاپ و update-pending.json را برای بازیابی نگه دارید.")
+                print("UPDATE=FAILED; applications are stopped. Keep the backup and update-pending.json for recovery.")
             raise
 
     def rollback(self):
         pending = self.state / "update-pending.json"
         previous = read_json(pending) or read_json(self.state / "rollback.json")
         if not previous or not previous.get("application_rollback_safe"):
-            raise OperationError("نسخه برگشت سازگار ثبت نشده است؛ از مسیر بازیابی استفاده کنید.")
+            raise OperationError("No compatible rollback version is recorded. Use backup recovery.")
         self.clean()
         if self.git("rev-parse", "HEAD") not in {previous["installed_head"], previous["head"] if pending.exists() else ""}:
             raise OperationError("Rollback belongs to a different installed version")
-        confirm("بازگشت برنامه به " + previous["head"][:12] + "؛ دیتابیس به عقب برنمی‌گردد؟")
+        confirm("Roll back the application to " + previous["head"][:12] + "? The database will not be downgraded.")
         self.idle()
         self.compose("stop", "bot")
         try:
@@ -319,7 +319,7 @@ class Console:
 
     def export(self):
         info = self.backup(verify=True)
-        directory = Path(ask("پوشه مقصد خروجی بکاپ (مسیر کامل)"))
+        directory = Path(ask("Backup export directory (absolute path)"))
         if not directory.is_absolute():
             raise OperationError("An absolute destination is required")
         directory.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -330,10 +330,10 @@ class Console:
             shutil.copy2(self.root / "backups" / destination.name, destination)
             destination.chmod(0o600)
         print("BACKUP_EXPORTED=" + str(directory / (info["id"] + ".mhb")))
-        print("کلید DATA_ENCRYPTION_KEY باید جداگانه و امن نگهداری شود؛ داخل خروجی عمومی قرار نمی‌گیرد.")
+        print("Keep DATA_ENCRYPTION_KEY safe and separate from the exported backup files.")
 
     def import_backup(self):
-        source = Path(ask("مسیر کامل فایل .mhb"))
+        source = Path(ask("Absolute path to the .mhb backup file"))
         if not source.is_absolute() or not re.fullmatch(r"[a-f0-9]{32}\.mhb", source.name):
             raise OperationError("Invalid backup filename")
         metadata = source.with_suffix(".json")
@@ -364,8 +364,8 @@ class Console:
         volumes = run(["docker", "volume", "ls", "--filter", "label=com.docker.compose.project=mediahub-ai", "-q"], capture=True)
         if volumes:
             raise OperationError("Existing MediaHub volumes require the original .env; fresh restore refused")
-        confirm("بازیابی روی سرور جدید؛ ربات روی سرور قبلی باید متوقف باشد.", "OLD-SERVER-STOPPED")
-        key = ask("کلید DATA_ENCRYPTION_KEY بکاپ", secret=True, pattern=r"[A-Za-z0-9_-]{43}=")
+        confirm("Restore on a new server. The bot on the old server must be stopped.", "OLD-SERVER-STOPPED")
+        key = ask("Backup DATA_ENCRYPTION_KEY", secret=True, pattern=r"[A-Za-z0-9_-]{43}=")
         image = "mediahub-backup:recovery"
         run(["docker", "build", "-f", "backup/Dockerfile", "-t", image, "."], cwd=self.root)
         with tempfile.TemporaryDirectory(prefix="recovery-", dir=self.state) as directory:
@@ -378,7 +378,7 @@ class Console:
                  "extract-config", source.stem, "--output", "/recovery/config"], env=runtime_env, capture=True))
             schema = extracted.get("schema_version")
             if schema and not any((self.root / "backend/alembic/versions").glob(schema + "_*.py")):
-                raise OperationError("نسخه کد این سرور، ساختار دیتابیس بکاپ را نمی‌شناسد؛ ابتدا نسخه سازگار را دریافت کنید.")
+                raise OperationError("This code version does not recognize the backup database schema. Download a compatible release first.")
             config = Path(directory) / "config"
             restored = read_env(config / "mediahub.env")
             if restored.get("DATA_ENCRYPTION_KEY") != key:
@@ -436,16 +436,16 @@ class Console:
         print("RESTORE_NEW_SERVER=OK")
 
     def source(self):
-        repository = ask("آدرس HTTPS مخزن سرور به‌روزرسانی", self.git("remote", "get-url", "origin"))
+        repository = ask("Update repository HTTPS URL", self.git("remote", "get-url", "origin"))
         validate_source(repository)
-        registry = ask("مسیر Imageها", "ghcr.io/ataamini-bot/mediahub-ai")
+        registry = ask("Container image registry path", "ghcr.io/ataamini-bot/mediahub-ai")
         if not re.fullmatch(r"[a-z0-9.-]+(?::[0-9]+)?/[a-z0-9/_-]+", registry):
             raise OperationError("Invalid registry")
-        confirm("این مخزن و رجیستری، منبع کد اجرایی به‌روزرسانی‌های بعدی باشند؟")
+        confirm("Trust this repository and registry as the source for future application updates?")
         save_json(self.root / "secrets/update-source.json", {"repository": repository, "registry": registry})
 
     def uninstall(self):
-        confirm("توقف و حذف کانتینرهای MediaHub؛ داده‌ها و بکاپ‌ها نگه داشته می‌شوند.", "UNINSTALL")
+        confirm("Stop and remove MediaHub containers while preserving data and backups?", "UNINSTALL")
         self.idle()
         self.compose("stop", "bot")
         try:
@@ -458,18 +458,18 @@ class Console:
         print("UNINSTALL=OK DATA=PRESERVED")
 
     def menu(self):
-        options = {"1": ("نصب اولیه", self.install), "2": ("به‌روزرسانی نسخه پایدار", self.update),
-                   "3": ("ساخت و خروجی بکاپ", self.export), "4": ("ورود بکاپ و بازیابی", self.import_backup),
-                   "5": ("گروه، تاپیک‌ها و عضویت اجباری", self.telegram),
-                   "6": ("بررسی سلامت", lambda: run(["bash", "scripts/check_launch.sh"], cwd=self.root)),
-                   "7": ("بازگشت نسخه برنامه", self.rollback), "8": ("سرور به‌روزرسانی", self.source),
-                   "9": ("حذف کانتینرها با حفظ داده", self.uninstall)}
+        options = {"1": ("Install MediaHub", self.install), "2": ("Update to a stable release", self.update),
+                   "3": ("Create and export backup", self.export), "4": ("Import backup and restore", self.import_backup),
+                   "5": ("Telegram group, topics, and required channels", self.telegram),
+                   "6": ("Check system health", lambda: run(["bash", "scripts/check_launch.sh"], cwd=self.root)),
+                   "7": ("Roll back application", self.rollback), "8": ("Configure update source", self.source),
+                   "9": ("Uninstall containers (keep data)", self.uninstall)}
         while True:
-            print("\nMediaHub AI — مدیریت سرور")
+            print("\nMediaHub AI - Server Management")
             for key, (label, _) in options.items():
                 print(f"{key}. {label}")
-            print("0. خروج")
-            key = ask("گزینه", pattern=r"[0-9]")
+            print("0. Exit")
+            key = ask("Select an option", pattern=r"[0-9]")
             if key == "0":
                 return
             try:
@@ -501,7 +501,7 @@ class LocalBotAPI:
 def validate_source(value):
     parsed = urlsplit(value)
     if parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password or parsed.query or parsed.fragment:
-        raise OperationError("آدرس HTTPS بدون توکن/رمز در URL وارد کنید؛ احراز هویت را با credential helper تنظیم کنید.")
+        raise OperationError("Enter an HTTPS URL without a token or password. Use a credential helper for authentication.")
 
 
 def main():
@@ -510,7 +510,7 @@ def main():
     parser.add_argument("version", nargs="?")
     args = parser.parse_args()
     if os.geteuid() != 0:
-        raise OperationError("با sudo اجرا کنید.")
+        raise OperationError("Run this command with sudo.")
     if not sys.stdin.isatty() and args.action not in {"backup", "register"}:
         raise OperationError("Interactive terminal required; connect the command to /dev/tty")
     os.umask(0o077)
@@ -519,7 +519,7 @@ def main():
         try:
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
-            raise OperationError("یک عملیات نصب/بازیابی دیگر در حال اجراست.") from None
+            raise OperationError("Another installation or recovery operation is running.") from None
         if args.action == "update":
             console.update(args.version)
         elif args.action == "import":
@@ -532,7 +532,7 @@ if __name__ == "__main__":
     try:
         main()
     except KeyboardInterrupt:
-        print("\nOPERATION=INTERRUPTED; وضعیت سرویس‌ها را بررسی کنید.", file=sys.stderr)
+        print("\nOPERATION=INTERRUPTED; check the service status.", file=sys.stderr)
         sys.exit(130)
     except Exception as exc:
         print("OPERATION=FAILED " + (str(exc) if isinstance(exc, OperationError) else type(exc).__name__), file=sys.stderr)

@@ -189,7 +189,7 @@ def test_update_orders_verified_backup_before_migration_and_saves_recovery(tmp_p
 def test_interrupted_update_blocks_another_update(tmp_path):
     console = UpdateHarness(tmp_path)
     save_json(console.state / "update-pending.json", {"head": "a" * 40})
-    with pytest.raises(OperationError, match="ناتمام"):
+    with pytest.raises(OperationError, match="incomplete"):
         console.update("v1.0.1")
     assert not console.calls
 
