@@ -1,0 +1,5 @@
+[Information bot](https://github.com/user-attachments/files/33155900/README.md)
+[فارسی](https://github.com/user-attachments/files/33155903/README.fa.md)
+[china.md](https://github.com/user-attachments/files/33155907/README.zh-CN.md)
+[russia](https://github.com/user-attachments/files/33155906/README.ru.md)
+[English](https://github.com/user-attachments/files/33155904/README.en.md)
