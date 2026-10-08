@@ -22,6 +22,7 @@ from ops_common import (BotAPI, OperationError, ask, confirm, private_write,
 from telegram_setup import configure_forum, required_channel
 
 APPS = ("backend", "worker", "monitor", "backup", "bot")
+YOUTUBE_PROVIDER = "bgutil-provider"
 VERSION = re.compile(r"v(\d+)\.(\d+)\.(\d+)(?:-rc\.(\d+))?")
 ROOT = Path(os.environ.get("MEDIAHUB_DIR", "/opt/mediahub-ai")).resolve()
 
@@ -55,6 +56,15 @@ class Console:
         save_json(self.root / "docker-compose.override.yml", {"x-mediahub-managed": True,
             "services": {name: {"image": image} for name, image in images.items()}})
 
+    def has_youtube_provider(self):
+        # Recovery may select an older Compose file without this service.
+        return YOUTUBE_PROVIDER in self.compose("config", "--services", capture=True).splitlines()
+
+    def start_youtube_provider(self):
+        if self.has_youtube_provider():
+            self.compose("up", "-d", "--no-deps", "--no-build", "--pull", "never",
+                         "--wait", "--wait-timeout", "120", YOUTUBE_PROVIDER)
+
     def prepare(self, version=None):
         """Pull versioned release images, checking their source revision; candidates build locally."""
         if version and VERSION.fullmatch(version):
@@ -80,6 +90,10 @@ class Console:
             suffix = self.git("rev-parse", "--short=12", "HEAD")
             self.images_override({name: f"mediahub-ai-{name}:candidate-{suffix}" for name in APPS})
             self.compose("build", *APPS)
+        if self.has_youtube_provider():
+            # Fetch before stopping the running application; a registry outage
+            # must not cause downtime or replace the current helper container.
+            self.compose("pull", YOUTUBE_PROVIDER)
         self.compose("run", "--rm", "--no-deps", "-T", "backend", "python", "-m", "compileall", "-q", "app")
         self.compose("run", "--rm", "--no-deps", "-T", "bot", "python", "-m", "compileall", "-q", "app")
 
@@ -106,9 +120,12 @@ class Console:
             info = json.loads(run(["docker", "inspect", "mediahub-" + service], capture=True))[0]
             if info["State"]["Status"] != "running" or info["RestartCount"]:
                 raise OperationError(f"Unhealthy service: {service}")
+        if self.has_youtube_provider():
+            self.compose("exec", "-T", "backend", "python", "-m", "app.services.youtube_health")
         print("APPLICATION_HEALTH=OK")
 
     def start_apps(self):
+        self.start_youtube_provider()
         self.compose("up", "-d", "--no-deps", "--no-build", "--pull", "never", "--force-recreate", *APPS)
         time.sleep(5)
         self.health()
@@ -213,7 +230,8 @@ class Console:
 
     def snapshot(self):
         images = {}
-        for name in APPS:
+        services = (*APPS, YOUTUBE_PROVIDER) if self.has_youtube_provider() else APPS
+        for name in services:
             info = json.loads(run(["docker", "inspect", "mediahub-" + name], capture=True))[0]
             if not info["State"]["Running"]:
                 raise OperationError("Start all application services before updating")
@@ -225,6 +243,10 @@ class Console:
     def recover_application(self, previous, *, stopped):
         if stopped:
             self.compose("stop", *APPS)
+        if self.has_youtube_provider() and YOUTUBE_PROVIDER not in previous["images"]:
+            # The first helper installation must be reversible too. Compose
+            # removes only its own service container, leaving data volumes alone.
+            self.compose("rm", "--stop", "--force", YOUTUBE_PROVIDER)
         self.git("reset", "--keep", previous["head"])
         self.images_override(previous["images"])
         if stopped:
@@ -244,16 +266,19 @@ class Console:
             if not stable:
                 raise OperationError("No stable release tag has been published yet.")
             version = max(stable, key=lambda v: tuple(map(int, v[1:].split("."))))
-        if not VERSION.fullmatch(version):
-            raise OperationError("Enter an exact version, such as v1.0.0.")
-        self.git("fetch", source, "refs/tags/" + version)
+        candidate = bool(re.fullmatch(r"[0-9a-f]{40}", version))
+        if not candidate and not VERSION.fullmatch(version):
+            raise OperationError("Enter an exact version, such as v1.0.0, or a full candidate commit.")
+        self.git("fetch", source, version if candidate else "refs/tags/" + version)
         target = self.git("rev-parse", "FETCH_HEAD^{commit}")
+        if candidate and target != version:
+            raise OperationError("Candidate source differs from the requested commit")
         if target == self.git("rev-parse", "HEAD"):
             print("The selected version is already installed.")
             return
         self.git("merge-base", "--is-ancestor", "HEAD", target)
         manifest = json.loads(self.git("show", target + ":release.json"))
-        if manifest.get("version") != version:
+        if not candidate and manifest.get("version") != version:
             raise OperationError("Release metadata does not match its tag")
         confirm(f"Update to {version} ({target[:12]}) with a backup and restore verification?")
         self.idle()
@@ -263,7 +288,7 @@ class Console:
         save_json(self.state / "update-pending.json", previous)
         try:
             self.git("checkout", "--detach", target)
-            self.prepare(version)
+            self.prepare(None if candidate else version)
             self.idle()
             self.compose("stop", "bot")
             bot_stopped = True

@@ -21,6 +21,8 @@ httpx
 aiofiles
 
 yt-dlp[default,curl-cffi]
+# Keep the plugin and docker-compose.yml provider on the same release.
+bgutil-ytdlp-pot-provider==2.0.2
 
 structlog
 

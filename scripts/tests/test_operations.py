@@ -137,6 +137,8 @@ class UpdateHarness(mediahub.Console):
 
     def compose(self, *args, **kwargs):
         self.calls.append(("compose", *args))
+        if args == ("config", "--services"):
+            return "\n".join((*mediahub.APPS, mediahub.YOUTUBE_PROVIDER) if self.head == "b" * 40 else mediahub.APPS)
         if "alembic" in args and self.fail == "migration":
             raise OperationError("migration failed")
 
@@ -222,3 +224,67 @@ def test_resume_restore_after_app_failure_never_replays_snapshot_or_queues(tmp_p
     assert len([c for c in console.calls if "restore" in c]) == 1
     assert calls == ["reconcile_restore"]
     assert len([c for c in console.calls if "FLUSHDB" in c]) == 1
+
+
+def test_candidate_update_uses_exact_commit_and_keeps_backup_guards(tmp_path, monkeypatch):
+    monkeypatch.setattr(mediahub, "confirm", lambda *args: None)
+    console = UpdateHarness(tmp_path)
+    console.update("b" * 40)
+    assert ("git", "fetch", "https://github.com/example/repo.git", "b" * 40) in console.calls
+    assert ("prepare", None) in console.calls
+    assert console.calls.index(("backup", True)) < next(i for i, call in enumerate(console.calls) if "alembic" in call)
+    assert read_json(console.state / "rollback.json")["images"]["backend"] == "sha256:backend"
+
+
+def test_candidate_mismatch_stops_before_snapshot_or_build(tmp_path, monkeypatch):
+    monkeypatch.setattr(mediahub, "confirm", lambda *args: pytest.fail("Must not request cutover"))
+    console = UpdateHarness(tmp_path)
+    with pytest.raises(OperationError, match="differs"):
+        console.update("c" * 40)
+    assert not any(c[0] in {"prepare", "backup"} for c in console.calls)
+    assert not (console.state / "update-pending.json").exists()
+
+
+def test_failed_first_provider_install_removes_helper_before_old_code_runs(tmp_path, monkeypatch):
+    monkeypatch.setattr(mediahub, "confirm", lambda *args: None)
+    console = UpdateHarness(tmp_path, "health")
+    with pytest.raises(OperationError):
+        console.update("b" * 40)
+    removal = console.calls.index(("compose", "rm", "--stop", "--force", mediahub.YOUTUBE_PROVIDER))
+    recovery = console.calls.index(("start_apps", "a" * 40))
+    assert removal < recovery
+
+
+def test_unhealthy_provider_prevents_application_start(tmp_path, monkeypatch):
+    console = mediahub.Console(tmp_path)
+    calls = []
+    def compose(*args, **kwargs):
+        calls.append(args)
+        if args == ("config", "--services"):
+            return mediahub.YOUTUBE_PROVIDER
+        if "--wait" in args:
+            raise OperationError("Provider unavailable")
+        pytest.fail("Applications must not start before the provider is healthy")
+    monkeypatch.setattr(console, "compose", compose)
+    with pytest.raises(OperationError, match="Provider"):
+        console.start_apps()
+    assert not any("--force-recreate" in call for call in calls)
+
+
+def test_snapshot_and_recovery_preserve_provider_image_id(tmp_path, monkeypatch):
+    console = mediahub.Console(tmp_path)
+    monkeypatch.setattr(console, "has_youtube_provider", lambda: True)
+    monkeypatch.setattr(console, "git", lambda *args: "a" * 40)
+    def command(args, **kwargs):
+        if args[:2] == ["docker", "inspect"]:
+            return json.dumps([{"State": {"Running": True}, "Image": "sha256:" + args[2]}])
+        return ""
+    monkeypatch.setattr(mediahub, "run", command)
+    previous = console.snapshot()
+    assert previous["images"][mediahub.YOUTUBE_PROVIDER] == "sha256:mediahub-bgutil-provider"
+    calls = []
+    monkeypatch.setattr(console, "compose", lambda *args, **kwargs: calls.append(args))
+    monkeypatch.setattr(console, "start_apps", lambda: calls.append(("start_apps",)))
+    console.recover_application(previous, stopped=True)
+    assert not any(call[0] == "rm" for call in calls)
+    assert read_json(tmp_path / "docker-compose.override.yml")["services"][mediahub.YOUTUBE_PROVIDER]["image"] == "sha256:mediahub-bgutil-provider"

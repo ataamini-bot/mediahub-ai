@@ -41,8 +41,11 @@ def main():
         console.compose("up", "-d", "--wait", "--wait-timeout", "120", "postgres", "redis")
         console.compose("run", "--rm", "--no-deps", "-T", "backend", "alembic", "upgrade", "head")
         console.local({"action": "bootstrap"})
+        console.start_youtube_provider()
         console.compose("up", "-d", "--no-deps", "--no-build", "backend", "worker", "backup")
         check_backend()
+        for service in ("backend", "worker"):
+            console.compose("exec", "-T", service, "python", "-m", "app.services.youtube_health")
         info = console.backup(verify=True)
         extracted = json.loads(console.compose("run", "--rm", "--no-deps", "-T", "backup", "extract-config",
                                 info["id"], "--output", "/backups/ci-extracted", capture=True))

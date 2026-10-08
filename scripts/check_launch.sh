@@ -6,6 +6,7 @@ printf 'HEAD=%s\n' "$(git rev-parse HEAD)"
 docker compose ps
 curl --max-time 5 -fsS http://127.0.0.1:8000/health >/dev/null
 printf 'BACKEND_HTTP=OK\n'
+docker compose exec -T backend python -m app.services.youtube_health
 docker compose exec -T backup /opt/backup-venv/bin/python -m app.backup.engine health
 printf 'BACKUP_PROCESS=OK\n'
 docker compose exec -T backend python - <<'PY'

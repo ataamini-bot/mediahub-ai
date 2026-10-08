@@ -71,6 +71,22 @@ services:
       - mediahub
 
 
+  bgutil-provider:
+    # Match backend/requirements.txt. Internal service only: no host port.
+    image: brainicism/bgutil-ytdlp-pot-provider:2.0.2
+    container_name: mediahub-bgutil-provider
+    restart: unless-stopped
+    init: true
+    networks:
+      - mediahub
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:4416/ping').then(async r => { if (!r.ok || (await r.json()).version !== '2.0.2') process.exit(1); }).catch(() => process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      start_period: 15s
+      retries: 4
+
+
   backend:
     build:
       context: ./backend
@@ -86,6 +102,8 @@ services:
       postgres:
         condition: service_healthy
       redis:
+        condition: service_healthy
+      bgutil-provider:
         condition: service_healthy
 
     volumes:
@@ -158,6 +176,8 @@ services:
       postgres:
         condition: service_healthy
       redis:
+        condition: service_healthy
+      bgutil-provider:
         condition: service_healthy
 
     volumes:
