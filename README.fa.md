@@ -14,7 +14,7 @@
 
 **نامزد انتشار نسخهٔ ۱: `v1.0.0-rc.1`.** کد فعلی در شاخهٔ [`feature/admin-foundation`](https://github.com/ataamini-bot/mediahub-ai/tree/feature/admin-foundation) قرار دارد. این راهنما مربوط به همین نامزد انتشار است؛ شاخهٔ پیش‌فرض مخزن ممکن است نسخهٔ قدیمی‌تری داشته باشد.
 
-دستور نصب زیر از کامیت مشخص `f793c3fe06dafcce0239922577bf7bb64eb756ce` استفاده می‌کند که [آزمون‌های CI](https://github.com/ataamini-bot/mediahub-ai/actions/runs/36895762828) آن موفق بوده‌اند. انتشار پایدار نسخهٔ ۱ همچنان به تکمیل تست‌های زنده و بررسی استقرار وابسته است.
+دستور نصب زیر از کامیت مشخص `71ba5a1a5daa2183f730d5d82fdc00813b261283` استفاده می‌کند که [آزمون‌های CI](https://github.com/ataamini-bot/mediahub-ai/actions/runs/37816641875) آن موفق بوده‌اند. انتشار پایدار نسخهٔ ۱ همچنان به تکمیل تست‌های زنده و بررسی استقرار وابسته است.
 
 ## امکانات
 
@@ -74,7 +74,7 @@
 ```bash
 (
   set -euo pipefail
-  release='f793c3fe06dafcce0239922577bf7bb64eb756ce'
+  release='71ba5a1a5daa2183f730d5d82fdc00813b261283'
   sudo apt-get update
   sudo apt-get install -y ca-certificates curl
   installer="$(mktemp /tmp/mediahub-install.XXXXXX)"
@@ -187,6 +187,7 @@ sudo bash scripts/check_launch.sh
 | PostgreSQL | داده‌های پایدار برنامه |
 | Redis | صف کارها و وضعیت موقت |
 | Local Bot API | سرویس API تلگرام برای انتقال محلی رسانه |
+| bgutil-provider | سرویس توکن یوتیوب در شبکهٔ داخلی Docker |
 
 پردازش رسانه با yt-dlp و FFmpeg انجام می‌شود. Alembic تغییرات ساختار دیتابیس را مدیریت می‌کند و Docker Compose استقرار سرویس‌ها را تعریف می‌کند.
 

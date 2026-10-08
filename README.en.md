@@ -12,7 +12,7 @@ This README is available in Persian, English, Russian, and Simplified Chinese. T
 
 **Version 1 release candidate: `v1.0.0-rc.1`.** The current implementation is on the [`feature/admin-foundation`](https://github.com/ataamini-bot/mediahub-ai/tree/feature/admin-foundation) branch. This README describes that candidate; the repository's default branch may contain an earlier version.
 
-The installation command below uses the pinned candidate commit `f793c3fe06dafcce0239922577bf7bb64eb756ce`, which passed [CI](https://github.com/ataamini-bot/mediahub-ai/actions/runs/36895762828). A stable v1 release remains subject to live acceptance and deployment checks.
+The installation command below uses the pinned candidate commit `71ba5a1a5daa2183f730d5d82fdc00813b261283`, which passed [CI](https://github.com/ataamini-bot/mediahub-ai/actions/runs/37816641875). A stable v1 release remains subject to live acceptance and deployment checks.
 
 ## Features
 
@@ -70,7 +70,7 @@ Run this on a fresh server where `/opt/mediahub-ai` does not already exist:
 ```bash
 (
   set -euo pipefail
-  release='f793c3fe06dafcce0239922577bf7bb64eb756ce'
+  release='71ba5a1a5daa2183f730d5d82fdc00813b261283'
   sudo apt-get update
   sudo apt-get install -y ca-certificates curl
   installer="$(mktemp /tmp/mediahub-install.XXXXXX)"
@@ -169,6 +169,7 @@ Deleting a server-side file does not remove the copy already delivered in Telegr
 | PostgreSQL | Persistent application data |
 | Redis | Task queue and temporary state |
 | Local Bot API | Telegram API service for local media transfer |
+| bgutil-provider | YouTube proof-of-origin token service on the internal Docker network |
 
 Media processing uses yt-dlp and FFmpeg. Database changes are managed with Alembic. Docker Compose defines the deployment.
 

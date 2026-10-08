@@ -12,7 +12,7 @@ MediaHub объединяет инструменты для работы с ме
 
 **Кандидат в релиз версии 1: `v1.0.0-rc.1`.** Текущая реализация находится в ветке [`feature/admin-foundation`](https://github.com/ataamini-bot/mediahub-ai/tree/feature/admin-foundation). Этот README описывает именно её; ветка репозитория по умолчанию может содержать более раннюю версию.
 
-Команда установки ниже использует фиксированный коммит `f793c3fe06dafcce0239922577bf7bb64eb756ce`, успешно прошедший [CI](https://github.com/ataamini-bot/mediahub-ai/actions/runs/36895762828). Выпуск стабильной версии 1 зависит от завершения приёмочных испытаний в реальных условиях и проверки развёртывания.
+Команда установки ниже использует фиксированный коммит `71ba5a1a5daa2183f730d5d82fdc00813b261283`, успешно прошедший [CI](https://github.com/ataamini-bot/mediahub-ai/actions/runs/37816641875). Выпуск стабильной версии 1 зависит от завершения приёмочных испытаний в реальных условиях и проверки развёртывания.
 
 ## Возможности
 
@@ -70,7 +70,7 @@ MediaHub объединяет инструменты для работы с ме
 ```bash
 (
   set -euo pipefail
-  release='f793c3fe06dafcce0239922577bf7bb64eb756ce'
+  release='71ba5a1a5daa2183f730d5d82fdc00813b261283'
   sudo apt-get update
   sudo apt-get install -y ca-certificates curl
   installer="$(mktemp /tmp/mediahub-install.XXXXXX)"
@@ -169,6 +169,7 @@ sudo bash scripts/check_launch.sh
 | PostgreSQL | Постоянные данные приложения |
 | Redis | Очередь заданий и временное состояние |
 | Local Bot API | API-сервис Telegram для локальной передачи медиа |
+| bgutil-provider | Сервис токенов YouTube во внутренней сети Docker |
 
 Для обработки медиа используются yt-dlp и FFmpeg. Миграциями базы данных управляет Alembic. Конфигурация развёртывания задаётся в Docker Compose.
 

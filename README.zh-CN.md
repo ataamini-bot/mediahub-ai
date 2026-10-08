@@ -12,7 +12,7 @@ MediaHub 将媒体工具和管理功能整合到 Telegram 中：用户发送链�
 
 **版本 1 的候选发布版：`v1.0.0-rc.1`。** 当前实现位于 [`feature/admin-foundation`](https://github.com/ataamini-bot/mediahub-ai/tree/feature/admin-foundation) 分支。本 README 描述的是该候选版本；仓库默认分支可能仍包含较早版本。
 
-下方安装命令固定使用提交 `f793c3fe06dafcce0239922577bf7bb64eb756ce`，该提交已通过 [CI 检查](https://github.com/ataamini-bot/mediahub-ai/actions/runs/36895762828)。版本 1 的稳定发布仍需完成实际环境验收和部署检查。
+下方安装命令固定使用提交 `71ba5a1a5daa2183f730d5d82fdc00813b261283`，该提交已通过 [CI 检查](https://github.com/ataamini-bot/mediahub-ai/actions/runs/37816641875)。版本 1 的稳定发布仍需完成实际环境验收和部署检查。
 
 ## 功能
 
@@ -70,7 +70,7 @@ MediaHub 将媒体工具和管理功能整合到 Telegram 中：用户发送链�
 ```bash
 (
   set -euo pipefail
-  release='f793c3fe06dafcce0239922577bf7bb64eb756ce'
+  release='71ba5a1a5daa2183f730d5d82fdc00813b261283'
   sudo apt-get update
   sudo apt-get install -y ca-certificates curl
   installer="$(mktemp /tmp/mediahub-install.XXXXXX)"
@@ -169,6 +169,7 @@ sudo bash scripts/check_launch.sh
 | PostgreSQL | 应用持久化数据 |
 | Redis | 任务队列和临时状态 |
 | Local Bot API | 用于本地媒体传输的 Telegram API 服务 |
+| bgutil-provider | Docker 内部网络中的 YouTube 来源证明令牌服务 |
 
 媒体处理使用 yt-dlp 和 FFmpeg，数据库迁移由 Alembic 管理，部署配置由 Docker Compose 定义。
 
