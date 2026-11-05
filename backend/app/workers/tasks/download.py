@@ -17,6 +17,7 @@ import yt_dlp
 from sqlalchemy import select
 
 from app.db.worker_session import WorkerSessionLocal
+from app.services.instagram_formats import instagram_video_choices
 from app.models.download_job import (
     DownloadJob,
     DownloadJobStatus,
@@ -2445,584 +2446,111 @@ def _cleanup_uploaded_source_reference(source_url: str | None) -> None:
 # iOS / Instagram video compatibility
 # ============================================================
 
-def _probe_video_codec_for_ios(
-    file_path: Path,
-) -> tuple[
-    str | None,
-    str | None,
-]:
-
-    try:
-
-        result = subprocess.run(
-            [
-                "ffprobe",
-                "-v",
-                "error",
-                "-select_streams",
-                "v:0",
-                "-show_entries",
-                "stream=codec_name,pix_fmt",
-                "-of",
-                "csv=p=0:s=|",
-                str(
-                    file_path
-                ),
-            ],
-            capture_output=True,
-            text=True,
-            check=True,
-            timeout=30,
-        )
-
-    except (
-        FileNotFoundError,
-        subprocess.SubprocessError,
-        OSError,
-    ):
-
-        return (
-            None,
-            None,
-        )
-
-    value = (
-        result.stdout
-        .strip()
-    )
-
-    if not value:
-
-        return (
-            None,
-            None,
-        )
-
-    parts = [
-        part
-        .strip()
-        .lower()
-        for part
-        in value.split(
-            "|"
-        )
-    ]
-
-    codec_name = (
-        parts[0]
-        if parts
-        and parts[0]
-        else None
-    )
-
-    pixel_format = (
-        parts[1]
-        if len(parts) > 1
-        and parts[1]
-        else None
-    )
-
+def _ios_streams(probe: dict | None) -> tuple[dict, dict]:
+    streams = (probe or {}).get("streams") or []
     return (
-        codec_name,
-        pixel_format,
+        next((s for s in streams if s.get("codec_type") == "video"), {}),
+        next((s for s in streams if s.get("codec_type") == "audio"), {}),
     )
+
+
+def _ios_video_compatible(stream: dict) -> bool:
+    return stream.get("codec_name") == "h264" and stream.get("pix_fmt") == "yuv420p"
+
+
+def _ios_audio_compatible(stream: dict) -> bool:
+    return stream.get("codec_name") == "aac" and stream.get("profile") == "LC"
 
 
 def _normalize_instagram_video_for_ios(
-    job_id: int,
-    file_path: Path,
-    max_download_bytes: int,
+    job_id: int, file_path: Path, max_download_bytes: int,
 ) -> Path:
+    started = time.monotonic()
+    source_size = file_path.stat().st_size
+    if source_size <= 0 or source_size > max_download_bytes:
+        return file_path  # The caller rejects empty and over-limit files.
 
-    codec_name, pixel_format = (
-        _probe_video_codec_for_ios(
-            file_path
-        )
-    )
-
-    is_compatible = (
-        file_path.suffix.lower()
-        == ".mp4"
-        and codec_name
-        == "h264"
-        and pixel_format
-        == "yuv420p"
-    )
-
+    probe = _probe_media_file(file_path)
+    video, audio = _ios_streams(probe)
+    if not video:
+        raise RuntimeError("Unable to inspect Instagram video for iOS normalization")
+    format_info = (probe or {}).get("format") or {}
+    copy_video = _ios_video_compatible(video)
+    copy_audio = _ios_audio_compatible(audio)
+    mp4 = file_path.suffix.lower() == ".mp4" and "mp4" in (
+        format_info.get("format_name") or ""
+    ).split(",")
+    compatible = mp4 and copy_video and (not audio or copy_audio)
     print(
-        "Instagram iOS compatibility check: "
-        f"job={job_id}, "
-        f"file={file_path}, "
-        f"codec={codec_name}, "
-        f"pix_fmt={pixel_format}, "
-        f"compatible={is_compatible}"
+        f"Instagram iOS compatibility check: job={job_id}, codec={video.get('codec_name')}, "
+        f"pix_fmt={video.get('pix_fmt')}, compatible={compatible}"
     )
-
-    # --------------------------------------------------------
-    # Already compatible:
-    #
-    # H.264 + yuv420p inside MP4.
-    # Do not waste CPU by transcoding it again.
-    # --------------------------------------------------------
-
-    if is_compatible:
-
+    if compatible:
+        print(f"Instagram iOS ready: job={job_id}, mode=passthrough, elapsed_s={time.monotonic()-started:.2f}")
         return file_path
 
-    # --------------------------------------------------------
-    # Do not waste time transcoding an output that will be
-    # rejected by the global size check anyway.
-    # --------------------------------------------------------
-
-    try:
-
-        source_size = (
-            file_path.stat()
-            .st_size
-        )
-
-    except OSError as exc:
-
-        raise RuntimeError(
-            "Unable to inspect video "
-            "before iOS normalization"
-        ) from exc
-
-    if (
-        source_size <= 0
-        or source_size
-        > max_download_bytes
-    ):
-
-        return file_path
-
-    # --------------------------------------------------------
-    # Size-aware H.264 normalization
-    #
-    # Instagram may provide an efficient VP9 stream. Encoding
-    # that stream with an unconstrained CRF can make the final
-    # H.264 file several times larger than the size shown to
-    # the user.
-    #
-    # When duration is available, keep the final average
-    # bitrate close to the already-downloaded source file.
-    # --------------------------------------------------------
-
-    probe = (
-        _probe_media_file(
-            file_path
-        )
+    mode = "remux" if copy_video else "transcode_video"
+    if copy_video and audio and not copy_audio:
+        mode = "transcode_audio"
+    audio_options = (
+        ["-an"] if not audio else ["-c:a", "copy"] if copy_audio else
+        ["-c:a", "aac", "-profile:a", "aac_low", "-b:a", "128k"]
     )
-
-    duration_seconds: (
-        float
-        | None
-    ) = None
-
-    has_audio_stream = False
-
-    if isinstance(
-        probe,
-        dict,
-    ):
-
-        format_info = (
-            probe.get(
-                "format"
-            )
-            or {}
-        )
-
-        if isinstance(
-            format_info,
-            dict,
-        ):
-
-            try:
-
-                candidate_duration = float(
-                    format_info.get(
-                        "duration"
-                    )
-                    or 0
-                )
-
-            except (
-                TypeError,
-                ValueError,
-            ):
-
-                candidate_duration = 0.0
-
-            if candidate_duration > 0:
-
-                duration_seconds = (
-                    candidate_duration
-                )
-
-        streams = (
-            probe.get(
-                "streams"
-            )
-            or []
-        )
-
-        if isinstance(
-            streams,
-            list,
-        ):
-
-            has_audio_stream = any(
-                isinstance(
-                    stream,
-                    dict,
-                )
-                and stream.get(
-                    "codec_type"
-                )
-                == "audio"
-                for stream in streams
-            )
-
-    video_encoding_options = [
-        "-crf",
-        "20",
-    ]
-
-    target_video_bitrate: (
-        int
-        | None
-    ) = None
-
-    if (
-        duration_seconds
-        is not None
-        and duration_seconds > 0
-    ):
-
-        source_total_bitrate = int(
-            (
-                source_size
-                * 8
-            )
-            / duration_seconds
-        )
-
-        target_audio_bitrate = (
-            128_000
-            if has_audio_stream
-            else 0
-        )
-
-        # Leave a small margin for MP4/container overhead.
-        target_video_bitrate = max(
-            250_000,
-            int(
-                source_total_bitrate
-                * 0.96
-            )
-            - target_audio_bitrate,
-        )
-
-        video_encoding_options = [
-            "-b:v",
-            str(
-                target_video_bitrate
-            ),
-
-            "-maxrate",
-            str(
-                int(
-                    target_video_bitrate
-                    * 1.5
-                )
-            ),
-
-            "-bufsize",
-            str(
-                target_video_bitrate
-                * 2
-            ),
-        ]
-
-    print(
-        "Instagram iOS size control: "
-        f"job={job_id}, "
-        f"source_size={source_size}, "
-        f"duration={duration_seconds}, "
-        f"target_video_bitrate="
-        f"{target_video_bitrate}"
-    )
-
-    # --------------------------------------------------------
-    # .part is intentional:
-    #
-    # _find_final_output_file() ignores .part files, so a
-    # failed/interrupted normalization cannot later be selected
-    # as a completed download.
-    # --------------------------------------------------------
-
-    temporary_path = (
-        DOWNLOAD_DIR
-        / (
-            f"{job_id}"
-            ".ios-normalized.mp4.part"
-        )
-    )
-
-    final_path = (
-        DOWNLOAD_DIR
-        / f"{job_id}.mp4"
-    )
-
-    try:
-
-        temporary_path.unlink()
-
-    except FileNotFoundError:
-
-        pass
-
-    except OSError as exc:
-
-        raise RuntimeError(
-            "Unable to prepare temporary "
-            "iOS video output"
-        ) from exc
-
-    print(
-        "Normalizing Instagram video "
-        "for iOS compatibility: "
-        f"job={job_id}, "
-        f"codec={codec_name}, "
-        f"pix_fmt={pixel_format}"
-    )
-
-    command = [
-        "ffmpeg",
-        "-y",
-        "-v",
-        "error",
-
-        "-i",
-        str(
-            file_path
-        ),
-
-        "-map",
-        "0:v:0",
-
-        "-map",
-        "0:a:0?",
-
-        "-c:v",
-        "libx264",
-
-        "-preset",
-        "fast",
-
-        *video_encoding_options,
-
-        "-pix_fmt",
-        "yuv420p",
-
-        "-c:a",
-        "aac",
-
-        "-profile:a",
-        "aac_low",
-
-        "-b:a",
-        "128k",
-
-        "-movflags",
-        "+faststart",
-
-        "-f",
-        "mp4",
-
-        str(
-            temporary_path
-        ),
-    ]
-
-    try:
-
-        result = subprocess.run(
-            command,
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-
-    except FileNotFoundError as exc:
-
-        raise RuntimeError(
-            "FFmpeg is not available "
-            "for iOS video normalization"
-        ) from exc
-
-    except OSError as exc:
-
-        raise RuntimeError(
-            "Unable to start FFmpeg "
-            "for iOS video normalization"
-        ) from exc
-
-    if (
-        result.returncode
-        != 0
-    ):
-
+    video_options = ["-c:v", "copy"]
+    if not copy_video:
+        # Keep the bitrate budget close to the source even for efficient VP9.
+        # The preset changes encoding effort, not the frame size or frame rate.
         try:
-
-            temporary_path.unlink()
-
-        except FileNotFoundError:
-
-            pass
-
-        error_text = (
-            result.stderr
-            .strip()
-        )
-
-        if len(
-            error_text
-        ) > 2000:
-
-            error_text = (
-                error_text[
-                    -2000:
-                ]
-            )
-
-        raise RuntimeError(
-            "iOS video normalization "
-            "failed"
-            + (
-                f": {error_text}"
-                if error_text
-                else ""
-            )
-        )
-
-    if (
-        not temporary_path.exists()
-    ):
-
-        raise RuntimeError(
-            "iOS video normalization "
-            "did not create an output file"
-        )
-
-    if (
-        temporary_path.stat()
-        .st_size
-        <= 0
-    ):
-
-        try:
-
-            temporary_path.unlink()
-
-        except FileNotFoundError:
-
-            pass
-
-        raise RuntimeError(
-            "iOS normalized video is empty"
-        )
-
-    normalized_codec, normalized_pix_fmt = (
-        _probe_video_codec_for_ios(
-            temporary_path
-        )
-    )
-
-    if (
-        normalized_codec
-        != "h264"
-        or normalized_pix_fmt
-        != "yuv420p"
-    ):
-
-        try:
-
-            temporary_path.unlink()
-
-        except FileNotFoundError:
-
-            pass
-
-        raise RuntimeError(
-            "iOS normalized video "
-            "failed codec validation: "
-            f"codec={normalized_codec}, "
-            f"pix_fmt={normalized_pix_fmt}"
-        )
-
-    # --------------------------------------------------------
-    # Atomic replacement.
-    #
-    # The original file stays untouched until FFmpeg has
-    # produced and validated the complete replacement.
-    # --------------------------------------------------------
-
-    original_path = (
-        file_path
-    )
-
-    try:
-
-        temporary_path.replace(
-            final_path
-        )
-
-    except OSError as exc:
-
-        try:
-
-            temporary_path.unlink()
-
-        except FileNotFoundError:
-
-            pass
-
-        raise RuntimeError(
-            "Unable to install "
-            "iOS-compatible video"
-        ) from exc
-
-    if (
-        original_path
-        != final_path
-        and original_path.exists()
-    ):
-
-        try:
-
-            original_path.unlink()
-
-        except OSError as exc:
-
+            duration = float(format_info.get("duration") or 0)
+        except (ValueError, TypeError):
+            duration = 0
+        rate_options = ["-crf", "20"]
+        if duration > 0:
+            audio_rate = 128000 if audio else 0
+            if copy_audio:
+                try:
+                    measured_rate = int(audio.get("bit_rate") or 0)
+                    if measured_rate > 0:
+                        audio_rate = measured_rate
+                except (ValueError, TypeError):
+                    pass
+            target = max(250000, int(source_size * 8 / duration * 0.96) - audio_rate)
+            rate_options = ["-b:v", str(target), "-maxrate", str(target * 3 // 2), "-bufsize", str(target * 2)]
             print(
-                "Unable to delete original "
-                "incompatible video: "
-                f"{type(exc).__name__}: "
-                f"{exc}"
+                f"Instagram iOS size control: job={job_id}, source_size={source_size}, "
+                f"duration={duration}, target_video_bitrate={target}"
             )
+        video_options = ["-c:v", "libx264", "-preset", "veryfast", *rate_options, "-pix_fmt", "yuv420p"]
 
-    print(
-        "Instagram video normalized "
-        "for iOS: "
-        f"job={job_id}, "
-        f"file={final_path}, "
-        "codec=h264, "
-        "pix_fmt=yuv420p"
-    )
-
-    return final_path
+    temporary = DOWNLOAD_DIR / f"{job_id}.ios-normalized.mp4.part"
+    final = DOWNLOAD_DIR / f"{job_id}.mp4"
+    print(f"Normalizing Instagram video for iOS compatibility: job={job_id}, mode={mode}")
+    try:
+        command = [
+            "ffmpeg", "-nostdin", "-y", "-v", "error", "-i", str(file_path),
+            "-map", "0:v:0", "-map", "0:a:0?", *video_options, *audio_options,
+            "-movflags", "+faststart", "-f", "mp4", str(temporary),
+        ]
+        result = subprocess.run(command, capture_output=True, text=True)
+        if result.returncode:
+            raise RuntimeError("iOS video normalization failed: " + result.stderr.strip()[-2000:])
+        new_size = temporary.stat().st_size
+        if not 0 < new_size <= max_download_bytes:
+            raise RuntimeError("iOS normalized video is empty or exceeds the plan file-size limit")
+        out_video, out_audio = _ios_streams(_probe_media_file(temporary))
+        if (not _ios_video_compatible(out_video) or bool(audio) != bool(out_audio)
+                or (out_audio and not _ios_audio_compatible(out_audio))):
+            raise RuntimeError("iOS normalized video failed stream validation")
+        temporary.replace(final)
+    finally:
+        temporary.unlink(missing_ok=True)
+    if file_path != final:
+        try:
+            file_path.unlink(missing_ok=True)
+        except OSError as exc:
+            print(f"Unable to delete original Instagram input: job={job_id}, error={type(exc).__name__}")
+    print(f"Instagram iOS ready: job={job_id}, mode={mode}, elapsed_s={time.monotonic()-started:.2f}")
+    return final
 
 
 # ============================================================
@@ -3280,6 +2808,15 @@ def _get_non_youtube_format_selector(
         "formats",
         [],
     )
+
+    if _is_instagram_url(source_url):
+        choices = instagram_video_choices(formats)
+        if not choices:
+            raise RuntimeError(f"No usable Instagram video format found for quality {requested_quality}p")
+        quality = min(choices, key=lambda q: (abs(q - requested_quality), -q))
+        chosen, selector = choices[quality]
+        print(f"Selected Instagram format: quality={quality}p, codec={chosen.get('vcodec')}, id={chosen['format_id']}")
+        return selector
 
     usable_candidates: list[
         dict
@@ -4912,18 +4449,10 @@ def download_task(
         # first video frame.
         #
         # Only incompatible Instagram video outputs are
-        # normalized. Existing H.264/yuv420p MP4 files are
-        # passed through unchanged.
+        # normalized. Compatible video and audio tracks are copied.
         # ====================================================
 
-        if (
-            media_type
-            == "video"
-            and "instagram.com"
-            in str(
-                source_url
-            ).lower()
-        ):
+        if media_type == "video" and _is_instagram_url(str(source_url)):
 
             _check_job_control(
                 job_id

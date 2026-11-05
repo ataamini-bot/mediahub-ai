@@ -37,6 +37,15 @@ def media_info(**changes):
                      "resolution": "1280x720", "extension": "mp4", "filesize": 1000}], **changes}
 
 
+def test_size_on_quality_button_uses_rendition_chosen_by_worker():
+    media = media_info()
+    avc = dict(media["formats"][0], format_id="avc", filesize=3000, fps=30, preferred_for_quality=True)
+    silent = dict(avc, format_id="silent", filesize=8000, fps=60, has_audio=False, preferred_for_quality=False)
+    info = {**media, "formats": [silent, avc]}
+    assert main.extract_available_quality_options(info) == [(720, 3000)]
+    assert main._media_fps_for_quality("720p", info) == 30
+
+
 def job(**changes):
     return {"id": 428, "status": "completed", "source_url": "https://example.com/post",
         "media_type": "video", "playlist_index": 3, "quality": "720p", **changes}

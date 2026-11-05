@@ -1156,6 +1156,8 @@ def _media_fps_for_quality(
 
             continue
 
+        if item.get("preferred_for_quality"):
+            return fps if fps > 0 else None
         if fps > 0:
 
             candidates.append(
@@ -2267,6 +2269,11 @@ def _select_worker_video_format(
     if not candidates:
 
         return None
+
+    # The backend marks the Instagram rendition the worker will use for this quality.
+    for candidate in candidates:
+        if candidate.get("preferred_for_quality"):
+            return candidate
 
     # ========================================================
     # 1. X/Twitter direct HTTP media

@@ -1,5 +1,7 @@
+import json
 import os
 import subprocess
+from fractions import Fraction
 
 for key, value in {
     "SECRET_KEY": "test-secret",
@@ -105,3 +107,63 @@ def test_uploaded_source_resolution_rejects_path_traversal(tmp_path, monkeypatch
     assert download_worker._resolve_uploaded_source("upload://upload-safe.mp4") == source
     with pytest.raises(RuntimeError):
         download_worker._resolve_uploaded_source("upload://../secret.mp4")
+
+
+def _packet_hashes(path, stream):
+    result = subprocess.check_output([
+        "ffprobe", "-v", "error", "-select_streams", stream, "-show_packets",
+        "-show_entries", "packet=data_hash", "-show_data_hash", "sha256", "-of", "json", str(path),
+    ])
+    return [packet["data_hash"] for packet in json.loads(result)["packets"]]
+
+
+@pytest.mark.parametrize("video,audio,ext,mode", [
+    ("libx264", "aac", "mp4", "passthrough"),
+    ("libx264", "aac", "mkv", "remux"),
+    ("libx264", "libopus", "mp4", "transcode_audio"),
+    ("libvpx-vp9", "aac", "mp4", "transcode_video"),
+    ("libvpx-vp9", None, "mp4", "transcode_video"),
+])
+def test_instagram_ios_output_preserves_picture_and_sound(video, audio, ext, mode, tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(download_worker, "DOWNLOAD_DIR", tmp_path)
+    source = tmp_path / f"3.{ext}"
+    audio_input = ["-f", "lavfi", "-i", "sine=sample_rate=48000"] if audio else []
+    subprocess.run([
+        "ffmpeg", "-nostdin", "-v", "error", "-f", "lavfi", "-i", "testsrc2=size=160x256:rate=24",
+        *audio_input, "-t", "1", "-c:v", video, "-threads", "2", "-pix_fmt", "yuv420p",
+        *(["-c:a", audio] if audio else ["-an"]), str(source),
+    ], check=True)
+    data = source.read_bytes()
+    picture = _packet_hashes(source, "v:0")
+    sound = _packet_hashes(source, "a:0") if audio else []
+
+    output = download_worker._normalize_instagram_video_for_ios(3, source, 4 * 1024 * 1024)
+    assert output == tmp_path / "3.mp4"
+    assert f"mode={mode}" in capsys.readouterr().out
+    tracks = download_worker._probe_media_file(output)["streams"]
+    track = next(t for t in tracks if t["codec_type"] == "video")
+    assert (track["codec_name"], track["pix_fmt"], track["width"], track["height"]) == ("h264", "yuv420p", 160, 256)
+    # Matroska uses millisecond timestamps; a one-second remux may report 24.024 fps.
+    assert float(Fraction(track["avg_frame_rate"])) == pytest.approx(24, abs=0.05)
+    assert int(track["nb_frames"]) == len(picture)
+    assert [(t["codec_name"], t["profile"]) for t in tracks if t["codec_type"] == "audio"] == (
+        [("aac", "LC")] if audio else []
+    )
+    if video == "libx264":
+        assert _packet_hashes(output, "v:0") == picture
+    if audio == "aac":
+        assert _packet_hashes(output, "a:0") == sound
+    if mode == "passthrough":
+        assert output.read_bytes() == data
+    assert list(tmp_path.iterdir()) == [output]
+
+
+def test_failed_instagram_conversion_keeps_source_and_discards_partial(tmp_path, monkeypatch):
+    source = tmp_path / "15.mp4"
+    source.write_bytes(b"broken video")
+    monkeypatch.setattr(download_worker, "DOWNLOAD_DIR", tmp_path)
+    monkeypatch.setattr(download_worker, "_probe_media_file", lambda _: {"streams": [
+        {"codec_type": "video", "codec_name": "vp9", "pix_fmt": "yuv420p"}]})
+    with pytest.raises(RuntimeError, match="normalization failed"):
+        download_worker._normalize_instagram_video_for_ios(15, source, 4096)
+    assert list(tmp_path.iterdir()) == [source] and source.read_bytes() == b"broken video"

@@ -300,6 +300,7 @@ class MediaFormat(
 
     has_video: bool = False
     has_audio: bool = False
+    preferred_for_quality: bool = False
 
     video_codec: (
         str

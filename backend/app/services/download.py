@@ -36,6 +36,7 @@ from app.services.media_formats import (
     normalize_output_format,
     output_format_kind,
 )
+from app.services.instagram_formats import instagram_video_choices
 from app.workers.tasks.download import (
     cleanup_paused_download,
     download_task,
@@ -1302,6 +1303,8 @@ def _normalize_format(
 def _normalize_formats(
     raw_formats: list[Any] | None,
     duration: Any = None,
+    *,
+    instagram: bool = False,
 ) -> list[
     dict[str, Any]
 ]:
@@ -1310,6 +1313,10 @@ def _normalize_formats(
         dict[str, Any]
     ] = []
 
+    preferred = (
+        {str(f["format_id"]) for f, _ in instagram_video_choices(raw_formats or []).values()}
+        if instagram else set()
+    )
     for item in (
         raw_formats
         or []
@@ -1336,9 +1343,9 @@ def _normalize_formats(
 
             continue
 
-        result.append(
-            normalized
-        )
+        if normalized["format_id"] in preferred:
+            normalized["preferred_for_quality"] = True
+        result.append(normalized)
 
     return result
 
@@ -3630,6 +3637,7 @@ class DownloadService:
                         duration=(
                             entry_duration
                         ),
+                        instagram=_is_instagram_url(source_url),
                     )
                 )
 
@@ -3856,6 +3864,7 @@ class DownloadService:
                 duration=(
                     normalized_duration
                 ),
+                instagram=_is_instagram_url(source_url),
             )
         )
 
