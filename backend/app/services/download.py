@@ -1544,60 +1544,33 @@ def _is_instagram_url(
     )
 
 
-def _get_instagram_gallery_info(
-    source_url: str,
-) -> dict[str, Any] | None:
-
-    if not _is_instagram_url(
-        source_url
-    ):
-
+def _get_instagram_raw_info(source_url: str) -> dict[str, Any] | None:
+    if not _is_instagram_url(source_url) or _is_instagram_story_url(source_url):
         return None
-
-    if _is_instagram_story_url(
-        source_url
-    ):
-
-        return None
-
     options = {
-        "quiet": True,
-        "no_warnings": True,
-        "skip_download": True,
-        "noplaylist": False,
-        "socket_timeout": 15,
-        "ignore_no_formats_error": True,
+        "quiet": True, "no_warnings": True, "skip_download": True,
+        "noplaylist": False, "socket_timeout": 15, "ignore_no_formats_error": True,
     }
-
     try:
-
-        with yt_dlp.YoutubeDL(
-            options
-        ) as ydl:
-
-            raw_info = (
-                ydl.extract_info(
-                    source_url,
-                    download=False,
-                    process=False,
-                )
-            )
-
+        with yt_dlp.YoutubeDL(options) as ydl:
+            raw_info = ydl.extract_info(source_url, download=False, process=False)
+            if not isinstance(raw_info, dict):
+                return None
+            if raw_info.get("_type") == "playlist":
+                # Gallery detection and quality selection both consume these entries.
+                raw_info["entries"] = list(raw_info.get("entries") or [])
+        return raw_info
     except Exception as exc:
-
-        print(
-            "Instagram raw yt-dlp extraction failed: "
-            f"{type(exc).__name__}: "
-            f"{exc}"
-        )
-
+        print(f"Instagram raw extraction failed: {type(exc).__name__}")
         return None
 
-    if not isinstance(
-        raw_info,
-        dict,
-    ):
 
+def _get_instagram_gallery_info(
+    source_url: str, *, raw_info: dict[str, Any] | None = None,
+) -> dict[str, Any] | None:
+    if raw_info is None:
+        raw_info = _get_instagram_raw_info(source_url)
+    if raw_info is None:
         return None
 
     if (
@@ -3079,16 +3052,11 @@ class DownloadService:
         # ====================================================
 
         instagram_gallery = None
-
-        if _is_instagram_url(
-            source_url
-        ):
-
-            instagram_gallery = (
-                _get_instagram_gallery_info(
-                    source_url
-                )
-            )
+        instagram_raw = None
+        if _is_instagram_url(source_url):
+            instagram_raw = _get_instagram_raw_info(source_url)
+            if instagram_raw is not None:
+                instagram_gallery = _get_instagram_gallery_info(source_url, raw_info=instagram_raw)
 
         if instagram_gallery:
 
@@ -3479,13 +3447,10 @@ class DownloadService:
         with yt_dlp.YoutubeDL(
             options
         ) as ydl:
-
-            info = (
-                ydl.extract_info(
-                    source_url,
-                    download=False,
-                )
-            )
+            if instagram_raw is not None:
+                info = ydl.process_ie_result(instagram_raw, download=False)
+            else:
+                info = ydl.extract_info(source_url, download=False)
 
         # ====================================================
         # Playlist / multi-video

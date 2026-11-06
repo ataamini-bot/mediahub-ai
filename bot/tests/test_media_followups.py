@@ -55,6 +55,7 @@ def job(**changes):
 def ui(monkeypatch):
     language = ui_language.set("en")
     PENDING_SELECTIONS.clear()
+    main.REPEAT_DOWNLOADS.clear()
     monkeypatch.setattr(Message, "answer", AsyncMock(return_value=message(message_id=2, text="picker")))
     monkeypatch.setattr(Message, "answer_document", AsyncMock())
     monkeypatch.setattr(Message, "edit_text", AsyncMock())
@@ -70,6 +71,7 @@ def ui(monkeypatch):
     monkeypatch.setattr(main, "create_download_job", AsyncMock(return_value={"id": 429}))
     monkeypatch.setattr(main, "wait_for_download", AsyncMock(return_value={"id": 429, "status": "cancelled"}))
     yield
+    assert not main.REPEAT_DOWNLOADS
     PENDING_SELECTIONS.clear()
     ui_language.reset(language)
 
@@ -108,6 +110,7 @@ def test_each_output_keeps_details_repeat_and_other_actions(language, output):
     assert repeat in values
     for other in {"video", "audio", "cover", "description"} - {output}:
         assert f"download_more:{other}:428" in values
+    assert ("download_compatible:428" in values) == (output == "video")
     assert all(len(value.encode("utf-8")) <= 64 for value in values)
     labels = " ".join(b.text for row in keyboard.inline_keyboard for b in row)
     assert ("Details" in labels) == (language == "en")
@@ -132,6 +135,72 @@ async def test_actual_document_filename_uses_title_and_followups_use_completed_j
     assert "download_more:audio:428" in actions(sent["reply_markup"])
     assert not path.exists()
     main.mark_download_delivered.assert_awaited_once_with(428)
+    assert "download_compatible:428" in actions(sent["reply_markup"])
+
+
+@pytest.mark.asyncio
+async def test_compatible_video_is_identified_and_does_not_offer_reconversion(ui, tmp_path):
+    path = tmp_path / "428.mp4"
+    path.write_bytes(b"compatible video")
+    await main.send_downloaded_file(message(), message(), job(file_path=str(path), output_format="mp4"), media_info())
+    sent = Message.answer_document.await_args.kwargs
+    assert "Compatible version" in sent["caption"]
+    assert "download_compatible:428" not in actions(sent["reply_markup"])
+    assert {"download_again:428", "download_details:428", "download_more:audio:428"} <= actions(sent["reply_markup"])
+    assert not path.exists()
+
+
+@pytest.mark.asyncio
+async def test_compatible_button_uses_owned_source_and_same_resolution_after_restart(ui):
+    await main.download_again_callback(callback("download_compatible:428"))
+    main.get_download_job.assert_awaited_once_with(428, telegram_id=42)
+    payload = main.create_download_job.await_args.kwargs
+    assert (payload["source_url"], payload["playlist_index"], payload["quality"]) == (
+        "https://example.com/post", 3, "720p")
+    assert payload["telegram_id"] == 42 and payload["media_type"] == "video" and payload["output_format"] == "mp4"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("saved_format", [None, "mp4"])
+async def test_repeat_preserves_fast_or_compatible_mode(ui, saved_format):
+    main.get_download_job.return_value = job(output_format=saved_format)
+    await main.download_again_callback(callback("download_again:428"))
+    assert main.create_download_job.await_args.kwargs["output_format"] == saved_format
+
+
+@pytest.mark.asyncio
+async def test_compatible_duplicate_click_does_not_queue_another_request(ui, monkeypatch):
+    started, release = asyncio.Event(), asyncio.Event()
+    async def metadata(**_):
+        started.set()
+        await release.wait()
+        return media_info()
+    monkeypatch.setattr(main, "get_media_info", metadata)
+    first = asyncio.create_task(main.download_again_callback(callback("download_compatible:428")))
+    await started.wait()
+    try:
+        await main.download_again_callback(callback("download_compatible:428"))
+    finally:
+        release.set()
+        await first
+    main.create_download_job.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("blocked", ["owner", "private_chat", "membership", "audio"])
+async def test_compatible_action_checks_authorization_and_source_type(ui, monkeypatch, blocked):
+    cb = callback("download_compatible:428")
+    if blocked == "owner":
+        main.get_download_job.side_effect = BackendAPIError(status_code=404, detail="Not found")
+    elif blocked == "private_chat":
+        cb = cb.model_copy(update={"message": message(chat=Chat(id=-10042, type="supergroup"))})
+    elif blocked == "membership":
+        monkeypatch.setattr(main, "_download_actions_allowed", AsyncMock(return_value=False))
+    else:
+        main.get_download_job.return_value = job(media_type="audio")
+    await main.download_again_callback(cb)
+    main.get_media_info.assert_not_awaited()
+    main.create_download_job.assert_not_awaited()
 
 
 @pytest.mark.asyncio

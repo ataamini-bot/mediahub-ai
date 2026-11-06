@@ -137,7 +137,10 @@ def test_instagram_ios_output_preserves_picture_and_sound(video, audio, ext, mod
     picture = _packet_hashes(source, "v:0")
     sound = _packet_hashes(source, "a:0") if audio else []
 
-    output = download_worker._normalize_instagram_video_for_ios(3, source, 4 * 1024 * 1024)
+    # The ordinary download must return the exact source bytes, even for VP9.
+    original = download_worker._prepare_requested_output(3, source, "video", None, 4 * 1024 * 1024)
+    assert original == source and original.read_bytes() == data
+    output = download_worker._prepare_requested_output(3, source, "video", "mp4", 4 * 1024 * 1024)
     assert output == tmp_path / "3.mp4"
     assert f"mode={mode}" in capsys.readouterr().out
     tracks = download_worker._probe_media_file(output)["streams"]
@@ -165,5 +168,5 @@ def test_failed_instagram_conversion_keeps_source_and_discards_partial(tmp_path,
     monkeypatch.setattr(download_worker, "_probe_media_file", lambda _: {"streams": [
         {"codec_type": "video", "codec_name": "vp9", "pix_fmt": "yuv420p"}]})
     with pytest.raises(RuntimeError, match="normalization failed"):
-        download_worker._normalize_instagram_video_for_ios(15, source, 4096)
+        download_worker._normalize_video_for_compatibility(15, source, 4096)
     assert list(tmp_path.iterdir()) == [source] and source.read_bytes() == b"broken video"

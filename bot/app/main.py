@@ -7,6 +7,7 @@ import mimetypes
 import os
 import re
 import socket
+import time
 from uuid import uuid4
 from pathlib import Path
 from urllib.parse import urljoin, urlparse
@@ -3021,15 +3022,25 @@ async def send_downloaded_file(
             "📤 <b>در حال ارسال فایل به تلگرام...</b>"
         ), reply_markup=None)
         filename = media_filename((media_info or {}).get("title"), path.suffix or ".mp4")
+        compatible = job.get("media_type") == "video" and job.get("output_format") == "mp4"
+        caption = _completed_file_caption(filename, size_label, job, media_info)
+        if job.get("media_type") == "video":
+            caption += ("\n\n📱 Compatible version" if ui_language.get() == "en" else "\n\n📱 نسخهٔ سازگار") if compatible else (
+                "\n\nIf this video does not play, tap “Compatible version”."
+                if ui_language.get() == "en" else "\n\nاگر ویدئو پخش نشد، «نسخهٔ سازگار» را بزنید."
+            )
+        upload_started = time.monotonic()
         await message.answer_document(
             document=FSInputFile(str(path), filename=filename),
             disable_content_type_detection=True,
-            caption=_completed_file_caption(filename, size_label, job, media_info),
+            caption=caption,
             parse_mode="HTML",
             reply_markup=build_completed_download_keyboard(job_id,
                 media_type=str(job.get("media_type") or "video"),
+                compatible=compatible,
                 source_media_type="image" if job.get("media_type") == "image" else _source_media_type(media_info)),
         )
+        print(f"Telegram media sent: job={job_id}, bytes={file_size}, elapsed_s={time.monotonic()-upload_started:.2f}")
         # Remove the bytes immediately after Telegram accepts the file, even
         # when delivery accounting is temporarily unreachable.
         unlink_output()
@@ -3580,220 +3591,96 @@ async def download_details_callback(
     )
 
 
-@dp.callback_query(F.data.startswith("download_again:"))
-async def download_again_callback(
-    callback: CallbackQuery,
-) -> None:
-    if (
-        not callback.data
-        or not isinstance(
-            callback.message,
-            Message,
-        )
-        or not callback.from_user
-    ):
+REPEAT_DOWNLOADS: set[tuple[int, int]] = set()
+
+
+@dp.callback_query(F.data.startswith("download_again:") | F.data.startswith("download_compatible:"))
+async def download_again_callback(callback: CallbackQuery) -> None:
+    if not callback.data or not isinstance(callback.message, Message) or not callback.from_user:
         return
-
-    try:
-
-        original_job_id = int(
-            callback.data.split(
-                ":",
-                1,
-            )[1]
-        )
-
-    except (
-        ValueError,
-        IndexError,
-    ):
-
-        await callback.answer(
-            _tr("❌ Job نامعتبر است."),
-            show_alert=True,
-        )
+    english = ui_language.get() == "en"
+    if callback.message.chat.type != "private" or callback.message.chat.id != callback.from_user.id:
+        await callback.answer("Open this file in your private bot chat." if english else
+                              "این فایل را در گفت‌وگوی خصوصی خودتان با ربات باز کنید.", show_alert=True)
         return
-
-    language = ui_language.get()
-
+    match = re.fullmatch(r"download_(again|compatible):([1-9][0-9]*)", callback.data)
+    if not match:
+        await callback.answer("Invalid download." if english else "درخواست نامعتبر است.", show_alert=True)
+        return
+    compatible = match[1] == "compatible"
+    original_job_id = int(match[2])
+    key = (callback.from_user.id, original_job_id)
+    if key in REPEAT_DOWNLOADS:
+        await callback.answer("This request is already running." if english else
+                              "این درخواست در حال انجام است.", show_alert=True)
+        return
+    REPEAT_DOWNLOADS.add(key)
     try:
-
-        original = await get_download_job(
-            original_job_id, telegram_id=callback.from_user.id
-        )
-
-        if str(
-            original.get(
-                "status"
-            )
-            or ""
-        ) != "completed":
-
-            await callback.answer(
-                "This download is not ready to repeat."
-                if language == "en"
-                else "این دانلود هنوز برای تکرار آماده نیست.",
-                show_alert=True,
-            )
+        original = await get_download_job(original_job_id, telegram_id=callback.from_user.id)
+        if original.get("status") != "completed":
+            await callback.answer("This download is not ready to repeat." if english else
+                                  "این دانلود هنوز برای تکرار آماده نیست.", show_alert=True)
             return
-
-        source_url = str(
-            original.get(
-                "source_url"
-            )
-            or ""
-        )
-        media_type = str(
-            original.get(
-                "media_type"
-            )
-            or "video"
-        ).lower()
-
-        if not source_url:
-
-            raise RuntimeError(
-                "Original source URL is unavailable"
-            )
-
+        media_type = str(original.get("media_type") or "video").lower()
+        if compatible and media_type != "video":
+            await callback.answer("Choose a video file." if english else "یک فایل ویدئویی انتخاب کنید.", show_alert=True)
+            return
         if media_type == "convert":
-
-            await callback.answer(
-                "Upload the original file again to convert it again."
-                if language == "en"
-                else "برای تبدیل دوباره، فایل اصلی را دوباره ارسال کنید.",
-                show_alert=True,
-            )
+            await callback.answer("Upload the original file again to convert it again." if english else
+                                  "برای تبدیل دوباره، فایل اصلی را دوباره ارسال کنید.", show_alert=True)
             return
-
+        source_url = str(original.get("source_url") or "")
+        if not source_url:
+            raise RuntimeError("Original source URL is unavailable")
         if not await _download_actions_allowed(callback):
             await callback.answer()
             return
-
-        await callback.answer(
-            "Starting the download again…"
-            if language == "en"
-            else "دانلود مجدد شروع شد…"
-        )
-
+        await callback.answer(("Preparing the compatible version…" if english else "در حال آماده‌سازی نسخهٔ سازگار…")
+                              if compatible else ("Starting the download again…" if english else "دانلود مجدد شروع شد…"))
+        # The source bytes have already been deleted. Retrieve the same source
+        # and playlist item; never reuse another user's file or cached media.
         media_info: dict = {}
-
         try:
-
-            refreshed_info = await get_media_info(
-                source_url=source_url,
-                playlist_index=original.get(
-                    "playlist_index"
-                ),
-            )
-
-            if isinstance(
-                refreshed_info,
-                dict,
-            ):
-
-                media_info = refreshed_info
-
+            refreshed = await get_media_info(source_url=source_url, playlist_index=original.get("playlist_index"))
+            if isinstance(refreshed, dict):
+                media_info = refreshed
         except Exception as exc:
-
-            print(
-                "Could not refresh redownload metadata: "
-                f"{type(exc).__name__}: {exc}"
-            )
-
-        quality = str(
-            original.get(
-                "quality"
-            )
-            or (
-                f"audio/{str(original.get('output_format') or '').upper()}"
-                if media_type == "audio"
-                else (
-                    "Original"
-                    if language == "en"
-                    else "اصلی"
-                )
-            )
-        )
+            print(f"Could not refresh redownload metadata: {type(exc).__name__}")
+        quality = str(original.get("quality") or (
+            f"audio/{str(original.get('output_format') or '').upper()}" if media_type == "audio"
+            else "Original" if english else "اصلی"
+        ))
         status_message = await callback.message.answer(
-            (
-                "⏳ <b>Preparing your download…</b>"
-                if language == "en"
-                else "⏳ <b>در حال آماده‌سازی دانلود…</b>"
-            ),
+            ("⏳ <b>Preparing the compatible version. This may take a little longer…</b>" if english else
+             "⏳ <b>در حال آماده‌سازی نسخهٔ سازگار؛ این مرحله ممکن است کمی بیشتر طول بکشد…</b>")
+            if compatible else ("⏳ <b>Preparing your download…</b>" if english else "⏳ <b>در حال آماده‌سازی دانلود…</b>"),
             parse_mode="HTML",
         )
         job = await create_download_job(
-            source_url=source_url,
-            telegram_id=callback.from_user.id,
-            format_id=original.get("format_id"),
-            quality=original.get("quality"),
-            media_type=media_type,
-            output_format=original.get("output_format"),
-            playlist_index=original.get("playlist_index"),
-            estimated_size_bytes=original.get("total_bytes"),
+            source_url=source_url, telegram_id=callback.from_user.id,
+            format_id=original.get("format_id"), quality=original.get("quality"), media_type=media_type,
+            output_format="mp4" if compatible else original.get("output_format"),
+            playlist_index=original.get("playlist_index"), estimated_size_bytes=original.get("total_bytes"),
         )
-        job_id = int(
-            job[
-                "id"
-            ]
-        )
-        await safe_edit_message(
-            status_message,
-            _queued_download_text(
-                quality,
-                media_info,
-            ),
-            reply_markup=build_active_download_keyboard(
-                job_id
-            ),
-        )
-        completed = await wait_for_download(
-            job_id,
-            status_message,
-            quality,
-            media_info,
-        )
-
+        job_id = int(job["id"])
+        await safe_edit_message(status_message, _queued_download_text(quality, media_info),
+                                reply_markup=build_active_download_keyboard(job_id))
+        completed = await wait_for_download(job_id, status_message, quality, media_info)
         if completed.get("status") == "completed":
-
-            await send_downloaded_file(
-                message=status_message,
-                status_message=status_message,
-                job=completed,
-                media_info=media_info,
-            )
-
+            await send_downloaded_file(message=status_message, status_message=status_message,
+                                       job=completed, media_info=media_info)
             try:
-
                 await status_message.delete()
-
             except Exception as exc:
-
-                print(
-                    "Redownload status cleanup failed: "
-                    f"{type(exc).__name__}: {exc}"
-                )
-
+                print(f"Redownload status cleanup failed: {type(exc).__name__}")
     except Exception as exc:
-
-        print(
-            "Redownload failed: "
-            f"{type(exc).__name__}: {exc}"
-        )
+        print(f"Redownload failed: {type(exc).__name__}")
         await callback.message.answer(
-            (
-                "❌ The download could not be started again.\n\n"
-                if language == "en"
-                else "❌ دانلود مجدد شروع نشد.\n\n"
-            )
-            + html.escape(
-                download_error_text(
-                    exc
-                )[:800]
-            ),
-            parse_mode="HTML",
+            ("❌ The download could not be started again.\n\n" if english else "❌ دانلود مجدد شروع نشد.\n\n")
+            + html.escape(download_error_text(exc)[:800]), parse_mode="HTML",
         )
+    finally:
+        REPEAT_DOWNLOADS.discard(key)
 
 
 # ============================================================

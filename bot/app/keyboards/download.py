@@ -71,6 +71,7 @@ def build_paused_download_keyboard(
 
 def _media_output_keyboard(
     reference: str, output: str, *, persistent: bool, source_media_type: str = "video",
+    compatible: bool = False,
 ) -> InlineKeyboardMarkup:
     from app.middleware.interface import ui_language
     english = ui_language.get() == "en"
@@ -91,6 +92,11 @@ def _media_output_keyboard(
             f"download_details:{reference}" if persistent else f"media:details:{reference}"
         )),
     ]]
+    if persistent and output == "video" and source_media_type == "video" and not compatible:
+        rows.append([InlineKeyboardButton(
+            text="📱 Compatible version" if english else "📱 نسخهٔ سازگار",
+            callback_data=f"download_compatible:{reference}",
+        )])
     labels = {
         "video": "🎬 Video qualities" if english else "🎬 کیفیت‌های ویدئو",
         "audio": "🎵 Extract audio" if english else "🎵 استخراج صدا",
@@ -111,10 +117,11 @@ def _media_output_keyboard(
 
 def build_completed_download_keyboard(
     job_id: int, *, media_type: str | None = None, source_media_type: str = "video",
+    compatible: bool = False,
 ) -> InlineKeyboardMarkup:
     """Completed-job references survive restart and are checked against the owner."""
     return _media_output_keyboard(str(job_id), media_type or "unknown", persistent=True,
-                                  source_media_type=source_media_type)
+                                  source_media_type=source_media_type, compatible=compatible)
 
 
 def build_selection_output_keyboard(

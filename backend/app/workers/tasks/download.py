@@ -4,7 +4,7 @@ from datetime import (
     timezone,
 )
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 from urllib.parse import urlparse
 import json
 import os
@@ -2462,7 +2462,7 @@ def _ios_audio_compatible(stream: dict) -> bool:
     return stream.get("codec_name") == "aac" and stream.get("profile") == "LC"
 
 
-def _normalize_instagram_video_for_ios(
+def _normalize_video_for_compatibility(
     job_id: int, file_path: Path, max_download_bytes: int,
 ) -> Path:
     started = time.monotonic()
@@ -2473,7 +2473,7 @@ def _normalize_instagram_video_for_ios(
     probe = _probe_media_file(file_path)
     video, audio = _ios_streams(probe)
     if not video:
-        raise RuntimeError("Unable to inspect Instagram video for iOS normalization")
+        raise RuntimeError("Unable to inspect video for compatibility conversion")
     format_info = (probe or {}).get("format") or {}
     copy_video = _ios_video_compatible(video)
     copy_audio = _ios_audio_compatible(audio)
@@ -2482,11 +2482,11 @@ def _normalize_instagram_video_for_ios(
     ).split(",")
     compatible = mp4 and copy_video and (not audio or copy_audio)
     print(
-        f"Instagram iOS compatibility check: job={job_id}, codec={video.get('codec_name')}, "
+        f"Video compatibility check: job={job_id}, codec={video.get('codec_name')}, "
         f"pix_fmt={video.get('pix_fmt')}, compatible={compatible}"
     )
     if compatible:
-        print(f"Instagram iOS ready: job={job_id}, mode=passthrough, elapsed_s={time.monotonic()-started:.2f}")
+        print(f"Video compatibility ready: job={job_id}, mode=passthrough, elapsed_s={time.monotonic()-started:.2f}")
         return file_path
 
     mode = "remux" if copy_video else "transcode_video"
@@ -2517,14 +2517,14 @@ def _normalize_instagram_video_for_ios(
             target = max(250000, int(source_size * 8 / duration * 0.96) - audio_rate)
             rate_options = ["-b:v", str(target), "-maxrate", str(target * 3 // 2), "-bufsize", str(target * 2)]
             print(
-                f"Instagram iOS size control: job={job_id}, source_size={source_size}, "
+                f"Video compatibility size control: job={job_id}, source_size={source_size}, "
                 f"duration={duration}, target_video_bitrate={target}"
             )
         video_options = ["-c:v", "libx264", "-preset", "veryfast", *rate_options, "-pix_fmt", "yuv420p"]
 
     temporary = DOWNLOAD_DIR / f"{job_id}.ios-normalized.mp4.part"
     final = DOWNLOAD_DIR / f"{job_id}.mp4"
-    print(f"Normalizing Instagram video for iOS compatibility: job={job_id}, mode={mode}")
+    print(f"Video compatibility start: job={job_id}, mode={mode}")
     try:
         command = [
             "ffmpeg", "-nostdin", "-y", "-v", "error", "-i", str(file_path),
@@ -2549,8 +2549,25 @@ def _normalize_instagram_video_for_ios(
             file_path.unlink(missing_ok=True)
         except OSError as exc:
             print(f"Unable to delete original Instagram input: job={job_id}, error={type(exc).__name__}")
-    print(f"Instagram iOS ready: job={job_id}, mode={mode}, elapsed_s={time.monotonic()-started:.2f}")
+    print(f"Video compatibility ready: job={job_id}, mode={mode}, elapsed_s={time.monotonic()-started:.2f}")
     return final
+
+
+def _prepare_requested_output(
+    job_id: int, file_path: Path, media_type: str | None,
+    output_format: str | None, max_download_bytes: int,
+) -> Path:
+    # An MP4 video request is the opt-in H.264/AAC compatible version.
+    # Ordinary video downloads retain their original streams.
+    if media_type == "video" and output_format == "mp4":
+        return _normalize_video_for_compatibility(job_id, file_path, max_download_bytes)
+    if output_format:
+        return _run_ffmpeg_conversion(
+            job_id=job_id, input_path=file_path, output_format=output_format,
+            max_download_bytes=max_download_bytes,
+        )
+    print(f"Media output ready: job={job_id}, mode=original")
+    return file_path
 
 
 # ============================================================
@@ -3127,13 +3144,47 @@ def _get_non_youtube_format_selector(
 # Format selector
 # ============================================================
 
+def _instagram_format_selector(requested_quality: int) -> Callable:
+    """Select from yt-dlp's current extraction, without requesting the post twice."""
+    def select_format(context: dict):
+        formats = context.get("formats") or []
+        choices = instagram_video_choices(formats)
+        if not choices:
+            raise RuntimeError(f"No usable Instagram video format found for quality {requested_quality}p")
+        quality = min(choices, key=lambda q: (abs(q - requested_quality), -q))
+        video, _ = choices[quality]
+        audio_formats = [
+            f for f in formats if f.get("vcodec") == "none"
+            and f.get("acodec") not in (None, "none") and not f.get("has_drm")
+        ]
+        print(f"Selected Instagram format: quality={quality}p, codec={video.get('vcodec')}, id={video['format_id']}")
+        if video.get("acodec") not in (None, "none") or not audio_formats:
+            yield video
+            return
+        # yt-dlp supplies formats in ascending preference order.
+        audio = next((f for f in reversed(audio_formats) if f.get("ext") == "m4a"), audio_formats[-1])
+        yield {
+            "format_id": f"{video['format_id']}+{audio['format_id']}",
+            "ext": video["ext"], "requested_formats": [video, audio],
+            "protocol": f"{video['protocol']}+{audio['protocol']}",
+            "vcodec": video.get("vcodec"), "acodec": audio.get("acodec"),
+            "width": video.get("width"), "height": video.get("height"), "fps": video.get("fps"),
+        }
+    return select_format
+
+
 def _get_format_selector(
     source_url: str,
     format_id: str | None,
     quality: str | None,
     media_type: str | None,
     playlist_index: int | None = None,
-) -> str:
+) -> str | Callable:
+
+    if _is_instagram_url(source_url) and not format_id and media_type != "audio":
+        requested = _get_quality_height(quality)
+        if requested is not None:
+            return _instagram_format_selector(requested)
 
     # ========================================================
     # Audio
@@ -4410,9 +4461,10 @@ def download_task(
                 f"youtube="
                 f"{_is_youtube_url(source_url)}, "
                 f"selector="
-                f"{format_selector}"
+                f"{format_selector if isinstance(format_selector, str) else 'instagram-auto'}"
             )
 
+            download_started = time.monotonic()
             with yt_dlp.YoutubeDL(
                 ydl_options
             ) as ydl:
@@ -4422,6 +4474,7 @@ def download_task(
                         direct_download_url,
                     ]
                 )
+            print(f"Media download complete: job={job_id}, elapsed_s={time.monotonic()-download_started:.2f}")
 
             _check_job_control(
                 job_id
@@ -4432,38 +4485,9 @@ def download_task(
                 media_type=download_media_type,
             )
 
-            if output_format:
-                file_path = _run_ffmpeg_conversion(
-                    job_id=job_id,
-                    input_path=file_path,
-                    output_format=output_format,
-                    max_download_bytes=max_download_bytes,
-                )
-
-        # ====================================================
-        # Instagram / iOS compatibility
-        #
-        # Some Instagram DASH outputs contain VP9 video inside
-        # an MP4 container. Windows can decode those files, but
-        # Telegram/iOS may play only the audio or freeze the
-        # first video frame.
-        #
-        # Only incompatible Instagram video outputs are
-        # normalized. Compatible video and audio tracks are copied.
-        # ====================================================
-
-        if media_type == "video" and _is_instagram_url(str(source_url)):
-
-            _check_job_control(
-                job_id
-            )
-
-            file_path = (
-                _normalize_instagram_video_for_ios(
-                    job_id=job_id,
-                    file_path=file_path,
-                    max_download_bytes=max_download_bytes,
-                )
+            file_path = _prepare_requested_output(
+                job_id=job_id, file_path=file_path, media_type=media_type,
+                output_format=output_format, max_download_bytes=max_download_bytes,
             )
 
             _check_job_control(
