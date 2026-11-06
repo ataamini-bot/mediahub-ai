@@ -14,7 +14,8 @@ permissions:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    # Match the install runner and PostgreSQL 16 client used by recovery tests.
+    runs-on: ubuntu-24.04
 
     services:
       postgres:
