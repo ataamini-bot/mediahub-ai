@@ -105,6 +105,20 @@ def add_pending_selection(
     return token
 
 
+def move_video_selection(token: str, selection: dict, *, height: int | None,
+                         chat_id: int, message_id: int) -> str | None:
+    """Replace one picker atomically so stale or concurrent taps cannot start jobs."""
+    if PENDING_SELECTIONS.get(token) is not selection:
+        return None
+    new_token = uuid.uuid4().hex[:16]
+    del PENDING_SELECTIONS[token]
+    PENDING_SELECTIONS[new_token] = {
+        **selection, "device_height": height,
+        "device_message": (chat_id, message_id) if height is not None else None,
+    }
+    return new_token
+
+
 # ============================================================
 # Pending media entries
 # ============================================================

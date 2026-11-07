@@ -1,13 +1,24 @@
 # Video delivery
 
-Ordinary video downloads keep the original streams at the selected resolution.
-They do not automatically transcode Instagram VP9 to H.264.
+After choosing a video quality, the user picks their operating system for this
+download. The bot keeps the resolution and playlist item they selected. It does
+not detect or store a device preference.
 
-The delivered video offers **Compatible version** (FA: **نسخهٔ سازگار**).
+| Selection | Video delivered |
+| --- | --- |
+| Android, Windows, Linux | Original streams, without a compatibility transcode |
+| iPhone / iPad, macOS, Other / Not sure | Compatible MP4 (H.264 and AAC-LC when audio is present) |
+
+Changing quality or opening the device menu does not start a job or consume
+quota. Choosing a device creates one normal video download. Going back replaces
+the previous buttons. The device prompt applies to fresh links, playlist videos,
+and the video quality picker under a previous result. Audio, photos, covers,
+descriptions and uploaded file conversions do not need a device selection.
+
+Videos delivered with their original streams offer **Compatible version** (FA: **نسخهٔ سازگار**).
 This starts another video download of the same source and playlist item, at the
 same quality, with an explicit MP4 output request. Compatible H.264/yuv420p and
 AAC-LC streams are reused; other streams are converted with a size-aware budget.
-The bot does not infer the user's operating system.
 
 This action checks the requesting user's ownership, membership and plan limits,
 and counts as a new download like **Download again**. A repeated download keeps

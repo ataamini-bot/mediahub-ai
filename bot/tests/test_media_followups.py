@@ -284,18 +284,127 @@ async def test_description_escapes_content_and_keeps_remaining_actions_on_last_c
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("output", ["audio", "video"])
-async def test_picker_keeps_same_playlist_item_and_creates_only_one_job(ui, output):
+async def test_picker_keeps_same_playlist_item_and_creates_only_one_job(ui, output, monkeypatch):
     await main.download_more_callback(callback(f"download_more:{output}:428"))
     token = next(iter(PENDING_SELECTIONS))
     data = f"audio:format:{token}:mp3" if output == "audio" else f"quality:{token}:720"
     handler = main.audio_format_callback if output == "audio" else main.quality_callback
     choice = callback(data).model_copy(update={"message": message(message_id=2, text="picker")})
     await asyncio.gather(handler(choice), handler(choice))
+    if output == "video":
+        main.create_download_job.assert_not_awaited()
+        devices = actions(main.safe_edit_message.await_args.kwargs["reply_markup"])
+        pick = choice.model_copy(update={"data": next(v for v in devices if v.endswith(":ios"))})
+        # Both callbacks observe a valid token before either finishes its access check.
+        gate = asyncio.Barrier(2)
+        async def simultaneous_access(_):
+            await gate.wait()
+            return True
+        monkeypatch.setattr(main, "_download_actions_allowed", simultaneous_access)
+        await asyncio.wait_for(asyncio.gather(main.video_device_callback(pick), main.video_device_callback(pick)), 2)
     main.create_download_job.assert_awaited_once()
     payload = main.create_download_job.await_args.kwargs
     assert payload["source_url"] == "https://example.com/post" and payload["playlist_index"] == 3
     assert payload["telegram_id"] == 42
     assert token not in PENDING_SELECTIONS
+
+
+def choose_device_data(device):
+    options = actions(main.safe_edit_message.await_args.kwargs["reply_markup"])
+    return next(value for value in options if value.startswith("video_os:") and value.endswith(":" + device))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("device,expected", [
+    ("android", None), ("ios", "mp4"), ("windows", None), ("macos", "mp4"), ("linux", None), ("other", "mp4"),
+])
+async def test_device_choice_creates_one_video_at_selected_quality_without_another_lookup(ui, device, expected):
+    token = add_pending_selection("https://example.com/post", [(1080, 16000000)], 3, media_info(), telegram_id=42)
+    await main.quality_callback(callback(f"quality:{token}:1080"))
+    main.create_download_job.assert_not_awaited()
+    await main.video_device_callback(callback(choose_device_data(device)))
+    main.create_download_job.assert_awaited_once_with(source_url="https://example.com/post", telegram_id=42,
+        quality="1080p", media_type="video", output_format=expected, playlist_index=3, estimated_size_bytes=16000000)
+    main.get_media_info.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("language,labels", [
+    ("fa", {"اندروید", "آیفون / آیپد", "ویندوز", "مک‌اواس", "لینوکس", "سایر / نمی‌دانم", "‹ تغییر کیفیت"}),
+    ("en", {"Android", "iPhone / iPad", "Windows", "macOS", "Linux", "Other / Not sure", "‹ Change quality"}),
+])
+async def test_back_can_change_quality_and_old_device_buttons_cannot_spend_quota(ui, language, labels):
+    context = ui_language.set(language)
+    try:
+        token = add_pending_selection("https://example.com/post", [(720, 900), (1080, 2000)], telegram_id=42)
+        await main.quality_callback(callback(f"quality:{token}:720"))
+        call = main.safe_edit_message.await_args
+        assert "720p" in call.args[1] and ("operating system" if language == "en" else "سیستم‌عامل") in call.args[1]
+        assert {b.text for row in call.kwargs['reply_markup'].inline_keyboard for b in row} == labels
+        stale = callback(choose_device_data("ios"))
+        await main.video_device_callback(callback(choose_device_data("back")))
+        options = actions(main.safe_edit_message.await_args.kwargs["reply_markup"])
+        fresh = next(v for v in options if v.startswith("quality:") and v.endswith(":1080"))
+        await main.quality_callback(callback(fresh))
+        await main.video_device_callback(stale)
+        main.create_download_job.assert_not_awaited()
+        await main.video_device_callback(callback(choose_device_data("linux")))
+        assert main.create_download_job.await_count == 1
+        assert main.create_download_job.await_args.kwargs["quality"] == "1080p"
+    finally:
+        ui_language.reset(context)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("case", ["owner", "message", "chat", "membership", "restart", "unknown", "audio_on_device_token"])
+async def test_device_picker_rejects_wrong_context_and_rechecks_access(ui, monkeypatch, case):
+    token = add_pending_selection("https://example.com/post", [(720, None)], telegram_id=42)
+    await main.video_device_callback(callback(f"video_os:{token}:ios"))  # no quality yet
+    await main.quality_callback(callback(f"quality:{token}:1080"))  # never offered
+    assert token in PENDING_SELECTIONS
+    await main.quality_callback(callback(f"quality:{token}:720"))
+    pick = callback(choose_device_data("macos"))
+    device_token = pick.data.split(":")[1]
+    if case == "owner":
+        pick = pick.model_copy(update={"from_user": User(id=43, is_bot=False, first_name="Other")})
+    elif case == "message":
+        pick = pick.model_copy(update={"message": message(message_id=99)})
+    elif case == "chat":
+        pick = pick.model_copy(update={"message": message(chat=Chat(id=-900, type="supergroup"))})
+    elif case == "membership":
+        monkeypatch.setattr(main, "_download_actions_allowed", AsyncMock(return_value=False))
+    elif case == "restart":
+        PENDING_SELECTIONS.clear()
+    elif case == "unknown":
+        pick = callback(f"video_os:{device_token}:unsupported")
+    elif case == "audio_on_device_token":
+        await main.audio_format_callback(callback(f"audio:format:{device_token}:mp3"))
+    if case != "audio_on_device_token":
+        await main.video_device_callback(pick)
+    main.create_download_job.assert_not_awaited()
+    assert case == "restart" or device_token in PENDING_SELECTIONS
+
+
+@pytest.mark.asyncio
+async def test_oversize_quality_only_offers_smaller_choices_before_device_step(ui):
+    token = add_pending_selection("https://example.com/post", [(720, 1000), (1080, main.MAX_DOWNLOAD_SIZE_BYTES + 1)],
+                                  playlist_index=2, telegram_id=42)
+    await main.quality_callback(callback(f"quality:{token}:1080"))
+    options = actions(main.safe_edit_message.await_args.kwargs["reply_markup"])
+    assert not any(v.startswith("video_os:") or v.endswith(":1080") for v in options)
+    await main.quality_callback(callback(next(v for v in options if v.startswith("quality:") and v.endswith(":720"))))
+    main.create_download_job.assert_not_awaited()
+    await main.video_device_callback(callback(choose_device_data("other")))
+    assert main.create_download_job.await_args.kwargs["playlist_index"] == 2
+
+
+@pytest.mark.asyncio
+async def test_edit_failure_preserves_previous_quality_picker_and_does_not_charge(ui):
+    token = add_pending_selection("https://example.com/post", [(720, 500)], telegram_id=42)
+    main.safe_edit_message.return_value = False
+    await main.quality_callback(callback(f"quality:{token}:720"))
+    assert list(PENDING_SELECTIONS) == [token]
+    main.create_download_job.assert_not_awaited()
 
 
 @pytest.mark.asyncio

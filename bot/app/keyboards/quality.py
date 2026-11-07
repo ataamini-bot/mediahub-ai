@@ -9,6 +9,29 @@ from app.utils.formatting import (
 )
 
 
+# Button order, labels and the requested video output. None keeps the source streams.
+VIDEO_DEVICES = {
+    "android": ("اندروید", "Android", None),
+    "ios": ("آیفون / آیپد", "iPhone / iPad", "mp4"),
+    "windows": ("ویندوز", "Windows", None),
+    "macos": ("مک‌اواس", "macOS", "mp4"),
+    "linux": ("لینوکس", "Linux", None),
+    "other": ("سایر / نمی‌دانم", "Other / Not sure", "mp4"),
+}
+
+
+def build_video_device_keyboard(token: str, language: str) -> InlineKeyboardMarkup:
+    buttons = [InlineKeyboardButton(text=en if language == "en" else fa,
+                                    callback_data=f"video_os:{token}:{device}")
+               for device, (fa, en, _) in VIDEO_DEVICES.items()]
+    rows = [buttons[i:i + 2] for i in range(0, len(buttons), 2)]
+    rows.append([InlineKeyboardButton(
+        text="‹ Change quality" if language == "en" else "‹ تغییر کیفیت",
+        callback_data=f"video_os:{token}:back",
+    )])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
 def build_quality_keyboard(
     quality_options: list[
         tuple[

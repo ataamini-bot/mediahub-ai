@@ -45,7 +45,9 @@ from app.keyboards.media import (
 
 
 from app.keyboards.quality import (
+    VIDEO_DEVICES,
     build_quality_keyboard,
+    build_video_device_keyboard,
 )
 from app.keyboards.conversion import build_audio_format_keyboard
 from app.keyboards.payment import (
@@ -109,6 +111,7 @@ from app.utils.formatting import (
 
 
 from app.state.pending import (
+    move_video_selection,
     PENDING_MEDIA_ENTRIES,
     PENDING_SELECTIONS,
     add_pending_media_entries,
@@ -2633,6 +2636,7 @@ def build_smaller_quality_keyboard(
     ],
     playlist_index: int | None = None,
     media_info: dict | None = None,
+    *, telegram_id: int, source_job_id: int | None = None,
 ) -> InlineKeyboardMarkup | None:
 
     quality_options: list[
@@ -2686,6 +2690,8 @@ def build_smaller_quality_keyboard(
                 playlist_index
             ),
             media_info=media_info,
+            telegram_id=telegram_id,
+            source_job_id=source_job_id,
         )
     )
 
@@ -3452,9 +3458,13 @@ async def _download_actions_allowed(callback: CallbackQuery) -> bool:
         return False
 
 
-async def _selection_for_callback(callback: CallbackQuery, token: str) -> dict | None:
+async def _selection_for_callback(callback: CallbackQuery, token: str, *, device_step: bool = False) -> dict | None:
     selection = PENDING_SELECTIONS.get(token)
-    if not selection or selection.get("telegram_id") not in {None, callback.from_user.id}:
+    message = callback.message
+    if (not isinstance(message, Message) or not selection
+        or selection.get("telegram_id") != callback.from_user.id
+        or (selection.get("device_height") is not None) != device_step
+        or (device_step and selection.get("device_message") != (message.chat.id, message.message_id))):
         await callback.answer(
             _tr("⏰ این درخواست منقضی شده است. لطفاً لینک را دوباره ارسال کنید."), show_alert=True,
         )
@@ -4172,6 +4182,7 @@ async def media_entry_callback(
                 quality_options,
                 playlist_index=index,
                 media_info=selected_info,
+                telegram_id=callback.from_user.id,
             )
         )
 
@@ -4867,221 +4878,113 @@ async def audio_format_callback(callback: CallbackQuery) -> None:
             reply_markup=download_error_markup(exc),
         )
 
-@dp.callback_query(
-    F.data.startswith(
-        "quality:"
+async def _switch_video_picker(
+    callback: CallbackQuery, token: str, selection: dict, *, height: int | None,
+) -> None:
+    message = callback.message
+    language = ui_language.get()
+    english = language == "en"
+    new_token = move_video_selection(
+        token, selection, height=height, chat_id=message.chat.id, message_id=message.message_id,
     )
-)
-async def quality_callback(
-    callback: CallbackQuery,
-):
-
-    if not callback.data:
-
-        await callback.answer(
-            _tr("❌ درخواست نامعتبر است."),
-            show_alert=True,
-        )
-
-        return
-
-    parts = (
-        callback.data.split(
-            ":",
-            2,
-        )
-    )
-
-    if (
-        len(
-            parts
-        )
-        != 3
-    ):
-
-        await callback.answer(
-            _tr("❌ درخواست نامعتبر است."),
-            show_alert=True,
-        )
-
-        return
-
-    (
-        _,
-        token,
-        height_text,
-    ) = parts
-
-    selection = await _selection_for_callback(callback, token)
-    if not selection:
-        return
-
-    source_url = (
-        selection.get(
-            "source_url"
-        )
-    )
-
-    sizes = (
-        selection.get(
-            "sizes",
-            {},
-        )
-    )
-
-    playlist_index = (
-        selection.get(
-            "playlist_index"
-        )
-    )
-
-    media_info = (
-        selection.get(
-            "media_info"
-        )
-        if isinstance(
-            selection.get(
-                "media_info"
-            ),
-            dict,
-        )
-        else {}
-    )
-
-    if not source_url:
-
-        await callback.answer(
-            _tr("❌ لینک دانلود پیدا نشد."),
-            show_alert=True,
-        )
-
-        return
-
-    try:
-
-        height = int(
-            height_text
-        )
-
-    except ValueError:
-
-        await callback.answer(
-            _tr("❌ کیفیت نامعتبر است."),
-            show_alert=True,
-        )
-
-        return
-
-    quality = (
-        normalize_quality_label(
-            height
-        )
-    )
-
-    estimated_size = (
-        sizes.get(
-            height
-        )
-    )
-
-    if (
-        estimated_size is not None
-        and estimated_size
-        > MAX_DOWNLOAD_SIZE_BYTES
-    ):
-
-        size_label = (
-            format_file_size(
-                estimated_size
-            )
-            or
-            _tr("نامشخص")
-        )
-
-        await callback.answer(
-            (
-                _tr("حجم این کیفیت "
-                "بیش از حد مجاز است.")
-            ),
-            show_alert=True,
-        )
-
-        message = (
-            callback.message
-        )
-
-        if not isinstance(
-            message,
-            Message,
-        ):
-
-            return
-
-        smaller_keyboard = (
-            build_smaller_quality_keyboard(
-                source_url=source_url,
-                selected_height=height,
-                sizes=sizes,
-                playlist_index=(
-                    playlist_index
-                ),
-                media_info=media_info,
-            )
-        )
-
-        text = (
-            f"{_tr('⚠️ <b>حجم این کیفیت بیش از حد مجاز است</b>\n\n🎬 کیفیت انتخاب\u200cشده: <code>')}{quality}{_tr('</code>\n📦 حجم تقریبی: <code>')}{size_label}</code>\n\n"
-        )
-
-        if smaller_keyboard:
-
-            text += (
-                _tr("👇 لطفاً یکی از کیفیت‌های "
-                "پایین‌تر را انتخاب کنید.")
-            )
-
-        else:
-
-            text += (
-                _tr("❌ کیفیت پایین‌تری در "
-                "محدوده مجاز پیدا نشد.")
-            )
-
-        await safe_edit_message(
-            message,
-            text,
-            reply_markup=(
-                smaller_keyboard
-            ),
-        )
-
-        PENDING_SELECTIONS.pop(
-            token,
-            None,
-        )
-
-        return
-
-    if PENDING_SELECTIONS.pop(token, None) is None:
+    if new_token is None:
         await callback.answer(_tr("⏰ این درخواست منقضی شده است."), show_alert=True)
         return
 
-    await callback.answer(f"{_tr('کیفیت ')}{quality}{_tr(' انتخاب شد.')}")
+    changed = False
+    try:
+        if height is None:
+            text = "🎬 <b>Choose video quality</b>" if english else "🎬 <b>کیفیت ویدئو را انتخاب کنید</b>"
+            markup = build_quality_keyboard(
+                list(selection["sizes"].items()), new_token, audio_token=new_token, cover_token=new_token,
+                description_token=new_token, language=language,
+            )
+        else:
+            quality = normalize_quality_label(height)
+            text = (
+                f"🎬 <b>{quality}</b>\n\nSelect your operating system to download the video for your device.\n"
+                "Android, Windows and Linux: original video. Apple devices and Other: compatible MP4; preparation may take longer."
+                if english else
+                f"🎬 <b>{quality}</b>\n\nبرای دانلود نسخهٔ مناسب دستگاهتان، سیستم‌عامل را انتخاب کنید.\n"
+                "اندروید، ویندوز و لینوکس: ویدئوی اصلی. دستگاه‌های اپل و «سایر»: نسخهٔ MP4 سازگار که ممکن است کمی دیرتر آماده شود."
+            )
+            markup = build_video_device_keyboard(new_token, language)
+        await callback.answer()
+        changed = await safe_edit_message(message, text, reply_markup=markup)
+    finally:
+        # Keep the previous buttons usable when Telegram could not replace them.
+        if not changed and PENDING_SELECTIONS.pop(new_token, None) is not None:
+            PENDING_SELECTIONS[token] = selection
+    if not changed:
+        await message.answer("The menu could not be updated. Try your selection again or resend the link."
+                             if english else "منو به‌روزرسانی نشد. دوباره انتخاب کنید یا لینک را مجدد بفرستید.")
 
-    message = (
-        callback.message
-    )
 
-    if not isinstance(
-        message,
-        Message,
-    ):
-
+@dp.callback_query(F.data.startswith("quality:"))
+async def quality_callback(callback: CallbackQuery) -> None:
+    match = re.fullmatch(r"quality:([^:]+):([1-9][0-9]{0,4})", callback.data or "")
+    if not match:
+        await callback.answer(_tr("❌ کیفیت نامعتبر است."), show_alert=True)
         return
+    token, height = match[1], int(match[2])
+    selection = await _selection_for_callback(callback, token)
+    if not selection:
+        return
+    if not selection.get("source_url") or height not in selection.get("sizes", {}):
+        await callback.answer(_tr("❌ کیفیت نامعتبر است."), show_alert=True)
+        return
+    sizes = selection["sizes"]
+    size = sizes[height]
+    if size is not None and size > MAX_DOWNLOAD_SIZE_BYTES:
+        if PENDING_SELECTIONS.pop(token, None) is None:
+            await callback.answer(_tr("⏰ این درخواست منقضی شده است."), show_alert=True)
+            return
+        keyboard = build_smaller_quality_keyboard(
+            selection["source_url"], height, sizes, selection.get("playlist_index"), selection.get("media_info"),
+            telegram_id=callback.from_user.id, source_job_id=selection.get("source_job_id"),
+        )
+        await callback.answer(_tr("حجم این کیفیت بیش از حد مجاز است."), show_alert=True)
+        quality = normalize_quality_label(height)
+        size_label = format_file_size(size)
+        english = ui_language.get() == "en"
+        text = (f"⚠️ <b>{quality} exceeds the file size limit</b> ({size_label})." if english else
+                f"⚠️ <b>حجم کیفیت {quality} بیش از حد مجاز است</b> ({size_label}).")
+        if keyboard:
+            text += "\n" + ("Choose a lower quality." if english else "کیفیت پایین‌تری را انتخاب کنید.")
+        else:
+            text += "\n" + ("No smaller quality is available." if english else "کیفیت پایین‌تری در محدودهٔ مجاز پیدا نشد.")
+        await safe_edit_message(callback.message, text, reply_markup=keyboard)
+        return
+    await _switch_video_picker(callback, token, selection, height=height)
 
-    status_message = (
-        message
-    )
+
+@dp.callback_query(F.data.startswith("video_os:"))
+async def video_device_callback(callback: CallbackQuery) -> None:
+    parts = (callback.data or "").split(":")
+    if len(parts) != 3 or (parts[2] not in VIDEO_DEVICES and parts[2] != "back"):
+        await callback.answer(_tr("❌ درخواست نامعتبر است."), show_alert=True)
+        return
+    _, token, device = parts
+    selection = await _selection_for_callback(callback, token, device_step=True)
+    if not selection:
+        return
+    if device == "back":
+        await _switch_video_picker(callback, token, selection, height=None)
+        return
+    # No await between claiming this one-time selection and invalidating all its buttons.
+    if PENDING_SELECTIONS.pop(token, None) is None:
+        await callback.answer(_tr("⏰ این درخواست منقضی شده است."), show_alert=True)
+        return
+    output_format = VIDEO_DEVICES[device][2]
+    source_url = selection["source_url"]
+    height = selection["device_height"]
+    quality = normalize_quality_label(height)
+    sizes = selection["sizes"]
+    estimated_size = sizes[height]
+    playlist_index = selection.get("playlist_index")
+    media_info = selection.get("media_info") or {}
+    message = status_message = callback.message
+    await callback.answer()
 
     try:
 
@@ -5113,6 +5016,8 @@ async def quality_callback(
                 source_url=source_url,
                 telegram_id=callback.from_user.id,
                 quality=quality,
+                media_type="video",
+                output_format=output_format,
                 playlist_index=(
                     playlist_index
                 ),
@@ -5232,6 +5137,8 @@ async def quality_callback(
                 add_pending_selection(
                     source_url,
                     fallback_options,
+                    telegram_id=callback.from_user.id,
+                    source_job_id=selection.get("source_job_id"),
                     playlist_index=playlist_index,
                     media_info=media_info,
                 )
@@ -5562,6 +5469,7 @@ async def download_handler(
                     single_playlist_index
                 ),
                 media_info=media_info,
+                telegram_id=message.from_user.id,
             )
         )
 
