@@ -4902,11 +4902,21 @@ async def _switch_video_picker(
         else:
             quality = normalize_quality_label(height)
             text = (
-                f"🎬 <b>{quality}</b>\n\nSelect your operating system to download the video for your device.\n"
-                "Android, Windows and Linux: original video. Apple devices and Other: compatible MP4; preparation may take longer."
+                f"🎬 <b>Selected quality: {quality}</b>\n\n"
+                "Where will you watch this video? Choose that device’s operating system below.\n\n"
+                "⚡ <b>Android, Windows or Linux</b>\n"
+                "We’ll send the original video without converting it. If it doesn’t play, tap “Compatible version” under the file.\n\n"
+                "🍎 <b>iPhone, iPad or Mac</b>\n"
+                "We’ll send a compatible MP4. If the video needs converting, it may take a little longer.\n\n"
+                "Using another device or not sure? Choose “Other / Not sure” for the compatible MP4."
                 if english else
-                f"🎬 <b>{quality}</b>\n\nبرای دانلود نسخهٔ مناسب دستگاهتان، سیستم‌عامل را انتخاب کنید.\n"
-                "اندروید، ویندوز و لینوکس: ویدئوی اصلی. دستگاه‌های اپل و «سایر»: نسخهٔ MP4 سازگار که ممکن است کمی دیرتر آماده شود."
+                f"🎬 <b>کیفیت انتخابی: {quality}</b>\n\n"
+                "ویدئو را روی چه دستگاهی تماشا می‌کنید؟ سیستم‌عامل همان دستگاه را از دکمه‌های زیر انتخاب کنید.\n\n"
+                "⚡ <b>اندروید، ویندوز یا لینوکس</b>\n"
+                "فایل اصلی را بدون تبدیل می‌فرستیم. اگر ویدئو پخش نشد، زیر فایل روی «نسخهٔ سازگار» بزنید.\n\n"
+                "🍎 <b>آیفون، آیپد یا مک</b>\n"
+                "نسخهٔ سازگار MP4 را می‌فرستیم. اگر ویدئو به تبدیل نیاز داشته باشد، آماده‌سازی آن کمی بیشتر طول می‌کشد.\n\n"
+                "اگر دستگاه دیگری دارید یا مطمئن نیستید، «سایر / نمی‌دانم» را بزنید تا نسخهٔ سازگار را دریافت کنید."
             )
             markup = build_video_device_keyboard(new_token, language)
         await callback.answer()
