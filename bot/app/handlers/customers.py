@@ -1,17 +1,21 @@
 """Private, permission-checked customer support forms."""
 import html
+import re
+
+import aiohttp
 import uuid
 from urllib.parse import urlencode
 
 from aiogram import F, Router
+from aiogram.exceptions import TelegramAPIError
 from aiogram.filters import BaseFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import CallbackQuery, Message
+from aiogram.types import CallbackQuery, InputFile, Message
 
 from app.handlers.operations import api, keyboard
 from app.middleware.interface import ui_language
-from app.services.backend import BackendAPIError
+from app.services.backend import BACKEND_URL, BackendAPIError, _internal_headers
 from app.i18n import home_action_for_text
 from app.runtime_config import action_for_runtime_text, all_runtime_configurations
 
@@ -43,6 +47,7 @@ def label(action):
 
 class CustomerStates(StatesGroup):
     search = State()
+    export_id = State()
     select = State()
     days = State()
     reason = State()
@@ -60,6 +65,7 @@ async def show_profile(message, actor_id, telegram_id):
     for sub in result["subscriptions"]:
         lines.append(f"#{sub['id']} · {html.escape(sub['plan_name'])}\n{sub['started_at'][:10]} → {sub['expires_at'][:10]} (UTC)")
     rows = [[(tr("🧾 فعالیت دانلود", "🧾 Download activity"), f"customer:downloads:{telegram_id}:1")]]
+    rows.append([(export_label(), f"customer:xlsx:{telegram_id}")])
     actions = []
     from app.handlers.credit import money
     for currency in ("IRT", "USDT"):
@@ -114,10 +120,105 @@ async def download_activity(callback: CallbackQuery):
         nav.append(InlineKeyboardButton(text="▶️", callback_data=f"customer:downloads:{telegram_id}:{data['page']+1}"))
     if nav:
         rows.append(nav)
+    rows.append([InlineKeyboardButton(text=export_label(), callback_data=f"customer:xlsx:{telegram_id}")])
     rows.append([InlineKeyboardButton(text=tr("بازگشت به مشتری", "Back to customer"), callback_data=f"customer:view:{telegram_id}")])
     await callback.message.edit_text("\n".join(lines), parse_mode="HTML", disable_web_page_preview=True,
                                       reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))
     await callback.answer()
+
+
+def export_label():
+    return tr("📊 اکسل لینک‌های دانلود", "📊 Download links (Excel)")
+
+
+def export_telegram_id(text):
+    value = (text or "").strip().translate(str.maketrans("۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩", "01234567890123456789"))
+    if not re.fullmatch(r"[1-9][0-9]{0,18}", value):
+        return None
+    number = int(value)
+    return number if number <= 2**63 - 1 else None
+
+
+def own_private_chat(message, actor_id):
+    return message and message.chat.type == "private" and message.chat.id == actor_id
+
+
+class ReportUpload(InputFile):
+    def __init__(self, response, target):
+        super().__init__(filename=f"downloads-{target}.xlsx")
+        self.response = response
+
+    async def read(self, bot):
+        async for part in self.response.content.iter_chunked(self.chunk_size):
+            yield part
+
+
+async def send_download_export(message, actor_id, target):
+    if not own_private_chat(message, actor_id):
+        return False
+    lang = "en" if ui_language.get() == "en" else "fa"
+    try:
+        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=None, sock_connect=10, sock_read=180)) as session:
+            async with session.get(f"{BACKEND_URL}/admin/customers/{target}/downloads.xlsx",
+                    params={"actor_telegram_id": str(actor_id), "language": lang}, headers=_internal_headers(),
+                    allow_redirects=False) as response:
+                if response.status == 404:
+                    await message.answer(tr("کاربری با این شناسه پیدا نشد. شناسهٔ عددی را بررسی کنید.",
+                                            "No customer has this Telegram ID. Check the number."))
+                    return False
+                if response.status == 204:
+                    await message.answer(tr(f"برای شناسهٔ {target} لینک دانلودی ثبت نشده است.",
+                                            f"No download links are recorded for Telegram ID {target}."))
+                    return False
+                if response.status == 403:
+                    await message.answer(tr("دسترسی مشاهدهٔ سوابق کاربران را ندارید.", "You do not have permission to view customer history."))
+                    return False
+                if response.status != 200:
+                    raise BackendAPIError(status_code=response.status, detail="Download export unavailable")
+                count = int(response.headers["X-Report-Rows"])
+                await message.answer_document(ReportUpload(response, target), protect_content=True,
+                    caption=tr(f"گزارش دانلودهای {target} · {count} درخواست\nاز جدید به قدیم، به وقت تهران. زمان تحویل فقط برای ارسال‌های ثبت‌شده آمده است.",
+                               f"Downloads for {target} · {count} requests\nNewest first, Tehran time. Delivery time is shown only for confirmed deliveries."))
+                return True
+    except (aiohttp.ClientError, TimeoutError, BackendAPIError, TelegramAPIError):
+        await message.answer(tr("ارسال فایل اکسل انجام نشد. دوباره تلاش کنید.", "The Excel report could not be sent. Please retry."))
+        return False
+
+
+@router.callback_query(F.data == "customer:export-id")
+async def ask_export_id(callback: CallbackQuery, state: FSMContext):
+    if not own_private_chat(callback.message, callback.from_user.id):
+        return await callback.answer()
+    try:
+        await api("GET", "/admin/customers?q=0", callback.from_user.id)
+    except BackendAPIError:
+        return await callback.answer(tr("دسترسی به گزارش ممکن نیست.", "Report access unavailable."), show_alert=True)
+    await state.clear()
+    await state.set_state(CustomerStates.export_id)
+    await callback.message.answer(tr("شناسهٔ عددی تلگرام کاربر را بفرستید تا فایل اکسل لینک‌های دانلود او را دریافت کنید.",
+                                    "Send the customer's numeric Telegram ID to receive their download links in Excel."),
+                                 reply_markup=keyboard([[(tr("بازگشت", "Back"), "customer:open")]]))
+    await callback.answer()
+
+
+@router.message(CustomerStates.export_id, F.text)
+async def receive_export_id(message: Message, state: FSMContext):
+    if not own_private_chat(message, message.from_user.id):
+        return
+    target = export_telegram_id(message.text)
+    if target is None:
+        return await message.answer(tr("فقط شناسهٔ عددی تلگرام را بفرستید؛ مثلاً ۱۲۳۴۵۶۷۸۹.", "Enter a numeric Telegram ID, e.g. 123456789."))
+    if await send_download_export(message, message.from_user.id, target):
+        await state.clear()
+
+
+@router.callback_query(F.data.regexp(r"^customer:xlsx:[1-9][0-9]{0,18}$"))
+async def export_from_profile(callback: CallbackQuery, state: FSMContext):
+    target = export_telegram_id(callback.data.rsplit(":", 1)[-1])
+    await callback.answer()
+    if target is not None and own_private_chat(callback.message, callback.from_user.id):
+        await state.clear()
+        await send_download_export(callback.message, callback.from_user.id, target)
 
 
 @router.callback_query(F.data == "customer:open")
@@ -128,7 +229,8 @@ async def open_customers(callback: CallbackQuery, state: FSMContext):
         await state.clear()
         await state.set_state(CustomerStates.search)
         await callback.message.answer(tr("شناسه تلگرام، نام کاربری یا نام مشتری را بفرستید:", "Send a Telegram ID, username or customer name:"),
-            reply_markup=keyboard([[(tr("انصراف", "Cancel"), "admin:open")]]))
+            reply_markup=keyboard([[(tr("📊 اکسل دانلود با شناسهٔ عددی", "📊 Export downloads by Telegram ID"), "customer:export-id")],
+                                   [(tr("انصراف", "Cancel"), "admin:open")]]))
         await callback.answer()
     except BackendAPIError:
         await callback.answer(tr("دسترسی یا ارتباط با سرور بررسی شود.", "Check access or backend connection."), show_alert=True)

@@ -162,3 +162,82 @@ async def test_orphan_cleanup_keeps_live_files_and_does_not_delete_unknown_files
             path.write_bytes(b'data'); os.utime(path,(0,0))
         await db.run_sync(lambda s: remove_orphans(s, now=records.now))
         assert [p.exists() for p in paths] == [True,False,False,True]
+
+
+@pytest.mark.asyncio
+async def test_private_excel_includes_all_stored_links_only_for_requested_user(records):
+    from app.models.audit_log import AuditLog
+    from io import BytesIO
+    from zipfile import ZipFile
+    from xml.etree import ElementTree as ET
+
+    # 21:45 UTC is already tomorrow in Tehran. Job IDs deliberately don't follow creation dates.
+    when = datetime(2026, 11, 8, 21, 45, tzinfo=timezone.utc)
+    url = 'https://example.test/watch?a=one&b=two'
+    async with AsyncSessionLocal() as db:
+        old = await add_job(db, records, created_at=when-timedelta(days=365), source_url=url,
+                            delivered_at=when-timedelta(days=365), files_removed_at=when-timedelta(days=364))
+        for i in range(5):
+            await add_job(db, records, created_at=when-timedelta(days=10+i), source_url=f'https://example.test/{i}')
+        one = await add_job(db, records, created_at=when, source_url=url, delivered_at=when)
+        two = await add_job(db, records, created_at=when, status=Status.FAILED, source_url='http://example.test/failed', quality='=1+2')
+        await add_job(db, records, source_url='upload://private-local-file.mp4')
+        await add_job(db, records, user_id=records.admin.id, source_url='https://other.test/secret')
+        await db.commit()
+    app = FastAPI(); app.include_router(customer_router); app.include_router(download_router)
+    path = f'/admin/customers/{records.user.telegram_id}/downloads.xlsx'
+    params = {'actor_telegram_id': records.admin.telegram_id}
+    headers = {'X-Internal-Api-Key': settings.bot_backend_api_key}
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url='http://test') as client:
+        assert (await client.get(path, params=params)).status_code == 401
+        bad = {'actor_telegram_id': records.user.telegram_id}  # Even the subject can't export their own log.
+        assert (await client.get(path, headers=headers, params=bad)).status_code == 403
+        unknown = '/admin/customers/9223372036854775807/downloads.xlsx'
+        assert (await client.get(unknown, headers=headers, params=bad)).status_code == 403
+        assert (await client.get(unknown, headers=headers, params=params)).status_code == 404
+        empty = await client.get(f'/admin/customers/{records.outsider.telegram_id}/downloads.xlsx', headers=headers, params=params)
+        assert empty.status_code == 204 and not empty.content
+        event = {"telegram_id": records.user.telegram_id, "callback_id": "abc", "source_url": "https://example.test/cover-only"}
+        assert (await client.post("/downloads/cover-events", json=event)).status_code == 401
+        logged = (await client.post("/downloads/cover-events", headers=headers, json=event)).json()["id"]
+        assert logged and (await client.post("/downloads/cover-events", headers=headers, json=event)).json() == {"id": None}
+        receipt = f"/downloads/cover-events/{logged}/delivered"
+        assert (await client.post(receipt, headers=headers, json={"telegram_id": records.outsider.telegram_id})).status_code == 404
+        for _ in range(2):
+            assert (await client.post(receipt, headers=headers, json={"telegram_id": records.user.telegram_id})).status_code == 200
+        response = await client.get(path, headers=headers, params=params)
+    assert response.status_code == 200 and response.headers['X-Report-Rows'] == '9'
+    assert response.headers['Cache-Control'] == 'no-store'
+    assert response.headers['content-type'].endswith('spreadsheetml.sheet')
+    assert response.headers['content-disposition'].endswith(f'downloads-{records.user.telegram_id}.xlsx"')
+    with ZipFile(BytesIO(response.content)) as archive:
+        assert archive.testzip() is None
+        xml = archive.read('xl/worksheets/sheet1.xml')
+    root = ET.fromstring(xml)
+    rows = root.findall('.//{*}sheetData/{*}row')
+    def values(row):
+        return {c.get('r')[0]: ''.join(c.itertext()) for c in row}
+    assert len(rows) == 10 and root.find('.//{*}autoFilter').get('ref') == 'A1:I10'
+    assert root.find('.//{*}sheetView').get('rightToLeft') == '1'
+    assert 'تهران' in values(rows[0])['C']
+    data = [values(row) for row in rows[1:]]
+    cover = next(r for r in data if r['A'] == f'C-{logged}')
+    assert cover['D'] == event['source_url'] and cover['G'] == 'کاور' and cover['F']
+    # Compare the dated download jobs independently of the runtime clock used by the cover.
+    data = [r for r in data if r['A'].isdecimal()]
+    assert [r['A'] for r in data][:2] == [str(two.id), str(one.id)]
+    assert data[-1]['A'] == str(old.id)
+    assert [r['D'] for r in data].count(url) == 2
+    assert {r['B'] for r in data} == {str(records.user.telegram_id)}
+    assert b'private-local-file' not in xml and b'other.test' not in xml
+    assert data[0]['E'] == 'ناموفق' and 'F' not in data[0] and 'F' in data[1]
+    assert data[0]['H'] == '=1+2' and root.find('.//{*}f') is None
+    failed_row = next(r for r in rows[1:] if values(r)['A'] == str(two.id))
+    date_cell = next(c for c in failed_row if c.get('r').startswith('C'))
+    assert date_cell.get('t') in {None, 'n'} and date_cell.get('s')
+    actual = datetime(1899, 12, 30) + timedelta(days=float(data[0]['C']))
+    assert abs(actual - datetime(2026, 11, 9, 1, 15)) < timedelta(milliseconds=1)
+    async with AsyncSessionLocal() as db:
+        audits = (await db.scalars(select(AuditLog).where(AuditLog.actor_telegram_id==records.admin.telegram_id,
+            AuditLog.action=='customer.download_links_exported'))).all()
+        assert any(a.target_id==str(records.user.id) and a.details=={'rows': 9} for a in audits)

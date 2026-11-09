@@ -170,3 +170,40 @@ def test_failed_instagram_conversion_keeps_source_and_discards_partial(tmp_path,
     with pytest.raises(RuntimeError, match="normalization failed"):
         download_worker._normalize_video_for_compatibility(15, source, 4096)
     assert list(tmp_path.iterdir()) == [source] and source.read_bytes() == b"broken video"
+
+
+@pytest.mark.parametrize("fail", [False, True])
+def test_noisy_encoder_drains_errors_and_bounds_failure_detail(tmp_path, monkeypatch, fail):
+    import sys
+
+    source = tmp_path / "source.wav"
+    source.write_bytes(b"unchanged input")
+    updates = []
+    monkeypatch.setattr(download_worker, "DOWNLOAD_DIR", tmp_path)
+    monkeypatch.setattr(download_worker, "_probe_media_file", lambda _: {"format": {"duration": "10"}})
+    monkeypatch.setattr(download_worker, "_check_job_control", lambda _: None)
+    monkeypatch.setattr(download_worker, "_update_download_stats", lambda **values: updates.append(values))
+    child = """
+import os, signal, sys
+from pathlib import Path
+signal.alarm(6)
+os.write(1, b'out_time_ms=1000000\\n')
+for _ in range(64):
+    os.write(2, b'a' * 32768)
+os.write(2, b'\\xfffinal-diagnostic')
+Path(sys.argv[1]).write_bytes(b'audio')
+sys.exit(int(sys.argv[2]))
+"""
+    monkeypatch.setattr(download_worker, "_build_ffmpeg_conversion_command",
+                        lambda **args: [sys.executable, "-c", child, str(args["output_path"]), str(int(fail))])
+    kwargs = dict(job_id=12, input_path=source, output_format="mp3", max_download_bytes=1024)
+    if fail:
+        with pytest.raises(RuntimeError, match="final-diagnostic") as caught:
+            download_worker._run_ffmpeg_conversion(**kwargs)
+        assert len(str(caught.value)) < 2150
+        assert source.read_bytes() == b"unchanged input"
+        assert not (tmp_path / "12.converted.mp3.part").exists()
+    else:
+        assert download_worker._run_ffmpeg_conversion(**kwargs).read_bytes() == b"audio"
+        assert not source.exists()
+    assert updates and all(u["speed"] is None and u["clear_total"] for u in updates)

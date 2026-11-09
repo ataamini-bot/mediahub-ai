@@ -67,6 +67,8 @@ def ui(monkeypatch):
     monkeypatch.setattr(main, "safe_edit_message", AsyncMock())
     monkeypatch.setattr(main, "mark_download_delivered", AsyncMock())
     monkeypatch.setattr(main, "release_download_files", AsyncMock())
+    monkeypatch.setattr(main, "start_cover_request", AsyncMock(return_value=72))
+    monkeypatch.setattr(main, "confirm_cover_request", AsyncMock())
     monkeypatch.setattr(main, "_download_cover_file", AsyncMock(side_effect=AssertionError("Unexpected cover fetch")))
     monkeypatch.setattr(main, "create_download_job", AsyncMock(return_value={"id": 429}))
     monkeypatch.setattr(main, "wait_for_download", AsyncMock(return_value={"id": 429, "status": "cancelled"}))
@@ -258,6 +260,26 @@ async def test_cover_has_title_filename_original_bytes_and_durable_remaining_act
     assert {"download_more:video:428", "download_more:audio:428", "download_more:description:428",
             "download_more:cover:428", "download_details:428"} == actions(sent["reply_markup"])
     assert not cover.exists()
+    main.start_cover_request.assert_awaited_once_with(42, "cb", "https://example.com/post")
+    main.confirm_cover_request.assert_awaited_once_with(42, 72)
+
+
+@pytest.mark.asyncio
+async def test_cover_only_retry_does_not_repeat_delivery_or_count_quota(ui, tmp_path, monkeypatch):
+    token = add_pending_selection("https://example.com/cover-only", media_info=media_info(), telegram_id=42)
+    cover = tmp_path / "cover.jpg"; cover.write_bytes(b"image")
+    source = AsyncMock(return_value=cover)
+    monkeypatch.setattr(main, "_download_cover_file", source)
+    main.start_cover_request.side_effect = [17, None]
+    main.confirm_cover_request.side_effect = [BackendAPIError(status_code=503, detail="lost response"), {}]
+    for _ in range(2):
+        await main.media_cover_callback(callback(f"media:cover:{token}"))
+    main.start_cover_request.assert_awaited_with(42, "cb", "https://example.com/cover-only")
+    Message.answer_document.assert_awaited_once()
+    main.confirm_cover_request.assert_awaited_with(42, 17)
+    assert main.confirm_cover_request.await_count == 2 and not cover.exists()
+    source.assert_awaited_once()
+    main.create_download_job.assert_not_awaited()
 
 
 class VisibleText(HTMLParser):

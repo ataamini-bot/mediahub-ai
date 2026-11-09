@@ -134,7 +134,8 @@ from sqlalchemy import text
 from app.db.session import engine
 async def check():
     async with engine.connect() as conn:
-        assert await conn.scalar(text("SELECT version_num FROM alembic_version")) == "a06b7c8d9e0f"
+        assert await conn.scalar(text("SELECT version_num FROM alembic_version")) == "b17c8d9e0f10"
+        await conn.execute(text("SELECT user_id, created_at, delivered_at FROM cover_requests LIMIT 0"))
         await conn.execute(text("SELECT id, source_url, files_removed_at FROM download_jobs LIMIT 0"))
         await conn.execute(text("SELECT code, currency, version FROM coupons LIMIT 0"))
         await conn.execute(text("SELECT status, snapshot FROM coupon_uses LIMIT 0"))

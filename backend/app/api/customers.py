@@ -1,7 +1,10 @@
+from tempfile import TemporaryFile
 from typing import Literal
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Path, Query, Response
+from fastapi.responses import StreamingResponse
+from starlette.background import BackgroundTask
 from pydantic import BaseModel, Field, model_validator
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -10,6 +13,8 @@ from app.core.internal_auth import require_internal_api_key
 from app.db.session import get_db
 from app.services.admin_access import AdminAccessDenied
 from app.services.customers import CustomerConflict, CustomerService
+from app.services.audit import AuditService
+from app.services.download_export import MIME, write_download_export
 from app.api.operations import actor
 from app.models.plan import Plan
 
@@ -76,6 +81,43 @@ async def download_activity(telegram_id: int, actor_telegram_id: int = Query(gt=
         return await CustomerService(db).download_activity(telegram_id, page)
     except LookupError as exc:
         raise HTTPException(404, str(exc)) from exc
+
+
+@router.get("/{telegram_id}/downloads.xlsx")
+async def download_export(telegram_id: int = Path(gt=0, le=2**63-1),
+                          actor_telegram_id: int = Query(gt=0, le=2**63-1),
+                          language: Literal["fa", "en"] = "fa", db: AsyncSession = Depends(get_db)):
+    context = await actor(db, actor_telegram_id, "users.view")
+    try:
+        user = await CustomerService(db).user(telegram_id)
+    except LookupError as exc:
+        raise HTTPException(404, str(exc)) from exc
+
+    file = TemporaryFile("w+b")
+    try:
+        count = await write_download_export(db, user_id=user.id, telegram_id=telegram_id, language=language, dest=file)
+        AuditService(db).record(action="customer.download_links_exported", actor_user_id=context.user_id,
+            actor_telegram_id=actor_telegram_id, target_type="user", target_id=user.id, details={"rows": count})
+        await db.commit()
+        if not count:
+            file.close()
+            return Response(status_code=204, headers={"Cache-Control": "no-store"})
+        size = file.tell()
+        file.seek(0)
+
+        def chunks():
+            try:
+                while block := file.read(65536):
+                    yield block
+            finally:
+                file.close()
+
+        return StreamingResponse(chunks(), media_type=MIME, background=BackgroundTask(file.close),
+            headers={"Content-Disposition": f'attachment; filename="downloads-{telegram_id}.xlsx"',
+                     "Content-Length": str(size), "Cache-Control": "no-store", "X-Report-Rows": str(count)})
+    except BaseException:
+        file.close()
+        raise
 
 
 @router.post("/{telegram_id}/actions")

@@ -19,6 +19,7 @@ python-multipart
 
 httpx
 aiofiles
+XlsxWriter==3.2.9
 
 yt-dlp[default,curl-cffi]
 # Keep the plugin and docker-compose.yml provider on the same release.

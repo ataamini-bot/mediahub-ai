@@ -90,7 +90,7 @@ bash <(git show "${release}:scripts/deploy_launch_operations.sh") "$release"
 
 اسکریپت Imageهای قبلی را نگه می‌دارد؛ نسخهٔ جدید را می‌سازد؛ پس از توقف امن
 برنامه‌ها بکاپ می‌گیرد و در دیتابیس جدا بازیابی می‌کند. سپس migration
-تا `a06b7c8d9e0f` را اجرا می‌کند و Backend، Bot، Worker، Monitor و Backup را راه می‌اندازد.
+تا `b17c8d9e0f10` را اجرا می‌کند و Backend، Bot، Worker، Monitor و Backup را راه می‌اندازد.
 دریافت کد با Git به‌تنهایی کانتینرها را به‌روز نمی‌کند؛ نصب از checkout آماده نیز
 ساخت Image، بکاپ، آزمون بازیابی و migration را انجام می‌دهد. خطای استقرار باعث
 تلاش برای بازگشت به HEAD ابتدای اجرا و Imageهای واقعیِ قبلی می‌شود؛ حتی اگر

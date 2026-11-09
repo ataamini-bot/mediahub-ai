@@ -120,6 +120,7 @@ from app.state.pending import (
 
 
 from app.services.backend import (
+    start_cover_request, confirm_cover_request,
     BackendAPIError,
     cancel_download_job,
     create_download_job,
@@ -1414,18 +1415,15 @@ def build_progress_text(
         )
     )
 
+    if paused:
+        title = "⏸ <b>Download paused</b>" if english else "⏸ <b>دانلود متوقف شده است</b>"
+    elif job.get("media_type") == "audio":
+        title = "🎵 <b>Downloading and preparing audio…</b>" if english else "🎵 <b>در حال دریافت و آماده‌سازی صدا…</b>"
+    else:
+        title = "⬇️ <b>Downloading...</b>" if english else "⬇️ <b>در حال دانلود...</b>"
+
     lines = [
-        (
-            "⏸ <b>Download paused</b>"
-            if paused
-            else "⬇️ <b>Downloading...</b>"
-        )
-        if english
-        else (
-            "⏸ <b>دانلود متوقف شده است</b>"
-            if paused
-            else "⬇️ <b>در حال دانلود...</b>"
-        ),
+        title,
         "",
         (
             f"🎞 Quality: <b>{quality_label}</b>"
@@ -3536,7 +3534,7 @@ async def download_more_callback(callback: CallbackQuery) -> None:
         )
         selection = PENDING_SELECTIONS[token]
         if output == "cover":
-            await _send_media_cover(callback.message, selection, token)
+            await _send_media_cover(callback.message, selection, token, callback.from_user.id, callback.id)
         elif output == "description":
             await _send_media_description(callback.message, selection, token)
         else:
@@ -4647,7 +4645,7 @@ def _description_chunks(
     return chunks
 
 
-async def _send_media_cover(message: Message, selection: dict, token: str) -> None:
+async def _send_media_cover(message: Message, selection: dict, token: str, actor_id: int, callback_id: str) -> None:
     info = selection.get("media_info") or {}
     cover_url = str(info.get("thumbnail") or "").strip()
     markup = _selection_output_keyboard(selection, token, "cover")
@@ -4657,6 +4655,9 @@ async def _send_media_cover(message: Message, selection: dict, token: str) -> No
             "ℹ️ No cover image is available for this media." if english else "ℹ️ کاوری برای این رسانه در دسترس نیست.",
             reply_markup=markup,
         )
+        return
+    request_id = await start_cover_request(actor_id, callback_id, selection["source_url"])
+    if request_id is None:
         return
     cover_path = await _download_cover_file(cover_url, uuid4().hex)
     title = str(info.get("title") or _source_label(selection.get("source_url"))).strip()
@@ -4674,6 +4675,16 @@ async def _send_media_cover(message: Message, selection: dict, token: str) -> No
         )
     finally:
         cover_path.unlink(missing_ok=True)
+
+    # A lost acknowledgement must never repeat a Telegram send. Only retry the DB receipt.
+    for attempt in range(2):
+        try:
+            await confirm_cover_request(actor_id, request_id)
+            break
+        except BackendAPIError as exc:
+            if attempt or exc.status_code < 500:
+                print(f"Cover delivery unconfirmed: request={request_id}")
+                break
 
 
 async def _send_media_description(message: Message, selection: dict, token: str) -> None:
@@ -4711,7 +4722,7 @@ async def _media_selection_action(callback: CallbackQuery, output: str) -> None:
     try:
         selection["media_info"] = await _selection_media_info(selection)
         if output == "cover":
-            await _send_media_cover(callback.message, selection, token)
+            await _send_media_cover(callback.message, selection, token, callback.from_user.id, callback.id)
         elif output == "description":
             await _send_media_description(callback.message, selection, token)
         elif output == "video":

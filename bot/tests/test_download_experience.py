@@ -149,3 +149,14 @@ def test_quality_keyboard_includes_audio_cover_and_description_actions():
         len((callback or "").encode("utf-8")) <= 64
         for callback in callbacks
     )
+
+
+@pytest.mark.parametrize(("language", "title"), [("fa", "در حال دریافت و آماده‌سازی صدا"), ("en", "Downloading and preparing audio")])
+def test_audio_encoding_progress_does_not_advertise_a_network_rate(language, title):
+    token = ui_language.set(language)
+    try:
+        message = build_progress_text(34, "mp3", {"media_type": "audio", "progress": 40,
+            "downloaded_bytes": 1024000, "total_bytes": None, "speed": None, "eta": 24})
+    finally:
+        ui_language.reset(token)
+    assert title in message and "40%" in message and "🚀" not in message

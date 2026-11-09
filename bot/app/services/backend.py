@@ -1092,6 +1092,16 @@ async def _payment_request(
         raise BackendAPIError(status_code=503, detail={"code": "backend_unavailable"}) from exc
 
 
+async def start_cover_request(telegram_id, callback_id, source_url):
+    data = await _payment_request("POST", "/downloads/cover-events",
+        payload={"telegram_id": telegram_id, "callback_id": callback_id, "source_url": source_url})
+    return data["id"]
+
+
+async def confirm_cover_request(telegram_id, request_id):
+    await _payment_request("POST", f"/downloads/cover-events/{request_id}/delivered", payload={"telegram_id": telegram_id})
+
+
 async def get_payment_configuration(
     *,
     select_destination: bool = True,

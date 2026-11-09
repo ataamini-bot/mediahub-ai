@@ -14,6 +14,7 @@ from app.models.bot_experience import (
     SupportTicket,
     SupportTicketEvent,
 )
+from app.models.cover_request import CoverRequest
 from app.models.download_job import DownloadJob, DownloadJobStatus
 from app.models.payment import Payment, PaymentStatus
 from app.models.payment_order import PaymentOrder
@@ -56,6 +57,7 @@ __all__ = [
     "CreditAccount",
     "CreditEntry",
     "CreditNotice",
+    "CoverRequest",
     "DownloadJob",
     "DownloadJobStatus",
 ]

@@ -15,7 +15,10 @@ from fastapi.responses import (
 from sqlalchemy.ext.asyncio import (
     AsyncSession,
 )
-from sqlalchemy import select
+from pydantic import BaseModel, Field
+from sqlalchemy import func, select, update
+from sqlalchemy.dialects.postgresql import insert
+from app.models.cover_request import CoverRequest
 from app.models.user import User
 
 from app.core.internal_auth import require_internal_api_key
@@ -53,6 +56,38 @@ router = APIRouter(
     ],
     dependencies=[Depends(require_internal_api_key)],
 )
+
+
+class CoverOwner(BaseModel):
+    telegram_id: int = Field(gt=0, le=2**63 - 1)
+
+
+class CoverStart(CoverOwner):
+    callback_id: str = Field(min_length=1, max_length=128)
+    source_url: str = Field(min_length=8, max_length=2048, pattern=r"(?i)^https?://[^/\s]+")
+
+
+@router.post("/cover-events")
+async def start_cover(data: CoverStart, db: AsyncSession = Depends(get_db)):
+    user_id = await db.scalar(select(User.id).where(User.telegram_id == data.telegram_id))
+    if user_id is None:
+        raise HTTPException(404, "Customer not found")
+    request_id = await db.scalar(insert(CoverRequest).values(user_id=user_id, callback_id=data.callback_id,
+        source_url=data.source_url).on_conflict_do_nothing(index_elements=["user_id", "callback_id"]).returning(CoverRequest.id))
+    await db.commit()
+    # On replay the original attempt owns delivery; never send the user's file twice.
+    return {"id": request_id}
+
+
+@router.post("/cover-events/{request_id}/delivered")
+async def confirm_cover(request_id: int, data: CoverOwner, db: AsyncSession = Depends(get_db)):
+    owner = select(User.id).where(User.telegram_id == data.telegram_id).scalar_subquery()
+    found = await db.scalar(update(CoverRequest).where(CoverRequest.id == request_id, CoverRequest.user_id == owner)
+        .values(delivered_at=func.coalesce(CoverRequest.delivered_at, func.now())).returning(CoverRequest.id))
+    if found is None:
+        raise HTTPException(404, "Cover request not found")
+    await db.commit()
+    return {"id": found}
 
 
 # ============================================================

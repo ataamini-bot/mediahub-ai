@@ -1605,6 +1605,8 @@ def _update_download_stats(
     total_bytes: int | None,
     speed: float | None,
     eta: int | None,
+    *,
+    clear_total: bool = False,
 ) -> None:
 
     progress = max(
@@ -1651,7 +1653,9 @@ def _update_download_stats(
                 downloaded_bytes
             )
 
-        if (
+        if clear_total:
+            job.total_bytes = None
+        elif (
             total_bytes
             is not None
             and total_bytes > 0
@@ -2279,7 +2283,7 @@ def _build_ffmpeg_conversion_command(
     return command
 
 
-def _terminate_process(process: subprocess.Popen[str]) -> None:
+def _terminate_process(process: subprocess.Popen) -> None:
     if process.poll() is not None:
         return
     process.terminate()
@@ -2288,6 +2292,39 @@ def _terminate_process(process: subprocess.Popen[str]) -> None:
     except subprocess.TimeoutExpired:
         process.kill()
         process.wait(timeout=5)
+
+
+def _read_ffmpeg_progress(process, tick: Callable[[float], None]) -> str:
+    """Drain both pipes until EOF. Noisy errors must never block the encoder."""
+    elapsed_media = 0.0
+    partial = b""
+    errors = bytearray()
+    next_tick = time.monotonic()
+    with io_selectors.DefaultSelector() as streams:
+        streams.register(process.stdout, io_selectors.EVENT_READ)
+        streams.register(process.stderr, io_selectors.EVENT_READ)
+        while streams.get_map() or process.poll() is None:
+            for key, _ in streams.select(timeout=max(0.0, next_tick - time.monotonic())):
+                chunk = os.read(key.fd, 65536)
+                if not chunk:
+                    streams.unregister(key.fileobj)
+                elif key.fileobj is process.stderr:
+                    errors.extend(chunk)
+                    del errors[:-2000]
+                else:
+                    *lines, partial = (partial + chunk).split(b"\n")
+                    partial = partial[-512:]
+                    for line in lines:
+                        field, _, value = line.partition(b"=")
+                        if field in (b"out_time_us", b"out_time_ms"):
+                            try:
+                                elapsed_media = max(elapsed_media, int(value) / 1_000_000)
+                            except ValueError:
+                                pass
+            if time.monotonic() >= next_tick:
+                tick(elapsed_media)
+                next_tick = time.monotonic() + 0.5
+    return errors.decode(errors="replace").strip()
 
 
 def _run_ffmpeg_conversion(
@@ -2326,86 +2363,43 @@ def _run_ffmpeg_conversion(
     )
 
     try:
-        process: subprocess.Popen[str] = subprocess.Popen(
-            command,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            bufsize=1,
-        )
+        process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, bufsize=0)
     except FileNotFoundError as exc:
         raise RuntimeError("FFmpeg is not available for media conversion") from exc
     except OSError as exc:
         raise RuntimeError("Unable to start FFmpeg media conversion") from exc
 
-    selector = io_selectors.DefaultSelector()
-    if process.stdout is not None:
-        selector.register(process.stdout, io_selectors.EVENT_READ)
     started = time.monotonic()
-    last_update = 0.0
+    last_update = None
 
-    try:
-        while process.poll() is None:
-            events = selector.select(timeout=0.5)
-            out_time_seconds: float | None = None
-            for key, _ in events:
-                line = key.fileobj.readline()
-                if not line:
-                    continue
-                field, _, value = line.strip().partition("=")
-                if field == "out_time_ms":
-                    try:
-                        # FFmpeg reports this value in microseconds.
-                        out_time_seconds = max(0.0, float(value) / 1_000_000)
-                    except ValueError:
-                        pass
+    def tick(elapsed_media: float) -> None:
+        nonlocal last_update
+        _check_job_control(job_id)
+        output_size = temporary_path.stat().st_size if temporary_path.exists() else 0
+        if output_size > max_download_bytes:
+            raise RuntimeError("Converted output exceeds the plan file-size limit")
+        now = time.monotonic()
+        if last_update is None or now - last_update >= 1:
+            remaining = ((duration - elapsed_media) * (now - started) / elapsed_media
+                         if duration and 0 < elapsed_media < duration else None)
+            _update_download_stats(
+                job_id=job_id, progress=min(99, int(elapsed_media / duration * 100)) if duration else 0,
+                downloaded_bytes=output_size, total_bytes=None, clear_total=True,
+                speed=None, eta=max(1, int(remaining)) if remaining is not None else None,
+            )
+            last_update = now
 
-            _check_job_control(job_id)
-            if temporary_path.exists() and temporary_path.stat().st_size > max_download_bytes:
-                raise RuntimeError("Converted output exceeds the plan file-size limit")
-
-            now = time.monotonic()
-            if now - last_update >= 1.0:
-                progress = 0
-                if duration and out_time_seconds is not None:
-                    progress = min(99, max(0, int(out_time_seconds / duration * 100)))
-                output_size = temporary_path.stat().st_size if temporary_path.exists() else 0
-                speed = output_size / max(now - started, 0.001)
-                _update_download_stats(
-                    job_id=job_id,
-                    progress=progress,
-                    downloaded_bytes=output_size,
-                    total_bytes=None,
-                    speed=speed,
-                    eta=(
-                        max(1, int((duration - out_time_seconds) / max(out_time_seconds / max(now - started, 0.001), 0.001)))
-                        if duration and out_time_seconds and out_time_seconds < duration
-                        else None
-                    ),
-                )
-                last_update = now
-
-        stdout_tail = process.stdout.read() if process.stdout is not None else ""
-        stderr_text = process.stderr.read() if process.stderr is not None else ""
-        return_code = process.wait()
-    except (DownloadPausedError, DownloadCancelledError):
-        _terminate_process(process)
-        raise
-    except Exception:
-        _terminate_process(process)
-        raise
-    finally:
-        selector.close()
-        if process.stdout is not None:
-            process.stdout.close()
-        if process.stderr is not None:
-            process.stderr.close()
+    with process:
+        try:
+            detail = _read_ffmpeg_progress(process, tick)
+            return_code = process.wait()
+        except BaseException:
+            _terminate_process(process)
+            temporary_path.unlink(missing_ok=True)
+            raise
 
     if return_code != 0:
         temporary_path.unlink(missing_ok=True)
-        detail = (stderr_text or stdout_tail).strip()
-        if len(detail) > 2000:
-            detail = detail[-2000:]
         raise RuntimeError("FFmpeg media conversion failed" + (f": {detail}" if detail else ""))
     if not temporary_path.exists() or temporary_path.stat().st_size <= 0:
         temporary_path.unlink(missing_ok=True)
@@ -2417,7 +2411,7 @@ def _run_ffmpeg_conversion(
     temporary_path.replace(final_path)
     if input_path != final_path:
         _cleanup_uploaded_source(input_path)
-    print(f"FFmpeg conversion completed: job={job_id}, file={final_path}")
+    print(f"FFmpeg conversion completed: job={job_id}, elapsed_s={time.monotonic() - started:.2f}, file={final_path}")
     return final_path
 
 
