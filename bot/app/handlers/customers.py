@@ -176,7 +176,8 @@ async def send_download_export(message, actor_id, target):
                 if response.status != 200:
                     raise BackendAPIError(status_code=response.status, detail="Download export unavailable")
                 count = int(response.headers["X-Report-Rows"])
-                await message.answer_document(ReportUpload(response, target), protect_content=True,
+                # Deliver only in the admin's verified chat, and let them save the spreadsheet.
+                await message.answer_document(ReportUpload(response, target), protect_content=False,
                     caption=tr(f"گزارش دانلودهای {target} · {count} درخواست\nاز جدید به قدیم، به وقت تهران. زمان تحویل فقط برای ارسال‌های ثبت‌شده آمده است.",
                                f"Downloads for {target} · {count} requests\nNewest first, Tehran time. Delivery time is shown only for confirmed deliveries."))
                 return True

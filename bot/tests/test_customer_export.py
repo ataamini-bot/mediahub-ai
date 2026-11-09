@@ -76,7 +76,7 @@ async def test_file_is_streamed_only_after_the_backend_authorizes_actor(monkeypa
     monkeypatch.setattr(customers, "_internal_headers", lambda: {"X-Internal-API-Key": "test-internal-key"})
     monkeypatch.setattr(customers.aiohttp, "ClientSession", lambda **kwargs: Context(SimpleNamespace(get=get)))
     async def document(upload, *, caption, protect_content):
-        assert protect_content and upload.filename == "downloads-789.xlsx" and "17 requests" in caption
+        assert protect_content is False and upload.filename == "downloads-789.xlsx" and "17 requests" in caption
         assert b"".join([part async for part in upload.read(None)]) == b"PKexcel"
     msg = message(document=AsyncMock(side_effect=document))
     lang = ui_language.set("en")
