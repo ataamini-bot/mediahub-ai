@@ -17,8 +17,8 @@ def verify(tag, repository, root, run=subprocess.run):
     if not re.fullmatch(r"[a-z0-9][a-z0-9._-]*/[a-z0-9][a-z0-9._-]*", repository):
         raise ValueError("Expected a GitHub owner/repository")
 
-    def output(*args):
-        return run(list(args), cwd=root, check=True, capture_output=True, text=True).stdout.strip()
+    def output(*args, env=None):
+        return run(list(args), cwd=root, check=True, capture_output=True, text=True, env=env).stdout.strip()
 
     commit = output("git", "rev-parse", "--verify", f"refs/tags/{tag}^{{commit}}")
     if output("git", "rev-parse", "HEAD") != commit or json.loads((root / "release.json").read_text())["version"] != tag:
@@ -29,11 +29,14 @@ def verify(tag, repository, root, run=subprocess.run):
         # empty entry also prevents auto-discovery of a host credential store.
         Path(private, "config.json").write_text('{"auths":{"ghcr.io":{}}}\n')
         docker = ["docker", "--config", private]
+        # Docker can also read registry credentials directly from the environment.
+        anonymous_env = os.environ.copy()
+        anonymous_env.pop("DOCKER_AUTH_CONFIG", None)
         for component in COMPONENTS:
             image = f"ghcr.io/{repository}/{component}"
             ref = f"{image}:{tag}"
-            run([*docker, "pull", "--platform", "linux/amd64", ref], cwd=root, check=True)
-            item, = json.loads(output(*docker, "image", "inspect", ref))
+            run([*docker, "pull", "--platform", "linux/amd64", ref], cwd=root, check=True, env=anonymous_env)
+            item, = json.loads(output(*docker, "image", "inspect", ref, env=anonymous_env))
             labels = item.get("Config", {}).get("Labels") or {}
             if (item.get("Os"), item.get("Architecture")) != ("linux", "amd64"):
                 raise ValueError(f"Wrong platform: {ref}")

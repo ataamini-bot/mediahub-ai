@@ -11,7 +11,8 @@ from verify_release_images import verify
 
 
 @pytest.mark.parametrize("problem", [None, "private", "wrong-revision", "wrong-version", "wrong-platform", "unrelated-digest", "wrong-checkout"])
-def test_operator_can_only_pass_with_three_public_images_of_the_tag(tmp_path, problem):
+def test_operator_can_only_pass_with_three_public_images_of_the_tag(tmp_path, problem, monkeypatch):
+    monkeypatch.setenv("DOCKER_AUTH_CONFIG", "must-not-reach-docker")
     sha, tag = "a" * 40, "v1.0.0"
     (tmp_path / "release.json").write_text(json.dumps({"version": tag}))
     pulls = []
@@ -20,6 +21,7 @@ def test_operator_can_only_pass_with_three_public_images_of_the_tag(tmp_path, pr
         if command[0] == "git":
             return SimpleNamespace(stdout=("b"*40 if problem == "wrong-checkout" and command[-1] == "HEAD" else sha))
         assert command[0:2] == ["docker", "--config"]
+        assert "DOCKER_AUTH_CONFIG" not in kwargs["env"]
         assert json.loads((Path(command[2]) / "config.json").read_text()) == {"auths": {"ghcr.io": {}}}
         image = command[-1].split(":")[0]
         repo = "ghcr.io/example/mediahub-ai/"
