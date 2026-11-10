@@ -1,14 +1,63 @@
+from app.models.admin import (
+    AdminAccount,
+    AdminPermission,
+    AdminRole,
+    AdminRoleAssignment,
+    AdminRolePermission,
+)
+from app.models.app_setting import ApplicationSetting
+from app.models.audit_log import AuditLog
+from app.models.bot_experience import (
+    HomeButton,
+    RequiredChannel,
+    SupportMessage,
+    SupportTicket,
+    SupportTicketEvent,
+)
+from app.models.cover_request import CoverRequest
 from app.models.download_job import DownloadJob, DownloadJobStatus
+from app.models.payment import Payment, PaymentStatus
+from app.models.payment_order import PaymentOrder
+from app.models.payment_destination import PaymentCard, UsdtDestination
 from app.models.plan import Plan
 from app.models.subscription import Subscription
 from app.models.user import User
 from app.models.wallet import Wallet
+from app.models.customer_action import CustomerAction
+from app.models.broadcast import Broadcast, BroadcastRecipient
+from app.models.credit import CreditAccount, CreditEntry, CreditNotice
+from app.models.coupon import Coupon, CouponUse, CouponAction
 
 __all__ = [
+    "Coupon", "CouponUse", "CouponAction",
+    "AdminAccount",
+    "AdminPermission",
+    "AdminRole",
+    "AdminRoleAssignment",
+    "AdminRolePermission",
+    "ApplicationSetting",
+    "AuditLog",
+    "HomeButton",
+    "RequiredChannel",
+    "SupportMessage",
+    "SupportTicket",
+    "SupportTicketEvent",
     "User",
     "Plan",
+    "Payment",
+    "PaymentStatus",
+    "PaymentOrder",
+    "PaymentCard",
+    "UsdtDestination",
     "Subscription",
     "Wallet",
+    "CustomerAction",
+    "Broadcast",
+    "BroadcastRecipient",
+    "CreditAccount",
+    "CreditEntry",
+    "CreditNotice",
+    "CoverRequest",
     "DownloadJob",
     "DownloadJobStatus",
 ]

@@ -15,20 +15,37 @@ from fastapi.responses import (
 from sqlalchemy.ext.asyncio import (
     AsyncSession,
 )
+from pydantic import BaseModel, Field
+from sqlalchemy import func, select, update
+from sqlalchemy.dialects.postgresql import insert
+from app.models.cover_request import CoverRequest
+from app.models.user import User
 
+from app.core.internal_auth import require_internal_api_key
 from app.db.session import (
     get_db,
 )
 from app.schemas.download import (
     DownloadCreate,
+    DownloadEntitlementResponse,
     DownloadResponse,
     MediaInfoResponse,
 )
 from app.services.download import (
+    DownloadFormatError,
     DownloadService,
 )
+from app.services.download_access import (
+    DownloadAccessError,
+    DownloadAccessService,
+)
 from app.models.download_job import (
+    DownloadJob,
     DownloadJobStatus,
+)
+from app.services.managed_settings import (
+    PublicOperationDisabled,
+    ensure_public_operation,
 )
 
 
@@ -37,7 +54,40 @@ router = APIRouter(
     tags=[
         "downloads",
     ],
+    dependencies=[Depends(require_internal_api_key)],
 )
+
+
+class CoverOwner(BaseModel):
+    telegram_id: int = Field(gt=0, le=2**63 - 1)
+
+
+class CoverStart(CoverOwner):
+    callback_id: str = Field(min_length=1, max_length=128)
+    source_url: str = Field(min_length=8, max_length=2048, pattern=r"(?i)^https?://[^/\s]+")
+
+
+@router.post("/cover-events")
+async def start_cover(data: CoverStart, db: AsyncSession = Depends(get_db)):
+    user_id = await db.scalar(select(User.id).where(User.telegram_id == data.telegram_id))
+    if user_id is None:
+        raise HTTPException(404, "Customer not found")
+    request_id = await db.scalar(insert(CoverRequest).values(user_id=user_id, callback_id=data.callback_id,
+        source_url=data.source_url).on_conflict_do_nothing(index_elements=["user_id", "callback_id"]).returning(CoverRequest.id))
+    await db.commit()
+    # On replay the original attempt owns delivery; never send the user's file twice.
+    return {"id": request_id}
+
+
+@router.post("/cover-events/{request_id}/delivered")
+async def confirm_cover(request_id: int, data: CoverOwner, db: AsyncSession = Depends(get_db)):
+    owner = select(User.id).where(User.telegram_id == data.telegram_id).scalar_subquery()
+    found = await db.scalar(update(CoverRequest).where(CoverRequest.id == request_id, CoverRequest.user_id == owner)
+        .values(delivered_at=func.coalesce(CoverRequest.delivered_at, func.now())).returning(CoverRequest.id))
+    if found is None:
+        raise HTTPException(404, "Cover request not found")
+    await db.commit()
+    return {"id": found}
 
 
 # ============================================================
@@ -58,23 +108,64 @@ async def create_download(
         db
     )
 
-    job = await service.create_job(
-        source_url=data.source_url,
-        user_id=None,
-        format_id=data.format_id,
-        quality=data.quality,
-        media_type=data.media_type,
-        playlist_index=(
-            data.playlist_index
-        ),
-    )
+    try:
+        job = await service.create_job(
+            source_url=data.source_url,
+            telegram_id=data.telegram_id,
+            format_id=data.format_id,
+            quality=data.quality,
+            media_type=data.media_type,
+            output_format=data.output_format,
+            playlist_index=data.playlist_index,
+            estimated_size_bytes=data.estimated_size_bytes,
+        )
+    except DownloadAccessError as exc:
+        raise HTTPException(
+            status_code=exc.status_code,
+            detail=exc.detail(),
+        ) from exc
+    except DownloadFormatError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     return job
 
 
 # ============================================================
+# Confirm successful Telegram delivery
+# ============================================================
+
+@router.post(
+    "/{job_id}/delivered",
+    response_model=DownloadResponse,
+)
+async def mark_download_delivered(
+    job_id: int,
+    db: AsyncSession = Depends(get_db),
+):
+    try:
+        return await DownloadAccessService(db).mark_delivered(job_id)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+# ============================================================
 # Media info
 # ============================================================
+
+@router.post("/{job_id}/release-files")
+async def release_download_files(job_id: int, db: AsyncSession = Depends(get_db)):
+    from app.services.media_files import release_files, TERMINAL
+    job = await db.scalar(select(DownloadJob).where(DownloadJob.id == job_id).with_for_update())
+    if job is None:
+        return {"released": True}
+    if job.status not in TERMINAL:
+        raise HTTPException(409, "The download is still running")
+    await db.run_sync(lambda session: release_files(session, job))
+    await db.commit()
+    return {"released": True}
+
 
 @router.get(
     "/info",
@@ -90,8 +181,11 @@ async def get_media_info(
         default=None,
         ge=1,
     ),
+    db: AsyncSession = Depends(get_db),
 ):
     try:
+
+        await ensure_public_operation(db, "downloads")
 
         media_info = await asyncio.to_thread(
             DownloadService.get_media_info,
@@ -100,6 +194,13 @@ async def get_media_info(
         )
 
         return media_info
+
+    except PublicOperationDisabled as exc:
+
+        raise HTTPException(
+            status_code=503,
+            detail=exc.detail(),
+        ) from exc
 
     except Exception as exc:
 
@@ -111,10 +212,28 @@ async def get_media_info(
             ),
         )
 
-
 # ============================================================
 # Get download
 # ============================================================
+
+@router.get(
+    "/entitlement/{telegram_id}",
+    response_model=DownloadEntitlementResponse,
+)
+async def get_download_entitlement(
+    telegram_id: int,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    try:
+        entitlement = await DownloadAccessService(db).get_entitlement(telegram_id)
+        return {
+            "plan_id": entitlement.plan_id,
+            "plan_name": entitlement.plan_name,
+            "forced_join_required": entitlement.forced_join_required,
+            "is_admin_bypass": entitlement.is_admin_bypass,
+        }
+    except DownloadAccessError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail()) from exc
 
 @router.get(
     "/{job_id}",
@@ -125,6 +244,7 @@ async def get_download(
     db: AsyncSession = Depends(
         get_db
     ),
+    telegram_id: int | None = Query(default=None, gt=0),
 ):
     service = DownloadService(
         db
@@ -133,6 +253,11 @@ async def get_download(
     job = await service.get_job(
         job_id
     )
+
+    if job is not None and telegram_id is not None:
+        owner_id = await db.scalar(select(User.id).where(User.telegram_id == telegram_id))
+        if owner_id is None or job.user_id != owner_id:
+            job = None
 
     if job is None:
 
@@ -234,6 +359,12 @@ async def resume_download(
                 exc
             ),
         )
+
+    except DownloadAccessError as exc:
+        raise HTTPException(
+            status_code=exc.status_code,
+            detail=exc.detail(),
+        ) from exc
 
 
 # ============================================================

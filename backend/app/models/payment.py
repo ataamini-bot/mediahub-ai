@@ -1,0 +1,241 @@
+import enum
+from datetime import datetime
+from decimal import Decimal
+from uuid import UUID
+
+from sqlalchemy import (
+    BigInteger,
+    CheckConstraint,
+    DateTime,
+    Enum,
+    ForeignKey,
+    Index,
+    Integer,
+    JSON,
+    Numeric,
+    String,
+    Text,
+    Uuid,
+    text,
+)
+from sqlalchemy.orm import Mapped, mapped_column
+
+from app.db.base import Base, TimestampMixin
+
+
+class PaymentStatus(str, enum.Enum):
+    PENDING = "pending"
+    APPROVED = "approved"
+    REJECTED = "rejected"
+
+
+class Payment(Base, TimestampMixin):
+    __tablename__ = "payments"
+
+    __table_args__ = (
+        CheckConstraint(
+            "duration_months IN (1, 3, 6, 12)",
+            name="ck_payments_duration_months",
+        ),
+        CheckConstraint(
+            "amount > 0",
+            name="ck_payments_amount_positive",
+        ),
+        CheckConstraint(
+            "duration_days > 0",
+            name="ck_payments_duration_days_positive",
+        ),
+        Index(
+            "uq_payments_receipt_file_unique_id",
+            "receipt_file_unique_id",
+            unique=True,
+        ),
+        Index(
+            "uq_payments_usdt_network_txid",
+            "usdt_network_code",
+            "txid_normalized",
+            unique=True,
+            postgresql_where=text("txid_normalized IS NOT NULL"),
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(
+        Integer,
+        primary_key=True,
+        autoincrement=True,
+    )
+
+    order_id: Mapped[UUID | None] = mapped_column(
+        Uuid, ForeignKey("payment_orders.id", ondelete="RESTRICT"),
+        nullable=True, unique=True,
+    )
+
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey(
+            "users.id",
+            ondelete="CASCADE",
+        ),
+        index=True,
+        nullable=False,
+    )
+
+    plan_id: Mapped[int] = mapped_column(
+        ForeignKey(
+            "plans.id",
+            ondelete="RESTRICT",
+        ),
+        index=True,
+        nullable=False,
+    )
+
+    amount: Mapped[Decimal] = mapped_column(
+        Numeric(18, 4),
+        nullable=False,
+    )
+
+    discount_snapshot: Mapped[dict] = mapped_column(JSON, default=dict, server_default=text("'{}'::json"), nullable=False)
+
+    offer_code: Mapped[str] = mapped_column(
+        String(100),
+        nullable=False,
+    )
+
+    duration_months: Mapped[int | None] = mapped_column(
+        Integer,
+        nullable=True,
+    )
+
+    duration_days: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+    )
+
+    plan_name_snapshot: Mapped[str] = mapped_column(
+        String(100),
+        nullable=False,
+    )
+
+    plan_limits_snapshot: Mapped[dict] = mapped_column(
+        JSON,
+        default=dict,
+        server_default=text("'{}'::json"),
+        nullable=False,
+    )
+
+    status: Mapped[PaymentStatus] = mapped_column(
+        Enum(PaymentStatus),
+        default=PaymentStatus.PENDING,
+        index=True,
+        nullable=False,
+    )
+
+    receipt_file_id: Mapped[str | None] = mapped_column(
+        String(512),
+        nullable=True,
+    )
+
+    receipt_file_unique_id: Mapped[str | None] = mapped_column(
+        String(255),
+        nullable=True,
+    )
+
+    receipt_file_type: Mapped[str | None] = mapped_column(
+        String(32),
+        nullable=True,
+    )
+
+    receipt_file_size: Mapped[int | None] = mapped_column(
+        BigInteger,
+        nullable=True,
+    )
+
+    receipt_mime_type: Mapped[str | None] = mapped_column(
+        String(128),
+        nullable=True,
+    )
+
+    receipt_file_name: Mapped[str | None] = mapped_column(
+        String(255),
+        nullable=True,
+    )
+
+    user_receipt_message_id: Mapped[int | None] = mapped_column(
+        BigInteger,
+        nullable=True,
+    )
+
+    admin_chat_id: Mapped[int | None] = mapped_column(
+        BigInteger,
+        nullable=True,
+    )
+
+    admin_message_id: Mapped[int | None] = mapped_column(
+        BigInteger,
+        nullable=True,
+    )
+
+    admin_message_thread_id: Mapped[int | None] = mapped_column(
+        BigInteger,
+        nullable=True,
+    )
+
+    reviewed_by_telegram_id: Mapped[int | None] = mapped_column(
+        BigInteger,
+        nullable=True,
+    )
+
+    reviewed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+
+    rejection_reason: Mapped[str | None] = mapped_column(
+        Text,
+        nullable=True,
+    )
+
+    subscription_id: Mapped[int | None] = mapped_column(
+        ForeignKey(
+            "subscriptions.id",
+            ondelete="SET NULL",
+        ),
+        index=True,
+        nullable=True,
+    )
+
+    payment_method: Mapped[str] = mapped_column(
+        String(20),
+        default="card",
+        server_default="card",
+        nullable=False,
+    )
+
+    payment_card_id: Mapped[int | None] = mapped_column(
+        ForeignKey(
+            "payment_cards.id",
+            ondelete="SET NULL",
+        ),
+        index=True,
+        nullable=True,
+    )
+
+    payment_destination_snapshot: Mapped[dict] = mapped_column(
+        JSON,
+        default=dict,
+        server_default=text("'{}'::json"),
+        nullable=False,
+    )
+
+    # USDT submissions are identified by a transaction id. The original
+    # spelling is kept for display while the normalized form participates in
+    # the per-network unique index.
+    txid: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    txid_normalized: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    usdt_network_code: Mapped[str | None] = mapped_column(String(32), nullable=True)
+
+    # Snapshot of how approval affected the subscription. This lets finance
+    # reports distinguish new purchases, renewals, upgrades and scheduled
+    # downgrades without reconstructing historical plan data.
+    subscription_change_type: Mapped[str | None] = mapped_column(
+        String(24), nullable=True
+    )

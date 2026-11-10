@@ -1,25 +1,39 @@
+from app.localization import tr as _tr, localized_collection as _localized_collection
 import asyncio
+import aiohttp
 import html
+import ipaddress
+import mimetypes
 import os
 import re
+import socket
+import time
+from uuid import uuid4
 from pathlib import Path
+from urllib.parse import urljoin, urlparse
 
 
 from aiogram import Bot, Dispatcher, F
 from aiogram.client.session.aiohttp import AiohttpSession
 from aiogram.client.telegram import TelegramAPIServer
-from aiogram.filters import CommandStart
+from aiogram.filters import BaseFilter, CommandStart, StateFilter
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.storage.redis import RedisStorage
 from aiogram.types import (
+    BotCommand,
     CallbackQuery,
     FSInputFile,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
+    MenuButtonCommands,
     Message,
 )
 
 
 from app.keyboards.download import (
     build_active_download_keyboard,
+    build_completed_download_keyboard,
+    build_selection_output_keyboard,
     build_paused_download_keyboard,
 )
 
@@ -31,7 +45,63 @@ from app.keyboards.media import (
 
 
 from app.keyboards.quality import (
+    VIDEO_DEVICES,
     build_quality_keyboard,
+    build_video_device_keyboard,
+)
+from app.keyboards.conversion import build_audio_format_keyboard
+from app.keyboards.payment import (
+    build_home_reply_keyboard,
+    build_upgrade_keyboard,
+)
+from app.handlers.operations import router as operations_router
+from app.handlers.customers import router as customers_router
+from app.handlers.backups import router as backups_router
+from app.handlers.broadcasts import router as broadcasts_router
+from app.services.broadcast_sender import run_broadcast_sender
+from app.handlers.credit import router as credit_router
+from app.handlers.coupons import router as coupons_router
+from app.handlers.coupon_checkout import router as coupon_checkout_router
+from app.services.credit_notices import run_credit_notices
+from app.handlers.conversion import (
+    cleanup_staged_state,
+    configure_download_runtime,
+    router as conversion_router,
+)
+from app.handlers.home import (
+    router as home_router,
+)
+from app.handlers.experience import (
+    enforce_required_membership,
+    entry_membership_allowed,
+    router as experience_router,
+)
+from app.handlers.admin import (
+    router as admin_router,
+)
+from app.handlers.admin_settings import (
+    router as admin_settings_router,
+)
+from app.handlers.admin_experience import (
+    router as admin_experience_router,
+)
+from app.handlers.admin_finance import (
+    router as admin_finance_router,
+)
+from app.handlers.admin_statistics import (
+    router as admin_statistics_router,
+)
+from app.handlers.language import (
+    router as language_router,
+)
+from app.handlers.payments import (
+    router as payments_router,
+)
+from app.i18n import home_action_for_text, normalize_language, translate
+from app.runtime_config import runtime_configuration, runtime_content
+from app.runtime_config import (
+    action_for_runtime_text,
+    all_runtime_configurations,
 )
 
 from app.utils.formatting import (
@@ -41,6 +111,7 @@ from app.utils.formatting import (
 
 
 from app.state.pending import (
+    move_video_selection,
     PENDING_MEDIA_ENTRIES,
     PENDING_SELECTIONS,
     add_pending_media_entries,
@@ -49,14 +120,22 @@ from app.state.pending import (
 
 
 from app.services.backend import (
+    start_cover_request, confirm_cover_request,
+    BackendAPIError,
     cancel_download_job,
     create_download_job,
     get_download_job,
+    get_download_entitlement,
     get_media_info,
+    mark_download_delivered,
+    release_download_files,
     pause_download_job,
     register_telegram_user,
     resume_download_job,
 )
+from app.utils.media_conversion import AUDIO_FORMATS, normalize_format
+from app.utils.filenames import media_filename
+from app.utils.media_notice import media_file_notice
 
 
 TOKEN = os.getenv(
@@ -66,6 +145,11 @@ TOKEN = os.getenv(
 TELEGRAM_BOT_API = os.getenv(
     "TELEGRAM_BOT_API",
     "http://telegram-api:8081",
+)
+
+REDIS_URL = os.getenv(
+    "REDIS_URL",
+    "redis://redis:6379/0",
 )
 
 DOWNLOAD_DIR = Path(
@@ -91,7 +175,55 @@ MAX_DOWNLOAD_SIZE_BYTES = (
     * 1024
 )
 
-dp = Dispatcher()
+dp = Dispatcher(
+    storage=RedisStorage.from_url(
+        REDIS_URL
+    )
+)
+from app.middleware.interface import InterfaceContext, InterfaceCallbacks, InterfaceRequests, ui_language
+from app.middleware.health import PollHeartbeatMiddleware
+
+dp.message.outer_middleware(InterfaceContext())
+dp.callback_query.outer_middleware(InterfaceContext())
+dp.callback_query.outer_middleware(InterfaceCallbacks(dp.storage.redis))
+
+dp.include_router(operations_router)
+dp.include_router(customers_router)
+dp.include_router(backups_router)
+dp.include_router(broadcasts_router)
+dp.include_router(credit_router)
+dp.include_router(coupons_router)
+dp.include_router(coupon_checkout_router)
+dp.include_router(conversion_router)
+dp.include_router(
+    experience_router
+)
+# Admin forms must receive their input before home-menu label matching.
+# An edited title can itself be a valid home button, such as "خرید اشتراک".
+dp.include_router(
+    admin_settings_router
+)
+dp.include_router(
+    admin_experience_router
+)
+dp.include_router(
+    admin_finance_router
+)
+dp.include_router(
+    admin_statistics_router
+)
+dp.include_router(
+    admin_router
+)
+dp.include_router(
+    home_router
+)
+dp.include_router(
+    payments_router
+)
+dp.include_router(
+    language_router
+)
 
 
 # ============================================================
@@ -101,6 +233,118 @@ dp = Dispatcher()
 # ============================================================
 # URL helpers
 # ============================================================
+
+class DownloadMessageFilter(
+    BaseFilter
+):
+    """Keep Telegram commands out of the generic download handler."""
+
+    async def __call__(
+        self,
+        message: Message,
+    ) -> bool:
+
+        text = (
+            message.text
+            or ""
+        )
+
+        stripped = text.strip()
+        if not stripped or stripped.startswith("/"):
+            return False
+        if home_action_for_text(stripped) is not None:
+            return False
+
+        # Reply-keyboard taps arrive as ordinary text messages.  Runtime
+        # labels and custom buttons must be rejected here because this root
+        # dispatcher handler is evaluated before child-router handlers.
+        if "https://" not in stripped and "http://" not in stripped:
+            action = action_for_runtime_text(
+                stripped,
+                await all_runtime_configurations(),
+            )
+            if action is not None:
+                return False
+
+        return True
+
+
+def download_error_text(exc: Exception) -> str:
+    if not isinstance(exc, BackendAPIError) or not isinstance(exc.detail, dict):
+        return str(exc)[:1000]
+
+    code = str(exc.detail.get("code") or "")
+    plan_name = str(exc.detail.get("plan_name") or _tr("پلن فعلی"))
+    from app.middleware.interface import ui_language
+    if ui_language.get() == "en" and any("\u0600" <= ch <= "\u06ff" for ch in plan_name):
+        plan_name = "your current plan"
+    if plan_name.strip().lower() == "free":
+        plan_name = _tr("رایگان")
+
+    if code == "weekly_download_limit_reached":
+        if ui_language.get() == "en":
+            return f"Your weekly quota for {plan_name} has been reached ({exc.detail.get('used', 0)}/{exc.detail.get('limit', 0)})."
+        return f"{_tr('سهمیه هفتگی ')}{plan_name}{_tr(' تمام شده است (')}{exc.detail.get('used', 0)}/{exc.detail.get('limit', 0)})."
+    if code == "weekly_conversion_limit_reached":
+        if ui_language.get() == "en":
+            return (
+                "Your Free plan includes one file conversion per week. "
+                "Upgrade to Professional or Gold for more conversions."
+            )
+        return (
+            "سهمیهٔ ۱ تبدیل فرمت هفتگی پلن رایگان شما تمام شده است؛ "
+            "برای تبدیل بیشتر، پلن حرفه‌ای یا طلایی را تهیه کنید."
+        )
+    if code == "daily_download_limit_reached":
+        return (
+            f"{_tr('سهمیه روزانه ')}{plan_name}{_tr(' تمام شده است (')}{exc.detail.get('used', 0)}/{exc.detail.get('limit', 0)})."
+        )
+    if code == "concurrent_download_limit_reached":
+        return (
+            f"{_tr('تعداد دانلودهای هم\u200cزمان ')}{plan_name}{_tr(' به سقف ')}{exc.detail.get('limit', 1)}{_tr(' رسیده است.')}"
+        )
+    if code == "download_quality_limit_exceeded":
+        return (
+            f"{_tr('حداکثر کیفیت مجاز در ')}{plan_name}{_tr('، ')}{exc.detail.get('max_quality', 0)}{_tr('p است.')}"
+        )
+    if code == "download_file_size_limit_exceeded":
+        return (
+            f"{_tr('حداکثر حجم مجاز در ')}{plan_name}{_tr('، ')}{exc.detail.get('max_file_size_mb', 0)}{_tr(' مگابایت است.')}"
+        )
+    if code == "download_user_blocked":
+        return _tr("حساب شما اجازه ایجاد دانلود جدید ندارد.")
+    if code == "download_user_not_found":
+        return _tr("ابتدا دستور /start را بفرستید و دوباره تلاش کنید.")
+    if code == "download_plan_unavailable":
+        return _tr("پلن دانلود در حال حاضر در دسترس نیست؛ با پشتیبانی تماس بگیرید.")
+    if code == "maintenance_mode":
+        return _tr("🛠 ربات موقتاً در حالت تعمیرات است؛ کمی بعد تلاش کنید.")
+    if code == "downloads_disabled":
+        return _tr("⏸ دریافت لینک و دانلود جدید موقتاً غیرفعال است.")
+    if code == "download_temporarily_unavailable":
+        reason_code = str(exc.detail.get("reason_code") or "")
+        if reason_code == "maintenance_mode":
+            return _tr("🛠 ربات موقتاً در حالت تعمیرات است؛ کمی بعد تلاش کنید.")
+        return _tr("⏸ دریافت دانلود جدید موقتاً غیرفعال است.")
+
+    return str(exc.detail.get("message") or exc)[:1000]
+
+
+def download_error_markup(exc: Exception):
+    if not isinstance(exc, BackendAPIError) or not isinstance(exc.detail, dict):
+        return None
+
+    if str(exc.detail.get("code") or "") in {
+        "daily_download_limit_reached",
+        "weekly_download_limit_reached",
+        "weekly_conversion_limit_reached",
+        "download_quality_limit_exceeded",
+        "download_file_size_limit_exceeded",
+    }:
+        from app.middleware.interface import ui_language
+        return build_upgrade_keyboard(ui_language.get())
+    return None
+
 
 def extract_url(
     text: str,
@@ -358,7 +602,7 @@ def normalize_media_title(
     ):
 
         return (
-            "ویدئو"
+            _tr("ویدئو")
         )
 
     return (
@@ -770,7 +1014,7 @@ def format_eta(
     if seconds < 60:
 
         return (
-            f"{seconds} ثانیه"
+            f"{seconds}{_tr(' ثانیه')}"
         )
 
     hours, remainder = divmod(
@@ -790,13 +1034,13 @@ def format_eta(
     if hours:
 
         parts.append(
-            f"{hours} ساعت"
+            f"{hours}{_tr(' ساعت')}"
         )
 
     if minutes:
 
         parts.append(
-            f"{minutes} دقیقه"
+            f"{minutes}{_tr(' دقیقه')}"
         )
 
     if (
@@ -805,7 +1049,7 @@ def format_eta(
     ):
 
         parts.append(
-            f"{secs} ثانیه"
+            f"{secs}{_tr(' ثانیه')}"
         )
 
     if not parts:
@@ -813,7 +1057,7 @@ def format_eta(
         return None
 
     return (
-        " و ".join(
+        _tr(" و ").join(
             parts
         )
     )
@@ -823,19 +1067,221 @@ def format_eta(
 # Progress text
 # ============================================================
 
+
+def _quality_height(
+    quality: str,
+) -> int | None:
+
+    match = re.search(
+        r"(\d{3,4})p",
+        str(
+            quality
+            or ""
+        ).lower(),
+    )
+
+    if not match:
+
+        return None
+
+    try:
+
+        return int(
+            match.group(
+                1
+            )
+        )
+
+    except ValueError:
+
+        return None
+
+
+def _media_fps_for_quality(
+    quality: str,
+    media_info: dict | None,
+) -> float | None:
+
+    if not isinstance(
+        media_info,
+        dict,
+    ):
+
+        return None
+
+    requested_height = _quality_height(
+        quality
+    )
+
+    if requested_height is None:
+
+        return None
+
+    candidates: list[
+        float
+    ] = []
+
+    for item in (
+        media_info.get(
+            "formats"
+        )
+        or []
+    ):
+
+        if not isinstance(
+            item,
+            dict,
+        ) or not item.get(
+            "has_video"
+        ):
+
+            continue
+
+        item_height = _get_format_quality(
+            item
+        )
+
+        if item_height != requested_height:
+
+            continue
+
+        try:
+
+            fps = float(
+                item.get(
+                    "fps"
+                )
+                or 0
+            )
+
+        except (
+            TypeError,
+            ValueError,
+        ):
+
+            continue
+
+        if item.get("preferred_for_quality"):
+            return fps if fps > 0 else None
+        if fps > 0:
+
+            candidates.append(
+                fps
+            )
+
+    return max(
+        candidates,
+        default=None,
+    )
+
+
+def _quality_label_with_fps(
+    quality: str,
+    media_info: dict | None = None,
+) -> str:
+
+    label = str(
+        quality
+        or _tr("نامشخص")
+    )
+
+    fps = _media_fps_for_quality(
+        label,
+        media_info,
+    )
+
+    if fps is None:
+
+        return label
+
+    fps_label = (
+        str(
+            int(
+                fps
+            )
+        )
+        if fps.is_integer()
+        else f"{fps:.2f}".rstrip(
+            "0"
+        ).rstrip(
+            "."
+        )
+    )
+
+    return (
+        f"{label} • {fps_label} FPS"
+    )
+
+
+def _progress_bar(
+    progress: int,
+    width: int = 10,
+) -> str:
+
+    safe_progress = max(
+        0,
+        min(
+            int(
+                progress
+            ),
+            100,
+        ),
+    )
+
+    filled = min(
+        width,
+        max(
+            0,
+            int(
+                safe_progress * width / 100
+            ),
+        ),
+    )
+
+    return (
+        "█" * filled
+        + "░" * (
+            width - filled
+        )
+    )
+
+
 def build_progress_text(
     job_id: int,
     quality: str,
     job: dict,
     paused: bool = False,
+    media_info: dict | None = None,
 ) -> str:
 
-    progress = int(
-        job.get(
-            "progress",
-            0,
+    # ``job_id`` remains in the function signature for existing callers,
+    # but deliberately never appears in user-facing progress text.  It is
+    # exposed only by the completed-file Details control.
+    del job_id
+
+    try:
+
+        progress = int(
+            job.get(
+                "progress",
+                0,
+            )
+            or 0
         )
-        or 0
+
+    except (
+        TypeError,
+        ValueError,
+    ):
+
+        progress = 0
+
+    progress = max(
+        0,
+        min(
+            progress,
+            100,
+        ),
     )
 
     downloaded_bytes = (
@@ -961,43 +1407,35 @@ def build_progress_text(
         )
     )
 
+    english = ui_language.get() == "en"
+    quality_label = html.escape(
+        _quality_label_with_fps(
+            quality,
+            media_info,
+        )
+    )
+
     if paused:
-
-        lines = [
-            "⏸ <b>دانلود متوقف شده است</b>",
-            "",
-            (
-                f"🆔 Job ID: "
-                f"<code>{job_id}</code>"
-            ),
-            (
-                f"🎬 کیفیت: "
-                f"<code>{quality}</code>"
-            ),
-            (
-                f"📊 پیشرفت: "
-                f"<code>{progress}%</code>"
-            ),
-        ]
-
+        title = "⏸ <b>Download paused</b>" if english else "⏸ <b>دانلود متوقف شده است</b>"
+    elif job.get("media_type") == "audio":
+        title = "🎵 <b>Downloading and preparing audio…</b>" if english else "🎵 <b>در حال دریافت و آماده‌سازی صدا…</b>"
     else:
+        title = "⬇️ <b>Downloading...</b>" if english else "⬇️ <b>در حال دانلود...</b>"
 
-        lines = [
-            "⬇️ <b>در حال دانلود...</b>",
-            "",
-            (
-                f"🆔 Job ID: "
-                f"<code>{job_id}</code>"
-            ),
-            (
-                f"🎬 کیفیت: "
-                f"<code>{quality}</code>"
-            ),
-            (
-                f"📊 پیشرفت: "
-                f"<code>{progress}%</code>"
-            ),
-        ]
+    lines = [
+        title,
+        "",
+        (
+            f"🎞 Quality: <b>{quality_label}</b>"
+            if english
+            else f"🎞 کیفیت: <b>{quality_label}</b>"
+        ),
+        (
+            f"📊 Progress: {_progress_bar(progress)} {progress}%"
+            if english
+            else f"📊 پیشرفت: {_progress_bar(progress)} {progress}%"
+        ),
+    ]
 
     if (
         downloaded_label
@@ -1029,10 +1467,9 @@ def build_progress_text(
 
             lines.append(
                 (
-                    "📦 دریافت شده: "
-                    f"<code>"
-                    f"{downloaded_label}"
-                    f"</code>"
+                    f"📦 Size: <b>{downloaded_label}</b>"
+                    if english
+                    else f"📦 حجم: <b>{downloaded_label}</b>"
                 )
             )
 
@@ -1040,11 +1477,9 @@ def build_progress_text(
 
             lines.append(
                 (
-                    "📦 دانلود شده: "
-                    f"<code>"
-                    f"{downloaded_label} از "
-                    f"{total_label}"
-                    f"</code>"
+                    f"📦 Size: <b>{downloaded_label} / {total_label}</b>"
+                    if english
+                    else f"📦 حجم: <b>{downloaded_label} / {total_label}</b>"
                 )
             )
 
@@ -1052,10 +1487,9 @@ def build_progress_text(
 
         lines.append(
             (
-                "📦 دانلود شده: "
-                f"<code>"
-                f"{downloaded_label}"
-                f"</code>"
+                f"📦 Size: <b>{downloaded_label}</b>"
+                if english
+                else f"📦 حجم: <b>{downloaded_label}</b>"
             )
         )
 
@@ -1063,10 +1497,9 @@ def build_progress_text(
 
         lines.append(
             (
-                "📦 حجم کل: "
-                f"<code>"
-                f"{total_label}"
-                f"</code>"
+                f"📦 Size: <b>— / {total_label}</b>"
+                if english
+                else f"📦 حجم: <b>— / {total_label}</b>"
             )
         )
 
@@ -1076,10 +1509,9 @@ def build_progress_text(
 
             lines.append(
                 (
-                    "🚀 سرعت: "
-                    f"<code>"
-                    f"{speed_label}"
-                    f"</code>"
+                    f"🚀 Speed: <b>{speed_label}</b>"
+                    if english
+                    else f"🚀 سرعت: <b>{speed_label}</b>"
                 )
             )
 
@@ -1087,10 +1519,9 @@ def build_progress_text(
 
             lines.append(
                 (
-                    "⏳ زمان باقی‌مانده: "
-                    f"<code>"
-                    f"{eta_label}"
-                    f"</code>"
+                    f"⏱ Remaining: ~<b>{eta_label}</b>"
+                    if english
+                    else f"⏱ باقی\u200cمانده: ~<b>{eta_label}</b>"
                 )
             )
 
@@ -1100,13 +1531,14 @@ def build_progress_text(
             [
                 "",
                 (
-                    "🕕 فایل نیمه‌کاره تا "
-                    "<b>۶ ساعت</b> "
-                    "نگهداری می‌شود."
+                    "🕕 The partial file is retained for <b>6 hours</b>."
+                    if english
+                    else "🕕 فایل نیمه‌کاره تا <b>۶ ساعت</b> نگهداری می‌شود."
                 ),
                 (
-                    "پس از آن برای آزادسازی "
-                    "فضای سرور حذف خواهد شد."
+                    "It is then removed to free server space."
+                    if english
+                    else "پس از آن برای آزادسازی فضای سرور حذف خواهد شد."
                 ),
             ]
         )
@@ -1115,6 +1547,324 @@ def build_progress_text(
         "\n".join(
             lines
         )
+    )
+
+
+def _format_media_duration(
+    value: object,
+) -> str | None:
+
+    try:
+
+        seconds = int(
+            float(
+                value
+            )
+        )
+
+    except (
+        TypeError,
+        ValueError,
+    ):
+
+        return None
+
+    if seconds <= 0:
+
+        return None
+
+    hours, remainder = divmod(
+        seconds,
+        3600,
+    )
+    minutes, seconds = divmod(
+        remainder,
+        60,
+    )
+
+    if hours:
+
+        return (
+            f"{hours:02d}:"
+            f"{minutes:02d}:"
+            f"{seconds:02d}"
+        )
+
+    return (
+        f"{minutes:02d}:"
+        f"{seconds:02d}"
+    )
+
+
+def _source_label(
+    source_url: object,
+) -> str:
+
+    try:
+
+        hostname = (
+            urlparse(
+                str(
+                    source_url
+                    or ""
+                )
+            ).hostname
+            or ""
+        ).lower()
+
+    except Exception:
+
+        hostname = ""
+
+    known_sources = (
+        ("instagram", "Instagram"),
+        ("youtu", "YouTube"),
+        ("tiktok", "TikTok"),
+        ("twitter", "X"),
+        ("x.com", "X"),
+        ("facebook", "Facebook"),
+        ("fb.watch", "Facebook"),
+        ("pinterest", "Pinterest"),
+        ("threads", "Threads"),
+        ("vimeo", "Vimeo"),
+        ("dailymotion", "Dailymotion"),
+    )
+
+    for marker, label in known_sources:
+
+        if marker in hostname:
+
+            return label
+
+    if hostname.startswith(
+        "www."
+    ):
+
+        hostname = hostname[4:]
+
+    return hostname or (
+        "Unknown"
+        if ui_language.get() == "en"
+        else "نامشخص"
+    )
+
+
+def _completed_file_caption(
+    filename: str,
+    size_label: str,
+    job: dict,
+    media_info: dict | None = None,
+) -> str:
+
+    english = ui_language.get() == "en"
+    quality = str(
+        job.get(
+            "quality"
+        )
+        or ""
+    )
+
+    if not quality:
+
+        output_format = str(
+            job.get(
+                "output_format"
+            )
+            or ""
+        ).upper()
+
+        media_type = str(
+            job.get(
+                "media_type"
+            )
+            or ""
+        ).lower()
+
+        if media_type == "audio" and output_format:
+
+            quality = f"audio/{output_format}"
+
+        elif media_type == "convert" and output_format:
+
+            quality = (
+                f"Convert to {output_format}"
+                if english
+                else f"تبدیل به {output_format}"
+            )
+
+        else:
+
+            quality = (
+                "Original"
+                if english
+                else "اصلی"
+            )
+
+    format_label = (
+        Path(
+            filename
+        ).suffix.lstrip(
+            "."
+        ).upper()
+        or str(
+            job.get(
+                "output_format"
+            )
+            or ""
+        ).upper()
+        or "FILE"
+    )
+
+    lines = [
+        f"📥 <b>{html.escape(filename)}</b>",
+        "",
+        (
+            "✅ Download completed successfully"
+            if english
+            else "✅ دانلود با موفقیت انجام شد"
+        ),
+        "",
+        (
+            f"📦 Size: <b>{size_label}</b>"
+            if english
+            else f"📦 حجم: <b>{size_label}</b>"
+        ),
+        (
+            f"🎞 Quality: <b>{html.escape(_quality_label_with_fps(quality, media_info))}</b>"
+            if english
+            else f"🎞 کیفیت: <b>{html.escape(_quality_label_with_fps(quality, media_info))}</b>"
+        ),
+    ]
+
+    duration = _format_media_duration(
+        (
+            media_info
+            or {}
+        ).get(
+            "duration"
+        )
+    )
+
+    if duration:
+
+        lines.append(
+            (
+                f"⏱ Duration: <b>{duration}</b>"
+                if english
+                else f"⏱ مدت: <b>{duration}</b>"
+            )
+        )
+
+    lines.extend(
+        [
+            (
+                f"📁 Format: <b>{format_label}</b>"
+                if english
+                else f"📁 فرمت: <b>{format_label}</b>"
+            ),
+            (
+                f"🔗 Source: <b>{html.escape(_source_label(job.get('source_url')))}</b>"
+                if english
+                else f"🔗 منبع: <b>{html.escape(_source_label(job.get('source_url')))}</b>"
+            ),
+        ]
+    )
+
+    lines.extend(["", media_file_notice(ui_language.get())])
+    return "\n".join(lines)
+
+
+def _queued_download_text(
+    quality: str,
+    media_info: dict | None = None,
+) -> str:
+
+    quality_label = html.escape(
+        _quality_label_with_fps(
+            quality,
+            media_info,
+        )
+    )
+
+    if ui_language.get() == "en":
+
+        return (
+            "⏳ <b>Download queued</b>\n\n"
+            f"🎞 Quality: <b>{quality_label}</b>\n"
+            "📊 Status: <b>pending</b>"
+        )
+
+    return (
+        "⏳ <b>درخواست در صف دانلود است</b>\n\n"
+        f"🎞 کیفیت: <b>{quality_label}</b>\n"
+        "📊 وضعیت: <b>pending</b>"
+    )
+
+
+def _download_details_text(
+    job: dict,
+) -> str:
+
+    job_id = str(
+        job.get(
+            "id"
+        )
+        or "—"
+    )
+    quality = str(
+        job.get(
+            "quality"
+        )
+        or job.get(
+            "output_format"
+        )
+        or (
+            "Unknown"
+            if ui_language.get() == "en"
+            else "نامشخص"
+        )
+    )
+    status = str(
+        job.get(
+            "status"
+        )
+        or "—"
+    )
+    format_label = str(
+        job.get(
+            "output_format"
+        )
+        or Path(
+            str(
+                job.get(
+                    "file_path"
+                )
+                or ""
+            )
+        ).suffix.lstrip(
+            "."
+        )
+        or "—"
+    ).upper()
+
+    if ui_language.get() == "en":
+
+        return (
+            "📋 <b>Download details</b>\n\n"
+            f"🆔 Job ID: <code>{html.escape(job_id)}</code>\n"
+            f"📊 Status: <b>{html.escape(status)}</b>\n"
+            f"🎞 Quality: <b>{html.escape(quality)}</b>\n"
+            f"📁 Format: <b>{html.escape(format_label)}</b>\n"
+            f"🔗 Source: <b>{html.escape(_source_label(job.get('source_url')))}</b>"
+        )
+
+    return (
+        "📋 <b>جزئیات دانلود</b>\n\n"
+        f"🆔 Job ID: <code>{html.escape(job_id)}</code>\n"
+        f"📊 وضعیت: <b>{html.escape(status)}</b>\n"
+        f"🎞 کیفیت: <b>{html.escape(quality)}</b>\n"
+        f"📁 فرمت: <b>{html.escape(format_label)}</b>\n"
+        f"🔗 منبع: <b>{html.escape(_source_label(job.get('source_url')))}</b>"
     )
 
 
@@ -1522,6 +2272,11 @@ def _select_worker_video_format(
 
         return None
 
+    # The backend marks the Instagram rendition the worker will use for this quality.
+    for candidate in candidates:
+        if candidate.get("preferred_for_quality"):
+            return candidate
+
     # ========================================================
     # 1. X/Twitter direct HTTP media
     #
@@ -1878,6 +2633,8 @@ def build_smaller_quality_keyboard(
         int | None,
     ],
     playlist_index: int | None = None,
+    media_info: dict | None = None,
+    *, telegram_id: int, source_job_id: int | None = None,
 ) -> InlineKeyboardMarkup | None:
 
     quality_options: list[
@@ -1930,6 +2687,9 @@ def build_smaller_quality_keyboard(
             playlist_index=(
                 playlist_index
             ),
+            media_info=media_info,
+            telegram_id=telegram_id,
+            source_job_id=source_job_id,
         )
     )
 
@@ -1939,6 +2699,10 @@ def build_smaller_quality_keyboard(
                 quality_options
             ),
             token=token,
+            audio_token=token,
+            cover_token=token,
+            description_token=token,
+            language=ui_language.get(),
         )
     )
 
@@ -1950,6 +2714,7 @@ async def wait_for_download(
     job_id: int,
     message: Message,
     quality: str,
+    media_info: dict | None = None,
 ) -> dict:
 
     elapsed = 0
@@ -2045,17 +2810,9 @@ async def wait_for_download(
 
                 await safe_edit_message(
                     message,
-                    (
-                        "⏳ <b>درخواست در صف دانلود است</b>\n\n"
-
-                        f"🆔 Job ID: "
-                        f"<code>{job_id}</code>\n"
-
-                        f"🎬 کیفیت: "
-                        f"<code>{quality}</code>\n"
-
-                        "📊 وضعیت: "
-                        "<code>pending</code>"
+                    _queued_download_text(
+                        quality,
+                        media_info,
                     ),
                     reply_markup=(
                         build_active_download_keyboard(
@@ -2085,6 +2842,7 @@ async def wait_for_download(
                         quality=quality,
                         job=job,
                         paused=False,
+                        media_info=media_info,
                     ),
                     reply_markup=(
                         build_active_download_keyboard(
@@ -2114,6 +2872,7 @@ async def wait_for_download(
                         quality=quality,
                         job=job,
                         paused=True,
+                        media_info=media_info,
                     ),
                     reply_markup=(
                         build_paused_download_keyboard(
@@ -2151,25 +2910,23 @@ async def wait_for_download(
             if downloaded_label:
 
                 extra = (
-                    "\n📦 دانلود شده تا زمان لغو: "
-                    f"<code>"
-                    f"{downloaded_label}"
-                    f"</code>"
+                    (
+                        f"\n📦 Downloaded before cancellation: <b>{downloaded_label}</b>"
+                        if ui_language.get() == "en"
+                        else f"\n📦 دانلود شده تا زمان لغو: <b>{downloaded_label}</b>"
+                    )
                 )
 
             await safe_edit_message(
                 message,
                 (
-                    "❌ <b>دانلود لغو شد</b>\n\n"
-
-                    f"🆔 Job ID: "
-                    f"<code>{job_id}</code>\n"
-
-                    f"📊 پیشرفت هنگام لغو: "
-                    f"<code>{progress}%</code>"
-                    f"{extra}\n\n"
-
-                    "🗑 فایل‌های موقت از سرور حذف شدند."
+                    "❌ <b>Download cancelled</b>\n\n"
+                    f"📊 Progress at cancellation: <b>{progress}%</b>"
+                    f"{extra}\n\n🗑 Temporary files were removed from the server."
+                    if ui_language.get() == "en"
+                    else "❌ <b>دانلود لغو شد</b>\n\n"
+                    f"📊 پیشرفت هنگام لغو: <b>{progress}%</b>"
+                    f"{extra}\n\n🗑 فایل‌های موقت از سرور حذف شدند."
                 ),
                 reply_markup=None,
             )
@@ -2184,15 +2941,13 @@ async def wait_for_download(
             await safe_edit_message(
                 message,
                 (
-                    "⌛ <b>دانلود منقضی شد</b>\n\n"
-
-                    f"🆔 Job ID: "
-                    f"<code>{job_id}</code>\n\n"
-
+                    "⌛ <b>Download expired</b>\n\n"
+                    "The download was paused for more than 6 hours.\n"
+                    "🗑 The partial file was removed to free server space."
+                    if ui_language.get() == "en"
+                    else "⌛ <b>دانلود منقضی شد</b>\n\n"
                     "بیش از ۶ ساعت از توقف دانلود گذشته بود.\n"
-
-                    "🗑 فایل موقت برای آزادسازی "
-                    "فضای سرور حذف شد."
+                    "🗑 فایل موقت برای آزادسازی فضای سرور حذف شد."
                 ),
                 reply_markup=None,
             )
@@ -2209,7 +2964,7 @@ async def wait_for_download(
                     "error_message"
                 )
                 or
-                "خطای نامشخص"
+                _tr("خطای نامشخص")
             )
 
             raise RuntimeError(
@@ -2237,155 +2992,77 @@ async def send_downloaded_file(
     message: Message,
     status_message: Message,
     job: dict,
+    media_info: dict | None = None,
 ) -> None:
+    job_id = int(job["id"])
+    path = Path(job["file_path"]) if job.get("file_path") else None
 
-    job_id = (
-        job[
-            "id"
-        ]
-    )
-
-    file_path = (
-        job.get(
-            "file_path"
-        )
-    )
-
-    if not file_path:
-
-        raise RuntimeError(
-            "Downloaded file path is missing"
-        )
-
-    path = Path(
-        file_path
-    )
-
-    if not path.exists():
-
-        raise FileNotFoundError(
-            f"File not found: "
-            f"{path}"
-        )
-
-    file_size = (
-        path.stat()
-        .st_size
-    )
-
-    if (
-        file_size <= 0
-    ):
-
-        raise RuntimeError(
-            "Downloaded file is empty"
-        )
-
-    if (
-        file_size
-        > MAX_DOWNLOAD_SIZE_BYTES
-    ):
-
+    def unlink_output():
+        if path is None:
+            return
         try:
-
-            path.unlink()
-
-        except Exception:
-
-            pass
-
-        raise RuntimeError(
-            "Downloaded file exceeds "
-            f"{MAX_DOWNLOAD_SIZE_MB} MB limit"
-        )
-
-    size_label = (
-        format_file_size(
-            file_size
-        )
-        or
-        f"{file_size} bytes"
-    )
-
-    await safe_edit_message(
-        status_message,
-        (
-            "✅ <b>دانلود کامل شد</b>\n\n"
-
-            f"🆔 Job ID: "
-            f"<code>{job_id}</code>\n"
-
-            f"📦 حجم فایل: "
-            f"<code>{size_label}</code>\n\n"
-
-            "📤 <b>در حال ارسال فایل به تلگرام...</b>"
-        ),
-        reply_markup=None,
-    )
-
-    suffix = (
-        path.suffix
-        or ".mp4"
-    )
-
-    document = (
-        FSInputFile(
-            path=str(
-                path
-            ),
-            filename=(
-                f"MediaHub-"
-                f"{job_id}"
-                f"{suffix}"
-            ),
-        )
-    )
+            path.unlink(missing_ok=True)
+        except OSError as exc:
+            print(f"Temporary output cleanup requires retry: job={job_id}, {type(exc).__name__}")
 
     try:
-
+        if path is None:
+            raise RuntimeError("Downloaded file path is missing")
+        if not path.is_file():
+            raise FileNotFoundError("Downloaded file is no longer available")
+        file_size = path.stat().st_size
+        if file_size <= 0:
+            raise RuntimeError("Downloaded file is empty")
+        if file_size > MAX_DOWNLOAD_SIZE_BYTES:
+            raise RuntimeError(f"Downloaded file exceeds {MAX_DOWNLOAD_SIZE_MB} MB limit")
+        size_label = format_file_size(file_size) or f"{file_size} bytes"
+        await safe_edit_message(status_message, (
+            "✅ <b>Download complete</b>\n\n"
+            f"📦 File size: <b>{size_label}</b>\n\n"
+            "📤 <b>Sending file to Telegram...</b>"
+            if ui_language.get() == "en" else
+            "✅ <b>دانلود کامل شد</b>\n\n"
+            f"📦 حجم فایل: <b>{size_label}</b>\n\n"
+            "📤 <b>در حال ارسال فایل به تلگرام...</b>"
+        ), reply_markup=None)
+        filename = media_filename((media_info or {}).get("title"), path.suffix or ".mp4")
+        compatible = job.get("media_type") == "video" and job.get("output_format") == "mp4"
+        caption = _completed_file_caption(filename, size_label, job, media_info)
+        if job.get("media_type") == "video":
+            caption += ("\n\n📱 Compatible version" if ui_language.get() == "en" else "\n\n📱 نسخهٔ سازگار") if compatible else (
+                "\n\nIf this video does not play, tap “Compatible version”."
+                if ui_language.get() == "en" else "\n\nاگر ویدئو پخش نشد، «نسخهٔ سازگار» را بزنید."
+            )
+        upload_started = time.monotonic()
         await message.answer_document(
-            document=document,
+            document=FSInputFile(str(path), filename=filename),
             disable_content_type_detection=True,
-            caption=(
-                "✅ <b>دانلود با موفقیت انجام شد</b>\n\n"
-
-                f"🆔 Job ID: "
-                f"<code>{job_id}</code>\n"
-
-                f"📦 حجم فایل: "
-                f"<code>{size_label}</code>"
-            ),
+            caption=caption,
             parse_mode="HTML",
+            reply_markup=build_completed_download_keyboard(job_id,
+                media_type=str(job.get("media_type") or "video"),
+                compatible=compatible,
+                source_media_type="image" if job.get("media_type") == "image" else _source_media_type(media_info)),
         )
-
-        print(
-            "Successfully sent file: "
-            f"{path}"
-        )
-
+        print(f"Telegram media sent: job={job_id}, bytes={file_size}, elapsed_s={time.monotonic()-upload_started:.2f}")
+        # Remove the bytes immediately after Telegram accepts the file, even
+        # when delivery accounting is temporarily unreachable.
+        unlink_output()
+        for attempt in range(3):
+            try:
+                await mark_download_delivered(job_id)
+                break
+            except Exception as exc:
+                print(f"Delivery confirmation failed: job={job_id}, attempt={attempt+1}, {type(exc).__name__}")
+                if attempt < 2:
+                    await asyncio.sleep(1)
     finally:
-
+        # Also covers empty files, upload errors and cancellation of the handler.
+        unlink_output()
         try:
-
-            path.unlink()
-
-            print(
-                "Deleted downloaded file: "
-                f"{path}"
-            )
-
-        except FileNotFoundError:
-
-            pass
-
+            await release_download_files(job_id)
         except Exception as exc:
-
-            print(
-                "Failed to delete file "
-                f"{path}: "
-                f"{type(exc).__name__}: "
-                f"{exc}"
-            )
+            print(f"Temporary media cleanup queued for retry: job={job_id}, {type(exc).__name__}")
 
 
 # ============================================================
@@ -2397,33 +3074,51 @@ async def send_downloaded_file(
 )
 async def start_handler(
     message: Message,
+    state: FSMContext,
 ):
 
+    await cleanup_staged_state(state)
     try:
 
-        user = (
-            await register_telegram_user(
-                message
-            )
+        user = await register_telegram_user(
+            message
         )
 
-        user_id = (
-            user[
-                "id"
-            ]
+        language = user.get(
+            "effective_language",
+            normalize_language(message.from_user.language_code),
         )
+
+        telegram_id = (
+            message.from_user.id
+        )
+        configuration = await runtime_configuration(language)
+
+        await cleanup_staged_state(state)
+        await state.clear()
+
+        if message.chat.type == "private" and not await entry_membership_allowed(
+            message, telegram_id=telegram_id, user=user, configuration=configuration,
+        ):
+            return
 
         await message.answer(
             (
-                "👋 <b>به MediaHub AI خوش آمدید!</b>\n\n"
-
-                "🎬 لینک ویدئو را ارسال کنید "
-                "تا دانلود شود.\n\n"
-
-                f"🆔 User ID: "
-                f"<code>{user_id}</code>"
+                f"{html.escape(runtime_content(configuration, 'welcome_title'))}\n\n"
+                f"{html.escape(runtime_content(configuration, 'welcome_instruction'))}\n\n"
+                f"{translate(language, 'start.telegram_id', telegram_id=telegram_id)}"
             ),
             parse_mode="HTML",
+            reply_markup=(
+                build_home_reply_keyboard(
+                    language=language,
+                    include_admin=(
+                        bool(user.get("is_admin"))
+                        and message.chat.type == "private"
+                    ),
+                    configuration=configuration,
+                )
+            ),
         )
 
     except Exception as exc:
@@ -2435,12 +3130,24 @@ async def start_handler(
         )
 
         await message.answer(
-            (
-                "❌ <b>خطا در ثبت اطلاعات کاربر</b>\n\n"
-
-                "لطفاً چند لحظه بعد دوباره تلاش کنید."
+            translate(
+                normalize_language(
+                    message.from_user.language_code
+                    if message.from_user
+                    else None
+                ),
+                "start.registration_error",
             ),
             parse_mode="HTML",
+            # Keep the menu recoverable even when registration temporarily
+            # fails. Telegram keeps this keyboard persistent for the chat.
+            reply_markup=build_home_reply_keyboard(
+                normalize_language(
+                    message.from_user.language_code
+                    if message.from_user
+                    else None
+                )
+            ),
         )
 
 
@@ -2476,7 +3183,7 @@ async def download_pause_callback(
     ):
 
         await callback.answer(
-            "❌ Job نامعتبر است.",
+            _tr("❌ Job نامعتبر است."),
             show_alert=True,
         )
 
@@ -2491,7 +3198,7 @@ async def download_pause_callback(
         )
 
         await callback.answer(
-            "⏸ دانلود متوقف شد."
+            _tr("⏸ دانلود متوقف شد.")
         )
 
         if isinstance(
@@ -2504,7 +3211,7 @@ async def download_pause_callback(
                     "quality"
                 )
                 or
-                "نامشخص"
+                _tr("نامشخص")
             )
 
             await safe_edit_message(
@@ -2525,7 +3232,7 @@ async def download_pause_callback(
     except Exception as exc:
 
         await callback.answer(
-            f"❌ {str(exc)[:150]}",
+            f"❌ {download_error_text(exc)[:150]}",
             show_alert=True,
         )
 
@@ -2562,7 +3269,7 @@ async def download_resume_callback(
     ):
 
         await callback.answer(
-            "❌ Job نامعتبر است.",
+            _tr("❌ Job نامعتبر است."),
             show_alert=True,
         )
 
@@ -2576,43 +3283,16 @@ async def download_resume_callback(
             )
         )
 
-        progress = int(
-            job.get(
-                "progress",
-                0,
-            )
-            or 0
-        )
-
         quality = str(
             job.get(
                 "quality"
             )
             or
-            "نامشخص"
+            _tr("نامشخص")
         )
-
-        downloaded_label = (
-            format_file_size(
-                job.get(
-                    "downloaded_bytes"
-                )
-            )
-        )
-
-        extra = ""
-
-        if downloaded_label:
-
-            extra = (
-                "\n📦 دانلود شده: "
-                f"<code>"
-                f"{downloaded_label}"
-                f"</code>"
-            )
 
         await callback.answer(
-            "▶️ دانلود ادامه پیدا کرد."
+            _tr("▶️ دانلود ادامه پیدا کرد.")
         )
 
         if isinstance(
@@ -2622,18 +3302,11 @@ async def download_resume_callback(
 
             await safe_edit_message(
                 callback.message,
-                (
-                    "▶️ <b>دانلود ادامه پیدا کرد</b>\n\n"
-
-                    f"🆔 Job ID: "
-                    f"<code>{job_id}</code>\n"
-
-                    f"🎬 کیفیت: "
-                    f"<code>{quality}</code>\n"
-
-                    f"📊 ادامه از حدود: "
-                    f"<code>{progress}%</code>"
-                    f"{extra}"
+                build_progress_text(
+                    job_id=job_id,
+                    quality=quality,
+                    job=job,
+                    paused=False,
                 ),
                 reply_markup=(
                     build_active_download_keyboard(
@@ -2645,7 +3318,7 @@ async def download_resume_callback(
     except Exception as exc:
 
         await callback.answer(
-            f"❌ {str(exc)[:150]}",
+            f"❌ {download_error_text(exc)[:150]}",
             show_alert=True,
         )
 
@@ -2682,7 +3355,7 @@ async def download_cancel_callback(
     ):
 
         await callback.answer(
-            "❌ Job نامعتبر است.",
+            _tr("❌ Job نامعتبر است."),
             show_alert=True,
         )
 
@@ -2694,14 +3367,6 @@ async def download_cancel_callback(
             await cancel_download_job(
                 job_id
             )
-        )
-
-        progress = int(
-            job.get(
-                "progress",
-                0,
-            )
-            or 0
         )
 
         downloaded_label = (
@@ -2717,14 +3382,15 @@ async def download_cancel_callback(
         if downloaded_label:
 
             extra = (
-                "\n📦 دانلود شده تا زمان لغو: "
-                f"<code>"
-                f"{downloaded_label}"
-                f"</code>"
+                (
+                    f"\n📦 Downloaded before cancellation: <b>{downloaded_label}</b>"
+                    if ui_language.get() == "en"
+                    else f"\n📦 دانلود شده تا زمان لغو: <b>{downloaded_label}</b>"
+                )
             )
 
         await callback.answer(
-            "❌ دانلود لغو شد."
+            _tr("❌ دانلود لغو شد.")
         )
 
         if isinstance(
@@ -2735,16 +3401,15 @@ async def download_cancel_callback(
             await safe_edit_message(
                 callback.message,
                 (
-                    "❌ <b>دانلود لغو شد</b>\n\n"
-
-                    f"🆔 Job ID: "
-                    f"<code>{job_id}</code>\n"
-
-                    f"📊 پیشرفت هنگام لغو: "
-                    f"<code>{progress}%</code>"
-                    f"{extra}\n\n"
-
-                    "🗑 فایل موقت از سرور حذف می‌شود."
+                    "❌ <b>Download cancelled</b>"
+                    if ui_language.get() == "en"
+                    else "❌ <b>دانلود لغو شد</b>"
+                )
+                + extra
+                + (
+                    "\n\n🗑 The temporary file will be removed."
+                    if ui_language.get() == "en"
+                    else "\n\n🗑 فایل موقت از سرور حذف می‌شود."
                 ),
                 reply_markup=None,
             )
@@ -2752,9 +3417,278 @@ async def download_cancel_callback(
     except Exception as exc:
 
         await callback.answer(
-            f"❌ {str(exc)[:150]}",
+            f"❌ {download_error_text(exc)[:150]}",
             show_alert=True,
         )
+
+
+# ============================================================
+# Delivered-file actions
+# ============================================================
+
+def _source_media_type(media_info: dict | None) -> str:
+    info = media_info or {}
+    kind = str(info.get("media_type") or "").lower()
+    if kind in {"audio", "image"}:
+        return kind
+    formats = [item for item in (info.get("formats") or []) if isinstance(item, dict)]
+    if formats and not any(item.get("has_video") for item in formats) and any(item.get("has_audio") for item in formats):
+        return "audio"
+    return "video"
+
+
+async def _download_actions_allowed(callback: CallbackQuery) -> bool:
+    try:
+        entitlement = await get_download_entitlement(callback.from_user.id)
+        if entitlement.get("forced_join_required"):
+            configuration = await runtime_configuration(ui_language.get())
+            return await enforce_required_membership(
+                callback.message, telegram_id=callback.from_user.id, configuration=configuration,
+            )
+        return True
+    except Exception as exc:
+        await callback.message.answer(
+            html.escape(download_error_text(exc)) if isinstance(exc, BackendAPIError) else (
+                "❌ Access could not be checked. Please try again."
+                if ui_language.get() == "en" else "❌ بررسی دسترسی انجام نشد؛ دوباره تلاش کنید."
+            ), parse_mode="HTML", reply_markup=download_error_markup(exc),
+        )
+        return False
+
+
+async def _selection_for_callback(callback: CallbackQuery, token: str, *, device_step: bool = False) -> dict | None:
+    selection = PENDING_SELECTIONS.get(token)
+    message = callback.message
+    if (not isinstance(message, Message) or not selection
+        or selection.get("telegram_id") != callback.from_user.id
+        or (selection.get("device_height") is not None) != device_step
+        or (device_step and selection.get("device_message") != (message.chat.id, message.message_id))):
+        await callback.answer(
+            _tr("⏰ این درخواست منقضی شده است. لطفاً لینک را دوباره ارسال کنید."), show_alert=True,
+        )
+        return None
+    if not await _download_actions_allowed(callback):
+        await callback.answer()
+        return None
+    return selection
+
+
+def _selection_output_keyboard(selection: dict, token: str, output: str) -> InlineKeyboardMarkup:
+    source_type = _source_media_type(selection.get("media_info"))
+    if selection.get("source_job_id"):
+        return build_completed_download_keyboard(
+            selection["source_job_id"], media_type=output, source_media_type=source_type,
+        )
+    return build_selection_output_keyboard(token, media_type=output, source_media_type=source_type)
+
+
+async def _open_source_picker(message: Message, selection: dict, token: str, output: str) -> None:
+    english = ui_language.get() == "en"
+    if output == "audio":
+        text = "🎵 <b>Extract audio</b>\n\nChoose the output format:" if english else "🎵 <b>استخراج صدا</b>\n\nفرمت خروجی را انتخاب کنید:"
+        markup = _audio_picker_keyboard(token, ui_language.get())
+    else:
+        options = normalize_quality_options(extract_available_quality_options(selection.get("media_info") or {}))
+        selection["sizes"] = dict(options)
+        text = "🎬 <b>Choose video quality</b>" if english else "🎬 <b>کیفیت ویدئو را انتخاب کنید</b>"
+        if not options:
+            text = "ℹ️ No video qualities are available for this media." if english else "ℹ️ کیفیت ویدئویی برای این رسانه در دسترس نیست."
+        markup = build_quality_keyboard(
+            options, token, audio_token=token, cover_token=token, description_token=token,
+            language=ui_language.get(),
+        )
+    # Files keep their caption and controls; selectors always get a new message.
+    await message.answer(text, parse_mode="HTML", reply_markup=markup)
+
+
+@dp.callback_query(F.data.startswith("download_more:"))
+async def download_more_callback(callback: CallbackQuery) -> None:
+    if not callback.data or not isinstance(callback.message, Message):
+        return
+    if callback.message.chat.type != "private" or callback.message.chat.id != callback.from_user.id:
+        await callback.answer(
+            "Open this file in your private bot chat." if ui_language.get() == "en"
+            else "این فایل را در گفت‌وگوی خصوصی خودتان با ربات باز کنید.", show_alert=True,
+        )
+        return
+    match = re.fullmatch(r"download_more:(video|audio|cover|description):([1-9][0-9]*)", callback.data)
+    if not match:
+        await callback.answer(
+            "Invalid media action." if ui_language.get() == "en" else "درخواست رسانه نامعتبر است.",
+            show_alert=True,
+        )
+        return
+    output, job_id = match[1], int(match[2])
+    await callback.answer("Loading…" if ui_language.get() == "en" else "در حال دریافت…")
+    try:
+        original = await get_download_job(job_id, telegram_id=callback.from_user.id)
+        if original.get("status") != "completed" or original.get("media_type") == "convert":
+            raise ValueError("This source is not available for another media output.")
+        if not await _download_actions_allowed(callback):
+            return
+        source_url = str(original.get("source_url") or "")
+        info = await get_media_info(source_url=source_url, playlist_index=original.get("playlist_index"))
+        token = add_pending_selection(
+            source_url, playlist_index=original.get("playlist_index"), media_info=info,
+            telegram_id=callback.from_user.id, source_job_id=job_id,
+        )
+        selection = PENDING_SELECTIONS[token]
+        if output == "cover":
+            await _send_media_cover(callback.message, selection, token, callback.from_user.id, callback.id)
+        elif output == "description":
+            await _send_media_description(callback.message, selection, token)
+        else:
+            await _open_source_picker(callback.message, selection, token, output)
+    except Exception as exc:
+        print(f"Completed-media action failed: {type(exc).__name__}: {exc}")
+        await callback.message.answer(
+            "❌ This media could not be loaded. Try again or send its link again."
+            if ui_language.get() == "en" else "❌ دریافت این رسانه انجام نشد؛ دوباره تلاش کنید یا لینک را دوباره بفرستید."
+        )
+
+
+@dp.callback_query(F.data.startswith("download_details:"))
+async def download_details_callback(
+    callback: CallbackQuery,
+) -> None:
+    if not callback.data or not isinstance(callback.message, Message):
+        return
+
+    try:
+
+        job_id = int(
+            callback.data.split(
+                ":",
+                1,
+            )[1]
+        )
+
+    except (
+        ValueError,
+        IndexError,
+    ):
+
+        await callback.answer(
+            _tr("❌ Job نامعتبر است."),
+            show_alert=True,
+        )
+        return
+
+    try:
+
+        job = await get_download_job(
+            job_id, telegram_id=callback.from_user.id
+        )
+
+    except Exception as exc:
+
+        await callback.answer(
+            f"❌ {download_error_text(exc)[:150]}",
+            show_alert=True,
+        )
+        return
+
+    await callback.answer(
+        "Details sent." if ui_language.get() == "en" else "جزئیات ارسال شد."
+    )
+    await callback.message.answer(
+        _download_details_text(
+            job
+        ),
+        parse_mode="HTML",
+    )
+
+
+REPEAT_DOWNLOADS: set[tuple[int, int]] = set()
+
+
+@dp.callback_query(F.data.startswith("download_again:") | F.data.startswith("download_compatible:"))
+async def download_again_callback(callback: CallbackQuery) -> None:
+    if not callback.data or not isinstance(callback.message, Message) or not callback.from_user:
+        return
+    english = ui_language.get() == "en"
+    if callback.message.chat.type != "private" or callback.message.chat.id != callback.from_user.id:
+        await callback.answer("Open this file in your private bot chat." if english else
+                              "این فایل را در گفت‌وگوی خصوصی خودتان با ربات باز کنید.", show_alert=True)
+        return
+    match = re.fullmatch(r"download_(again|compatible):([1-9][0-9]*)", callback.data)
+    if not match:
+        await callback.answer("Invalid download." if english else "درخواست نامعتبر است.", show_alert=True)
+        return
+    compatible = match[1] == "compatible"
+    original_job_id = int(match[2])
+    key = (callback.from_user.id, original_job_id)
+    if key in REPEAT_DOWNLOADS:
+        await callback.answer("This request is already running." if english else
+                              "این درخواست در حال انجام است.", show_alert=True)
+        return
+    REPEAT_DOWNLOADS.add(key)
+    try:
+        original = await get_download_job(original_job_id, telegram_id=callback.from_user.id)
+        if original.get("status") != "completed":
+            await callback.answer("This download is not ready to repeat." if english else
+                                  "این دانلود هنوز برای تکرار آماده نیست.", show_alert=True)
+            return
+        media_type = str(original.get("media_type") or "video").lower()
+        if compatible and media_type != "video":
+            await callback.answer("Choose a video file." if english else "یک فایل ویدئویی انتخاب کنید.", show_alert=True)
+            return
+        if media_type == "convert":
+            await callback.answer("Upload the original file again to convert it again." if english else
+                                  "برای تبدیل دوباره، فایل اصلی را دوباره ارسال کنید.", show_alert=True)
+            return
+        source_url = str(original.get("source_url") or "")
+        if not source_url:
+            raise RuntimeError("Original source URL is unavailable")
+        if not await _download_actions_allowed(callback):
+            await callback.answer()
+            return
+        await callback.answer(("Preparing the compatible version…" if english else "در حال آماده‌سازی نسخهٔ سازگار…")
+                              if compatible else ("Starting the download again…" if english else "دانلود مجدد شروع شد…"))
+        # The source bytes have already been deleted. Retrieve the same source
+        # and playlist item; never reuse another user's file or cached media.
+        media_info: dict = {}
+        try:
+            refreshed = await get_media_info(source_url=source_url, playlist_index=original.get("playlist_index"))
+            if isinstance(refreshed, dict):
+                media_info = refreshed
+        except Exception as exc:
+            print(f"Could not refresh redownload metadata: {type(exc).__name__}")
+        quality = str(original.get("quality") or (
+            f"audio/{str(original.get('output_format') or '').upper()}" if media_type == "audio"
+            else "Original" if english else "اصلی"
+        ))
+        status_message = await callback.message.answer(
+            ("⏳ <b>Preparing the compatible version. This may take a little longer…</b>" if english else
+             "⏳ <b>در حال آماده‌سازی نسخهٔ سازگار؛ این مرحله ممکن است کمی بیشتر طول بکشد…</b>")
+            if compatible else ("⏳ <b>Preparing your download…</b>" if english else "⏳ <b>در حال آماده‌سازی دانلود…</b>"),
+            parse_mode="HTML",
+        )
+        job = await create_download_job(
+            source_url=source_url, telegram_id=callback.from_user.id,
+            format_id=original.get("format_id"), quality=original.get("quality"), media_type=media_type,
+            output_format="mp4" if compatible else original.get("output_format"),
+            playlist_index=original.get("playlist_index"), estimated_size_bytes=original.get("total_bytes"),
+        )
+        job_id = int(job["id"])
+        await safe_edit_message(status_message, _queued_download_text(quality, media_info),
+                                reply_markup=build_active_download_keyboard(job_id))
+        completed = await wait_for_download(job_id, status_message, quality, media_info)
+        if completed.get("status") == "completed":
+            await send_downloaded_file(message=status_message, status_message=status_message,
+                                       job=completed, media_info=media_info)
+            try:
+                await status_message.delete()
+            except Exception as exc:
+                print(f"Redownload status cleanup failed: {type(exc).__name__}")
+    except Exception as exc:
+        print(f"Redownload failed: {type(exc).__name__}")
+        await callback.message.answer(
+            ("❌ The download could not be started again.\n\n" if english else "❌ دانلود مجدد شروع نشد.\n\n")
+            + html.escape(download_error_text(exc)[:800]), parse_mode="HTML",
+        )
+    finally:
+        REPEAT_DOWNLOADS.discard(key)
 
 
 # ============================================================
@@ -2799,7 +3733,7 @@ async def media_page_callback(
     ):
 
         await callback.answer(
-            "❌ درخواست نامعتبر است.",
+            _tr("❌ درخواست نامعتبر است."),
             show_alert=True,
         )
 
@@ -2821,8 +3755,8 @@ async def media_page_callback(
 
         await callback.answer(
             (
-                "⌛ این انتخاب منقضی شده است. "
-                "لینک را دوباره ارسال کنید."
+                _tr("⌛ این انتخاب منقضی شده است. "
+                "لینک را دوباره ارسال کنید.")
             ),
             show_alert=True,
         )
@@ -2841,7 +3775,7 @@ async def media_page_callback(
     ):
 
         await callback.answer(
-            "❌ شماره صفحه نامعتبر است.",
+            _tr("❌ شماره صفحه نامعتبر است."),
             show_alert=True,
         )
 
@@ -2872,7 +3806,7 @@ async def media_page_callback(
     ):
 
         await callback.answer(
-            "❌ این صفحه وجود ندارد.",
+            _tr("❌ این صفحه وجود ندارد."),
             show_alert=True,
         )
 
@@ -2899,10 +3833,7 @@ async def media_page_callback(
 
     await callback.answer(
         (
-            f"صفحه "
-            f"{page + 1}"
-            f" از "
-            f"{total_pages}"
+            f"{_tr('صفحه ')}{page + 1}{_tr(' از ')}{total_pages}"
         )
     )
 
@@ -2966,7 +3897,7 @@ async def media_entry_callback(
     ):
 
         await callback.answer(
-            "❌ درخواست نامعتبر است.",
+            _tr("❌ درخواست نامعتبر است."),
             show_alert=True,
         )
 
@@ -2988,8 +3919,8 @@ async def media_entry_callback(
 
         await callback.answer(
             (
-                "⌛ این انتخاب منقضی شده است. "
-                "لینک را دوباره ارسال کنید."
+                _tr("⌛ این انتخاب منقضی شده است. "
+                "لینک را دوباره ارسال کنید.")
             ),
             show_alert=True,
         )
@@ -3008,7 +3939,7 @@ async def media_entry_callback(
     ):
 
         await callback.answer(
-            "❌ شماره رسانه نامعتبر است.",
+            _tr("❌ شماره رسانه نامعتبر است."),
             show_alert=True,
         )
 
@@ -3030,7 +3961,7 @@ async def media_entry_callback(
     if not source_url:
 
         await callback.answer(
-            "❌ لینک رسانه پیدا نشد.",
+            _tr("❌ لینک رسانه پیدا نشد."),
             show_alert=True,
         )
 
@@ -3061,7 +3992,7 @@ async def media_entry_callback(
     if selected_entry is None:
 
         await callback.answer(
-            "❌ رسانه انتخاب‌شده پیدا نشد.",
+            _tr("❌ رسانه انتخاب‌شده پیدا نشد."),
             show_alert=True,
         )
 
@@ -3102,25 +4033,38 @@ async def media_entry_callback(
     if media_type == "image":
 
         await callback.answer(
-            f"📷 عکس {index} انتخاب شد."
+            f"{_tr('📷 عکس ')}{index}{_tr(' انتخاب شد.')}"
         )
 
         try:
 
+            image_media_info = {
+                "title": selected_entry.get(
+                    "title"
+                ),
+                "description": selected_entry.get(
+                    "description"
+                ),
+                "duration": selected_entry.get(
+                    "duration"
+                ),
+                "thumbnail": selected_entry.get(
+                    "thumbnail"
+                ),
+                "formats": [],
+            }
+
             await safe_edit_message(
                 message,
                 (
-                    "⏳ <b>در حال ایجاد درخواست دانلود عکس...</b>\n\n"
-                    f"📷 شماره عکس: "
-                    f"<code>{index}</code>\n"
-                    "🖼 کیفیت: "
-                    "<code>اصلی</code>"
+                    f"{_tr('⏳ <b>در حال ایجاد درخواست دانلود عکس...</b>\n\n📷 شماره عکس: <code>')}{index}{_tr('</code>\n🖼 کیفیت: <code>اصلی</code>')}"
                 ),
             )
 
             job = (
                 await create_download_job(
                     source_url=source_url,
+                    telegram_id=callback.from_user.id,
                     quality=None,
                     media_type="image",
                     playlist_index=index,
@@ -3135,16 +4079,9 @@ async def media_entry_callback(
 
             await safe_edit_message(
                 message,
-                (
-                    "✅ <b>درخواست دانلود عکس ایجاد شد</b>\n\n"
-                    f"🆔 Job ID: "
-                    f"<code>{job_id}</code>\n"
-                    f"📷 عکس: "
-                    f"<code>{index}</code>\n"
-                    "🖼 کیفیت: "
-                    "<code>اصلی</code>\n"
-                    "📊 وضعیت: "
-                    "<code>pending</code>"
+                _queued_download_text(
+                    _tr("تصویر اصلی"),
+                    image_media_info,
                 ),
                 reply_markup=(
                     build_active_download_keyboard(
@@ -3157,7 +4094,8 @@ async def media_entry_callback(
                 await wait_for_download(
                     job_id,
                     message,
-                    "تصویر اصلی",
+                    _tr("تصویر اصلی"),
+                    image_media_info,
                 )
             )
 
@@ -3175,6 +4113,7 @@ async def media_entry_callback(
                 message=message,
                 status_message=message,
                 job=completed_job,
+                media_info=image_media_info,
             )
 
         except Exception as exc:
@@ -3188,13 +4127,9 @@ async def media_entry_callback(
             await safe_edit_message(
                 message,
                 (
-                    "❌ <b>دانلود عکس با خطا مواجه شد</b>\n\n"
-                    "⚠️ خطا:\n"
-                    f"<code>"
-                    f"{html.escape(str(exc)[:1000])}"
-                    f"</code>"
+                    f"{_tr('❌ <b>دانلود عکس با خطا مواجه شد</b>\n\n⚠️ خطا:\n<code>')}{html.escape(download_error_text(exc))}</code>"
                 ),
-                reply_markup=None,
+                reply_markup=download_error_markup(exc),
             )
 
         return
@@ -3208,7 +4143,7 @@ async def media_entry_callback(
     # ========================================================
 
     await callback.answer(
-        f"🎬 ویدئو {index} انتخاب شد."
+        f"{_tr('🎬 ویدئو ')}{index}{_tr(' انتخاب شد.')}"
     )
 
     try:
@@ -3235,8 +4170,8 @@ async def media_entry_callback(
         if not quality_options:
 
             raise RuntimeError(
-                "هیچ کیفیت ویدئویی "
-                "قابل دانلودی پیدا نشد."
+                _tr("هیچ کیفیت ویدئویی "
+                "قابل دانلودی پیدا نشد.")
             )
 
         token = (
@@ -3244,6 +4179,8 @@ async def media_entry_callback(
                 source_url,
                 quality_options,
                 playlist_index=index,
+                media_info=selected_info,
+                telegram_id=callback.from_user.id,
             )
         )
 
@@ -3253,6 +4190,10 @@ async def media_entry_callback(
                     quality_options
                 ),
                 token=token,
+                audio_token=token,
+                cover_token=token,
+                description_token=token,
+                language=ui_language.get(),
             )
         )
 
@@ -3278,11 +4219,7 @@ async def media_entry_callback(
         await safe_edit_message(
             message,
             (
-                f"🎬 <b>ویدئو {index} آماده دانلود است</b>\n\n"
-                f"📌 <b>عنوان:</b> "
-                f"{safe_title}\n\n"
-                "🎯 <b>کیفیت موردنظر را انتخاب کنید:</b>\n"
-                "📦 حجم‌ها تقریبی هستند."
+                f"{_tr('🎬 <b>ویدئو ')}{index}{_tr(' آماده دانلود است</b>\n\n📌 <b>عنوان:</b> ')}{safe_title}{_tr('\n\n🎯 <b>کیفیت موردنظر را انتخاب کنید:</b>\n📦 حجم\u200cها تقریبی هستند.')}"
             ),
             reply_markup=keyboard,
         )
@@ -3298,11 +4235,7 @@ async def media_entry_callback(
         await safe_edit_message(
             message,
             (
-                "❌ <b>دریافت اطلاعات رسانه ناموفق بود</b>\n\n"
-                "⚠️ خطا:\n"
-                f"<code>"
-                f"{html.escape(str(exc)[:1000])}"
-                f"</code>"
+                f"{_tr('❌ <b>دریافت اطلاعات رسانه ناموفق بود</b>\n\n⚠️ خطا:\n<code>')}{html.escape(str(exc)[:1000])}</code>"
             ),
             reply_markup=None,
         )
@@ -3312,234 +4245,767 @@ async def media_entry_callback(
 # Quality callback
 # ============================================================
 
-@dp.callback_query(
-    F.data.startswith(
-        "quality:"
+def _audio_picker_keyboard(token: str, language: str) -> InlineKeyboardMarkup:
+    return build_audio_format_keyboard(
+        token,
+        language=language,
+        callback_prefix="audio:format",
+        cancel_callback=f"audio:cancel:{token}",
     )
-)
-async def quality_callback(
-    callback: CallbackQuery,
-):
 
-    if not callback.data:
 
-        await callback.answer(
-            "❌ درخواست نامعتبر است.",
-            show_alert=True,
-        )
+MAX_COVER_SIZE_BYTES = 50 * 1024 * 1024
 
-        return
 
-    parts = (
-        callback.data.split(
-            ":",
-            2,
-        )
+def _cover_extension(
+    url: str,
+    content_type: str | None,
+) -> str:
+
+    try:
+
+        suffix = Path(
+            urlparse(
+                url
+            ).path
+        ).suffix.lower()
+
+    except Exception:
+
+        suffix = ""
+
+    if suffix in {
+        ".jpg",
+        ".jpeg",
+        ".png",
+        ".webp",
+    }:
+
+        return suffix
+
+    guessed = mimetypes.guess_extension(
+        (
+            content_type
+            or ""
+        ).split(
+            ";",
+            1,
+        )[0]
+        .strip()
+        .lower()
+    )
+
+    if guessed in {
+        ".jpg",
+        ".jpeg",
+        ".png",
+        ".webp",
+    }:
+
+        return guessed
+
+    return ".jpg"
+
+
+async def _ensure_public_cover_url(
+    value: str,
+) -> str:
+    """Reject localhost/private cover URLs before the Bot fetches them."""
+
+    parsed = urlparse(
+        value
     )
 
     if (
-        len(
-            parts
-        )
-        != 3
+        parsed.scheme not in {
+            "http",
+            "https",
+        }
+        or not parsed.hostname
     ):
 
-        await callback.answer(
-            "❌ درخواست نامعتبر است.",
-            show_alert=True,
+        raise RuntimeError(
+            "Cover image URL is invalid"
         )
 
-        return
+    hostname = parsed.hostname.lower().rstrip(
+        "."
+    )
 
-    (
-        _,
-        token,
-        height_text,
-    ) = parts
+    if hostname in {
+        "localhost",
+        "localhost.localdomain",
+    }:
 
-    selection = (
-        PENDING_SELECTIONS.get(
-            token
+        raise RuntimeError(
+            "Cover image host is not public"
+        )
+
+    port = (
+        parsed.port
+        or (
+            443
+            if parsed.scheme == "https"
+            else 80
         )
     )
 
-    if not selection:
+    try:
 
-        await callback.answer(
-            (
-                "⏰ این درخواست منقضی شده است. "
-                "لطفاً لینک را دوباره ارسال کنید."
-            ),
-            show_alert=True,
+        resolved = await asyncio.get_running_loop().getaddrinfo(
+            hostname,
+            port,
+            type=socket.SOCK_STREAM,
         )
 
-        return
+    except OSError as exc:
 
-    source_url = (
+        raise RuntimeError(
+            "Cover image host could not be resolved"
+        ) from exc
+
+    if not resolved:
+
+        raise RuntimeError(
+            "Cover image host could not be resolved"
+        )
+
+    for entry in resolved:
+
+        try:
+
+            address = ipaddress.ip_address(
+                entry[4][0]
+            )
+
+        except (
+            IndexError,
+            ValueError,
+        ) as exc:
+
+            raise RuntimeError(
+                "Cover image host is invalid"
+            ) from exc
+
+        if (
+            address.is_private
+            or address.is_loopback
+            or address.is_link_local
+            or address.is_multicast
+            or address.is_reserved
+            or address.is_unspecified
+        ):
+
+            raise RuntimeError(
+                "Cover image host is not public"
+            )
+
+    return value
+
+
+async def _download_cover_file(
+    cover_url: str,
+    token: str,
+) -> Path:
+    """Fetch one public cover image to the shared download volume.
+
+    The URL is obtained from the extractor, while the callback token is kept
+    server-side.  The function streams to disk, so a large image never sits
+    entirely in Bot memory.
+    """
+
+    timeout = aiohttp.ClientTimeout(
+        total=90,
+        connect=20,
+    )
+
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (compatible; MediaHubAI/1.0)"
+        ),
+    }
+
+    async with aiohttp.ClientSession(
+        timeout=timeout,
+        headers=headers,
+    ) as session:
+
+        current_url = cover_url
+
+        for _redirect in range(4):
+
+            await _ensure_public_cover_url(
+                current_url
+            )
+
+            async with session.get(
+                current_url,
+                allow_redirects=False,
+            ) as response:
+
+                if 300 <= response.status < 400:
+
+                    location = response.headers.get(
+                        "Location"
+                    )
+
+                    if not location:
+
+                        raise RuntimeError(
+                            "Cover redirect has no destination"
+                        )
+
+                    current_url = urljoin(
+                        current_url,
+                        location,
+                    )
+                    continue
+
+                if response.status != 200:
+
+                    raise RuntimeError(
+                        f"Cover download returned HTTP {response.status}"
+                    )
+
+                content_length = response.content_length
+
+                if (
+                    content_length is not None
+                    and content_length > MAX_COVER_SIZE_BYTES
+                ):
+
+                    raise RuntimeError(
+                        "Cover image is too large"
+                    )
+
+                suffix = _cover_extension(
+                    str(
+                        response.url
+                    ),
+                    response.headers.get(
+                        "Content-Type"
+                    ),
+                )
+                target = DOWNLOAD_DIR / (
+                    f"cover-{token}{suffix}"
+                )
+                received = 0
+
+                try:
+
+                    with target.open(
+                        "wb"
+                    ) as destination:
+
+                        async for chunk in response.content.iter_chunked(
+                            64 * 1024
+                        ):
+
+                            received += len(
+                                chunk
+                            )
+
+                            if received > MAX_COVER_SIZE_BYTES:
+
+                                raise RuntimeError(
+                                    "Cover image is too large"
+                                )
+
+                            destination.write(
+                                chunk
+                            )
+
+                except Exception:
+
+                    target.unlink(
+                        missing_ok=True
+                    )
+                    raise
+
+                if received <= 0:
+
+                    target.unlink(
+                        missing_ok=True
+                    )
+                    raise RuntimeError(
+                        "Cover image is empty"
+                    )
+
+                return target
+
+    raise RuntimeError(
+        "Cover image exceeded redirect limit"
+    )
+
+
+async def _selection_media_info(
+    selection: dict,
+) -> dict:
+    """Refresh metadata when possible, retaining the original menu state."""
+
+    cached = selection.get(
+        "media_info"
+    )
+    result = (
+        dict(
+            cached
+        )
+        if isinstance(
+            cached,
+            dict,
+        )
+        else {}
+    )
+    source_url = str(
         selection.get(
             "source_url"
         )
-    )
-
-    sizes = (
-        selection.get(
-            "sizes",
-            {},
-        )
-    )
-
-    playlist_index = (
-        selection.get(
-            "playlist_index"
-        )
+        or ""
     )
 
     if not source_url:
 
-        await callback.answer(
-            "❌ لینک دانلود پیدا نشد.",
-            show_alert=True,
-        )
-
-        return
+        return result
 
     try:
 
-        height = int(
-            height_text
+        refreshed = await get_media_info(
+            source_url=source_url,
+            playlist_index=selection.get(
+                "playlist_index"
+            ),
         )
 
-    except ValueError:
+    except Exception as exc:
 
-        await callback.answer(
-            "❌ کیفیت نامعتبر است.",
-            show_alert=True,
+        print(
+            "Could not refresh media metadata: "
+            f"{type(exc).__name__}: {exc}"
         )
+        return result
 
-        return
-
-    quality = (
-        normalize_quality_label(
-            height
-        )
-    )
-
-    estimated_size = (
-        sizes.get(
-            height
-        )
-    )
-
-    if (
-        estimated_size is not None
-        and estimated_size
-        > MAX_DOWNLOAD_SIZE_BYTES
+    if isinstance(
+        refreshed,
+        dict,
     ):
 
-        size_label = (
-            format_file_size(
-                estimated_size
-            )
-            or
-            "نامشخص"
+        return refreshed
+
+    return result
+
+
+def _description_chunks(
+    description: str,
+    maximum_length: int = 3400,
+) -> list[str]:
+
+    value = description.strip()
+
+    if not value:
+
+        return []
+
+    chunks: list[
+        str
+    ] = []
+
+    while len(
+        value
+    ) > maximum_length:
+
+        split_at = value.rfind(
+            "\n",
+            0,
+            maximum_length,
         )
 
-        await callback.answer(
-            (
-                "حجم این کیفیت "
-                "بیش از حد مجاز است."
-            ),
-            show_alert=True,
-        )
+        if split_at < maximum_length // 2:
 
-        message = (
-            callback.message
-        )
-
-        if not isinstance(
-            message,
-            Message,
-        ):
-
-            return
-
-        smaller_keyboard = (
-            build_smaller_quality_keyboard(
-                source_url=source_url,
-                selected_height=height,
-                sizes=sizes,
-                playlist_index=(
-                    playlist_index
-                ),
-            )
-        )
-
-        text = (
-            "⚠️ <b>حجم این کیفیت بیش از حد مجاز است</b>\n\n"
-
-            f"🎬 کیفیت انتخاب‌شده: "
-            f"<code>{quality}</code>\n"
-
-            f"📦 حجم تقریبی: "
-            f"<code>{size_label}</code>\n\n"
-        )
-
-        if smaller_keyboard:
-
-            text += (
-                "👇 لطفاً یکی از کیفیت‌های "
-                "پایین‌تر را انتخاب کنید."
+            split_at = value.rfind(
+                " ",
+                0,
+                maximum_length,
             )
 
+        if split_at < maximum_length // 2:
+
+            split_at = maximum_length
+
+        chunks.append(
+            value[:split_at].rstrip()
+        )
+        value = value[split_at:].lstrip()
+
+    if value:
+
+        chunks.append(
+            value
+        )
+
+    return chunks
+
+
+async def _send_media_cover(message: Message, selection: dict, token: str, actor_id: int, callback_id: str) -> None:
+    info = selection.get("media_info") or {}
+    cover_url = str(info.get("thumbnail") or "").strip()
+    markup = _selection_output_keyboard(selection, token, "cover")
+    english = ui_language.get() == "en"
+    if not cover_url:
+        await message.answer(
+            "ℹ️ No cover image is available for this media." if english else "ℹ️ کاوری برای این رسانه در دسترس نیست.",
+            reply_markup=markup,
+        )
+        return
+    request_id = await start_cover_request(actor_id, callback_id, selection["source_url"])
+    if request_id is None:
+        return
+    cover_path = await _download_cover_file(cover_url, uuid4().hex)
+    title = str(info.get("title") or _source_label(selection.get("source_url"))).strip()
+    filename = media_filename(info.get("title"), cover_path.suffix or ".jpg", cover=True)
+    caption = (
+        "🖼 <b>Cover — highest available quality</b>\n\n"
+        if english else "🖼 <b>کاور با بالاترین کیفیت موجود</b>\n\n"
+    ) + html.escape(title[:300]) + "\n\n" + media_file_notice(ui_language.get())
+    try:
+        # A document preserves the original cover bytes and its chosen filename.
+        await message.answer_document(
+            document=FSInputFile(str(cover_path), filename=filename),
+            caption=caption, parse_mode="HTML", reply_markup=markup,
+            disable_content_type_detection=True,
+        )
+    finally:
+        cover_path.unlink(missing_ok=True)
+
+    # A lost acknowledgement must never repeat a Telegram send. Only retry the DB receipt.
+    for attempt in range(2):
+        try:
+            await confirm_cover_request(actor_id, request_id)
+            break
+        except BackendAPIError as exc:
+            if attempt or exc.status_code < 500:
+                print(f"Cover delivery unconfirmed: request={request_id}")
+                break
+
+
+async def _send_media_description(message: Message, selection: dict, token: str) -> None:
+    info = selection.get("media_info") or {}
+    description = str(info.get("description") or "").strip()
+    markup = _selection_output_keyboard(selection, token, "description")
+    english = ui_language.get() == "en"
+    if not description:
+        await message.answer(
+            "ℹ️ No description was provided for this media." if english else "ℹ️ برای این رسانه توضیحی در دسترس نیست.",
+            reply_markup=markup,
+        )
+        return
+    # Each Unicode character can occupy two Telegram UTF-16 units.
+    chunks = _description_chunks(description, maximum_length=1700)
+    for index, chunk in enumerate(chunks):
+        if index == 0:
+            header = "📝 <b>Media description</b>\n\n" if english else "📝 <b>توضیحات رسانه</b>\n\n"
         else:
+            header = "📝 <b>Description (continued)</b>\n\n" if english else "📝 <b>ادامهٔ توضیحات</b>\n\n"
+        await message.answer(
+            header + html.escape(chunk), parse_mode="HTML",
+            reply_markup=markup if index == len(chunks) - 1 else None,
+        )
 
-            text += (
-                "❌ کیفیت پایین‌تری در "
-                "محدوده مجاز پیدا نشد."
-            )
 
+async def _media_selection_action(callback: CallbackQuery, output: str) -> None:
+    if not callback.data or not isinstance(callback.message, Message):
+        return
+    token = callback.data.split(":", 2)[-1]
+    selection = await _selection_for_callback(callback, token)
+    if not selection:
+        return
+    await callback.answer("Loading…" if ui_language.get() == "en" else "در حال دریافت…")
+    try:
+        selection["media_info"] = await _selection_media_info(selection)
+        if output == "cover":
+            await _send_media_cover(callback.message, selection, token, callback.from_user.id, callback.id)
+        elif output == "description":
+            await _send_media_description(callback.message, selection, token)
+        elif output == "video":
+            await _open_source_picker(callback.message, selection, token, "video")
+        else:
+            info = selection.get("media_info") or {}
+            text = ("📋 <b>Media details</b>" if ui_language.get() == "en" else "📋 <b>جزئیات رسانه</b>")
+            text += "\n\n" + html.escape(str(info.get("title") or "")[:700])
+            text += "\n" + html.escape(str(selection.get("source_url") or "")[:2048])
+            await callback.message.answer(text, parse_mode="HTML")
+    except Exception as exc:
+        print(f"Media action failed: {type(exc).__name__}: {exc}")
+        await callback.message.answer(
+            "❌ This media could not be loaded. Please try again."
+            if ui_language.get() == "en" else "❌ دریافت این رسانه انجام نشد؛ دوباره تلاش کنید."
+        )
+
+
+@dp.callback_query(F.data.startswith("media:cover:"))
+async def media_cover_callback(callback: CallbackQuery) -> None:
+    await _media_selection_action(callback, "cover")
+
+
+@dp.callback_query(F.data.startswith("media:description:"))
+async def media_description_callback(callback: CallbackQuery) -> None:
+    await _media_selection_action(callback, "description")
+
+
+@dp.callback_query(F.data.startswith("media:video:"))
+async def media_video_callback(callback: CallbackQuery) -> None:
+    await _media_selection_action(callback, "video")
+
+
+@dp.callback_query(F.data.startswith("media:details:"))
+async def media_details_callback(callback: CallbackQuery) -> None:
+    await _media_selection_action(callback, "details")
+
+
+@dp.callback_query(F.data.startswith("audio:open:"))
+async def audio_open_callback(callback: CallbackQuery) -> None:
+    if not callback.data or not isinstance(callback.message, Message):
+        return
+    token = callback.data.split(":", 2)[-1]
+    selection = await _selection_for_callback(callback, token)
+    if not selection:
+        return
+    await callback.answer("Choose an audio format." if ui_language.get() == "en" else "فرمت صوتی را انتخاب کنید.")
+    await _open_source_picker(callback.message, selection, token, "audio")
+
+
+@dp.callback_query(F.data.startswith("audio:cancel:"))
+async def audio_cancel_callback(callback: CallbackQuery) -> None:
+    if not callback.data or not isinstance(callback.message, Message):
+        return
+    token = callback.data.split(":", 2)[-1]
+    selection = await _selection_for_callback(callback, token)
+    if not selection:
+        return
+    await callback.answer("Back to quality selection." if ui_language.get() == "en" else "بازگشت به انتخاب کیفیت.")
+    await _open_source_picker(callback.message, selection, token, "video")
+
+
+@dp.callback_query(F.data.startswith("audio:format:"))
+async def audio_format_callback(callback: CallbackQuery) -> None:
+    if not callback.data or not isinstance(callback.message, Message):
+        return
+    parts = callback.data.split(":")
+    if len(parts) != 4:
+        await callback.answer("Invalid audio request.", show_alert=True)
+        return
+    _, _, token, raw_format = parts
+    output_format = normalize_format(raw_format)
+    if output_format not in AUDIO_FORMATS:
+        await callback.answer("Unsupported audio format.", show_alert=True)
+        return
+    selection = await _selection_for_callback(callback, token)
+    if not selection:
+        return
+    if PENDING_SELECTIONS.pop(token, None) is None:
+        await callback.answer(_tr("⏰ این درخواست منقضی شده است."), show_alert=True)
+        return
+
+    source_url = str(selection.get("source_url") or "")
+    playlist_index = selection.get("playlist_index")
+    media_info = (
+        selection.get(
+            "media_info"
+        )
+        if isinstance(
+            selection.get(
+                "media_info"
+            ),
+            dict,
+        )
+        else {}
+    )
+    if not source_url:
+        await callback.answer("The media link is missing.", show_alert=True)
+        return
+
+    language = ui_language.get()
+    status_message = callback.message
+    quality_label = f"audio/{output_format.upper()}"
+    try:
+        await callback.answer(
+            f"Extracting {output_format.upper()}…"
+            if language == "en"
+            else f"در حال استخراج {output_format.upper()}…"
+        )
         await safe_edit_message(
-            message,
-            text,
-            reply_markup=(
-                smaller_keyboard
+            status_message,
+            (
+                f"⏳ <b>Creating audio job…</b>\n\n🎵 Output: <code>{output_format.upper()}</code>"
+                if language == "en"
+                else f"⏳ <b>در حال ایجاد درخواست صوتی…</b>\n\n🎵 خروجی: <code>{output_format.upper()}</code>"
             ),
         )
-
-        PENDING_SELECTIONS.pop(
-            token,
-            None,
+        job = await create_download_job(
+            source_url=source_url,
+            telegram_id=callback.from_user.id,
+            quality=None,
+            media_type="audio",
+            output_format=output_format,
+            playlist_index=playlist_index,
+        )
+        job_id = int(job["id"])
+        await safe_edit_message(
+            status_message,
+            _queued_download_text(
+                quality_label,
+                media_info,
+            ),
+            reply_markup=build_active_download_keyboard(job_id),
+        )
+        completed_job = await wait_for_download(
+            job_id,
+            status_message,
+            quality_label,
+            media_info,
+        )
+        if completed_job.get("status") == "completed":
+            await send_downloaded_file(
+                message=status_message,
+                status_message=status_message,
+                job=completed_job,
+                media_info=media_info,
+            )
+    except asyncio.TimeoutError:
+        await safe_edit_message(
+            status_message,
+            "⌛ Audio job timed out. Check its status later."
+            if language == "en"
+            else "⌛ زمان انتظار استخراج صدا تمام شد؛ وضعیت درخواست را بعداً بررسی کنید.",
+            reply_markup=None,
+        )
+    except Exception as exc:
+        await safe_edit_message(
+            status_message,
+            (
+                "❌ <b>Audio extraction failed</b>\n\n"
+                if language == "en"
+                else "❌ <b>استخراج صدا انجام نشد</b>\n\n"
+            ) + html.escape(download_error_text(exc)[:1000]),
+            reply_markup=download_error_markup(exc),
         )
 
+async def _switch_video_picker(
+    callback: CallbackQuery, token: str, selection: dict, *, height: int | None,
+) -> None:
+    message = callback.message
+    language = ui_language.get()
+    english = language == "en"
+    new_token = move_video_selection(
+        token, selection, height=height, chat_id=message.chat.id, message_id=message.message_id,
+    )
+    if new_token is None:
+        await callback.answer(_tr("⏰ این درخواست منقضی شده است."), show_alert=True)
         return
 
-    await callback.answer(
-        (
-            f"کیفیت "
-            f"{quality} "
-            "انتخاب شد."
+    changed = False
+    try:
+        if height is None:
+            text = "🎬 <b>Choose video quality</b>" if english else "🎬 <b>کیفیت ویدئو را انتخاب کنید</b>"
+            markup = build_quality_keyboard(
+                list(selection["sizes"].items()), new_token, audio_token=new_token, cover_token=new_token,
+                description_token=new_token, language=language,
+            )
+        else:
+            quality = normalize_quality_label(height)
+            text = (
+                f"🎬 <b>Selected quality: {quality}</b>\n\n"
+                "Where will you watch this video? Choose that device’s operating system below.\n\n"
+                "⚡ <b>Android, Windows or Linux</b>\n"
+                "We’ll send the original video without converting it. If it doesn’t play, tap “Compatible version” under the file.\n\n"
+                "🍎 <b>iPhone, iPad or Mac</b>\n"
+                "We’ll send a compatible MP4. If the video needs converting, it may take a little longer.\n\n"
+                "Using another device or not sure? Choose “Other / Not sure” for the compatible MP4."
+                if english else
+                f"🎬 <b>کیفیت انتخابی: {quality}</b>\n\n"
+                "ویدئو را روی چه دستگاهی تماشا می‌کنید؟ سیستم‌عامل همان دستگاه را از دکمه‌های زیر انتخاب کنید.\n\n"
+                "⚡ <b>اندروید، ویندوز یا لینوکس</b>\n"
+                "فایل اصلی را بدون تبدیل می‌فرستیم. اگر ویدئو پخش نشد، زیر فایل روی «نسخهٔ سازگار» بزنید.\n\n"
+                "🍎 <b>آیفون، آیپد یا مک</b>\n"
+                "نسخهٔ سازگار MP4 را می‌فرستیم. اگر ویدئو به تبدیل نیاز داشته باشد، آماده‌سازی آن کمی بیشتر طول می‌کشد.\n\n"
+                "اگر دستگاه دیگری دارید یا مطمئن نیستید، «سایر / نمی‌دانم» را بزنید تا نسخهٔ سازگار را دریافت کنید."
+            )
+            markup = build_video_device_keyboard(new_token, language)
+        await callback.answer()
+        changed = await safe_edit_message(message, text, reply_markup=markup)
+    finally:
+        # Keep the previous buttons usable when Telegram could not replace them.
+        if not changed and PENDING_SELECTIONS.pop(new_token, None) is not None:
+            PENDING_SELECTIONS[token] = selection
+    if not changed:
+        await message.answer("The menu could not be updated. Try your selection again or resend the link."
+                             if english else "منو به‌روزرسانی نشد. دوباره انتخاب کنید یا لینک را مجدد بفرستید.")
+
+
+@dp.callback_query(F.data.startswith("quality:"))
+async def quality_callback(callback: CallbackQuery) -> None:
+    match = re.fullmatch(r"quality:([^:]+):([1-9][0-9]{0,4})", callback.data or "")
+    if not match:
+        await callback.answer(_tr("❌ کیفیت نامعتبر است."), show_alert=True)
+        return
+    token, height = match[1], int(match[2])
+    selection = await _selection_for_callback(callback, token)
+    if not selection:
+        return
+    if not selection.get("source_url") or height not in selection.get("sizes", {}):
+        await callback.answer(_tr("❌ کیفیت نامعتبر است."), show_alert=True)
+        return
+    sizes = selection["sizes"]
+    size = sizes[height]
+    if size is not None and size > MAX_DOWNLOAD_SIZE_BYTES:
+        if PENDING_SELECTIONS.pop(token, None) is None:
+            await callback.answer(_tr("⏰ این درخواست منقضی شده است."), show_alert=True)
+            return
+        keyboard = build_smaller_quality_keyboard(
+            selection["source_url"], height, sizes, selection.get("playlist_index"), selection.get("media_info"),
+            telegram_id=callback.from_user.id, source_job_id=selection.get("source_job_id"),
         )
-    )
-
-    PENDING_SELECTIONS.pop(
-        token,
-        None,
-    )
-
-    message = (
-        callback.message
-    )
-
-    if not isinstance(
-        message,
-        Message,
-    ):
-
+        await callback.answer(_tr("حجم این کیفیت بیش از حد مجاز است."), show_alert=True)
+        quality = normalize_quality_label(height)
+        size_label = format_file_size(size)
+        english = ui_language.get() == "en"
+        text = (f"⚠️ <b>{quality} exceeds the file size limit</b> ({size_label})." if english else
+                f"⚠️ <b>حجم کیفیت {quality} بیش از حد مجاز است</b> ({size_label}).")
+        if keyboard:
+            text += "\n" + ("Choose a lower quality." if english else "کیفیت پایین‌تری را انتخاب کنید.")
+        else:
+            text += "\n" + ("No smaller quality is available." if english else "کیفیت پایین‌تری در محدودهٔ مجاز پیدا نشد.")
+        await safe_edit_message(callback.message, text, reply_markup=keyboard)
         return
+    await _switch_video_picker(callback, token, selection, height=height)
 
-    status_message = (
-        message
-    )
+
+@dp.callback_query(F.data.startswith("video_os:"))
+async def video_device_callback(callback: CallbackQuery) -> None:
+    parts = (callback.data or "").split(":")
+    if len(parts) != 3 or (parts[2] not in VIDEO_DEVICES and parts[2] != "back"):
+        await callback.answer(_tr("❌ درخواست نامعتبر است."), show_alert=True)
+        return
+    _, token, device = parts
+    selection = await _selection_for_callback(callback, token, device_step=True)
+    if not selection:
+        return
+    if device == "back":
+        await _switch_video_picker(callback, token, selection, height=None)
+        return
+    # No await between claiming this one-time selection and invalidating all its buttons.
+    if PENDING_SELECTIONS.pop(token, None) is None:
+        await callback.answer(_tr("⏰ این درخواست منقضی شده است."), show_alert=True)
+        return
+    output_format = VIDEO_DEVICES[device][2]
+    source_url = selection["source_url"]
+    height = selection["device_height"]
+    quality = normalize_quality_label(height)
+    sizes = selection["sizes"]
+    estimated_size = sizes[height]
+    playlist_index = selection.get("playlist_index")
+    media_info = selection.get("media_info") or {}
+    message = status_message = callback.message
+    await callback.answer()
 
     try:
 
@@ -3556,30 +5022,27 @@ async def quality_callback(
             if estimated_label:
 
                 estimated_text = (
-                    "\n📦 حجم تقریبی: "
-                    f"<code>"
-                    f"{estimated_label}"
-                    f"</code>"
+                    f"{_tr('\n📦 حجم تقریبی: <code>')}{estimated_label}</code>"
                 )
 
         await safe_edit_message(
             status_message,
             (
-                "⏳ <b>در حال ایجاد درخواست دانلود...</b>\n\n"
-
-                f"🎬 کیفیت: "
-                f"<code>{quality}</code>"
-                f"{estimated_text}"
+                f"{_tr('⏳ <b>در حال ایجاد درخواست دانلود...</b>\n\n🎬 کیفیت: <code>')}{quality}</code>{estimated_text}"
             ),
         )
 
         job = (
             await create_download_job(
                 source_url=source_url,
+                telegram_id=callback.from_user.id,
                 quality=quality,
+                media_type="video",
+                output_format=output_format,
                 playlist_index=(
                     playlist_index
                 ),
+                estimated_size_bytes=estimated_size,
             )
         )
 
@@ -3591,17 +5054,9 @@ async def quality_callback(
 
         await safe_edit_message(
             status_message,
-            (
-                "✅ <b>درخواست دانلود ایجاد شد</b>\n\n"
-
-                f"🆔 Job ID: "
-                f"<code>{job_id}</code>\n"
-
-                f"🎬 کیفیت: "
-                f"<code>{quality}</code>\n"
-
-                "📊 وضعیت: "
-                "<code>pending</code>"
+            _queued_download_text(
+                quality,
+                media_info,
             ),
             reply_markup=(
                 build_active_download_keyboard(
@@ -3615,6 +5070,7 @@ async def quality_callback(
                 job_id,
                 status_message,
                 quality,
+                media_info,
             )
         )
 
@@ -3635,6 +5091,7 @@ async def quality_callback(
             message,
             status_message,
             completed_job,
+            media_info=media_info,
         )
 
         try:
@@ -3656,9 +5113,9 @@ async def quality_callback(
         await safe_edit_message(
             status_message,
             (
-                "⌛ <b>زمان انتظار ربات به پایان رسید</b>\n\n"
+                _tr("⌛ <b>زمان انتظار ربات به پایان رسید</b>\n\n"
 
-                "وضعیت Job را دوباره بررسی کنید."
+                "وضعیت Job را دوباره بررسی کنید.")
             ),
             reply_markup=None,
         )
@@ -3671,11 +5128,13 @@ async def quality_callback(
             f"{exc}"
         )
 
-        error_text = (
+        raw_error_text = (
             str(
                 exc
             )[:1000]
         )
+
+        error_text = download_error_text(exc)
 
         if (
             is_youtube_url(
@@ -3683,7 +5142,7 @@ async def quality_callback(
             )
             and height > 360
             and "403"
-            in error_text
+            in raw_error_text
         ):
 
             fallback_options = [
@@ -3699,39 +5158,26 @@ async def quality_callback(
                 add_pending_selection(
                     source_url,
                     fallback_options,
+                    telegram_id=callback.from_user.id,
+                    source_job_id=selection.get("source_job_id"),
+                    playlist_index=playlist_index,
+                    media_info=media_info,
                 )
             )
 
-            fallback_keyboard = (
-                InlineKeyboardMarkup(
-                    inline_keyboard=[
-                        [
-                            InlineKeyboardButton(
-                                text=(
-                                    "🎬 دانلود با 360p"
-                                ),
-                                callback_data=(
-                                    f"quality:"
-                                    f"{fallback_token}:"
-                                    "360"
-                                ),
-                            )
-                        ]
-                    ]
-                )
+            fallback_keyboard = build_quality_keyboard(
+                quality_options=fallback_options,
+                token=fallback_token,
+                audio_token=fallback_token,
+                cover_token=fallback_token,
+                description_token=fallback_token,
+                language=ui_language.get(),
             )
 
             await safe_edit_message(
                 status_message,
                 (
-                    f"❌ <b>کیفیت "
-                    f"{quality} "
-                    "فعلاً از YouTube "
-                    "قابل دریافت نیست</b>\n\n"
-
-                    "✅ کیفیت "
-                    "<code>360p</code> "
-                    "در دسترس است."
+                    f"{_tr('❌ <b>کیفیت ')}{quality}{_tr(' فعلاً از YouTube قابل دریافت نیست</b>\n\n✅ کیفیت <code>360p</code> در دسترس است.')}"
                 ),
                 reply_markup=(
                     fallback_keyboard
@@ -3749,13 +5195,7 @@ async def quality_callback(
         await safe_edit_message(
             status_message,
             (
-                "❌ <b>دانلود انجام نشد</b>\n\n"
-
-                "⚠️ خطا:\n"
-
-                f"<code>"
-                f"{safe_error}"
-                f"</code>"
+                f"{_tr('❌ <b>دانلود انجام نشد</b>\n\n⚠️ خطا:\n<code>')}{safe_error}</code>"
             ),
             reply_markup=None,
         )
@@ -3766,7 +5206,9 @@ async def quality_callback(
 # ============================================================
 
 @dp.message(
-    F.text
+    StateFilter(None),
+    F.text,
+    DownloadMessageFilter(),
 )
 async def download_handler(
     message: Message,
@@ -3783,12 +5225,42 @@ async def download_handler(
 
         return
 
+    if not message.from_user:
+        return
+
+    try:
+        user = await register_telegram_user(message)
+    except Exception as exc:
+        print(
+            "Download user registration failed: "
+            f"{type(exc).__name__}: {exc}"
+        )
+        await message.answer(
+            _tr("❌ ثبت حساب کاربری انجام نشد؛ چند لحظه بعد دوباره تلاش کنید.")
+        )
+        return
+
+    try:
+        entitlement = await get_download_entitlement(message.from_user.id)
+        if entitlement.get("forced_join_required"):
+            language = normalize_language(user.get("effective_language"))
+            configuration = await runtime_configuration(language)
+            if not await enforce_required_membership(
+                message,
+                telegram_id=message.from_user.id,
+                configuration=configuration,
+            ):
+                return
+    except BackendAPIError as exc:
+        await message.answer(download_error_text(exc), reply_markup=download_error_markup(exc))
+        return
+
     status_message = (
         await message.answer(
             (
-                "🔎 <b>لینک دریافت شد</b>\n"
+                _tr("🔎 <b>لینک دریافت شد</b>\n"
 
-                "در حال بررسی کیفیت‌های موجود..."
+                "در حال بررسی کیفیت‌های موجود...")
             ),
             parse_mode="HTML",
         )
@@ -3892,13 +5364,7 @@ async def download_handler(
 
             await status_message.edit_text(
                 (
-                    "📚 <b>این پست شامل "
-                    f"{len(entries)} رسانه است</b>\n\n"
-
-                    f"📌 <b>عنوان:</b> "
-                    f"{safe_title}\n\n"
-
-                    "👇 <b>رسانه موردنظر را انتخاب کنید:</b>"
+                    f"{_tr('📚 <b>این پست شامل ')}{len(entries)}{_tr(' رسانه است</b>\n\n📌 <b>عنوان:</b> ')}{safe_title}{_tr('\n\n👇 <b>رسانه موردنظر را انتخاب کنید:</b>')}"
                 ),
                 reply_markup=keyboard,
                 parse_mode="HTML",
@@ -3935,18 +5401,14 @@ async def download_handler(
             await safe_edit_message(
                 status_message,
                 (
-                    "📷 <b>تصویر آماده دانلود است</b>\n\n"
-                    f"📌 <b>عنوان:</b> "
-                    f"{safe_title}\n"
-                    "🖼 <b>کیفیت:</b> "
-                    "<code>اصلی</code>\n\n"
-                    "⏳ در حال ایجاد درخواست دانلود..."
+                    f"{_tr('📷 <b>تصویر آماده دانلود است</b>\n\n📌 <b>عنوان:</b> ')}{safe_title}{_tr('\n🖼 <b>کیفیت:</b> <code>اصلی</code>\n\n⏳ در حال ایجاد درخواست دانلود...')}"
                 ),
             )
 
             job = (
                 await create_download_job(
                     source_url=source_url,
+                    telegram_id=message.from_user.id,
                     quality=None,
                     media_type="image",
                     playlist_index=(
@@ -3963,14 +5425,9 @@ async def download_handler(
 
             await safe_edit_message(
                 status_message,
-                (
-                    "✅ <b>درخواست دانلود تصویر ایجاد شد</b>\n\n"
-                    f"🆔 Job ID: "
-                    f"<code>{job_id}</code>\n"
-                    "🖼 کیفیت: "
-                    "<code>اصلی</code>\n"
-                    "📊 وضعیت: "
-                    "<code>pending</code>"
+                _queued_download_text(
+                    _tr("تصویر اصلی"),
+                    media_info,
                 ),
                 reply_markup=(
                     build_active_download_keyboard(
@@ -3983,7 +5440,8 @@ async def download_handler(
                 await wait_for_download(
                     job_id,
                     status_message,
-                    "تصویر اصلی",
+                    _tr("تصویر اصلی"),
+                    media_info,
                 )
             )
 
@@ -4000,6 +5458,7 @@ async def download_handler(
                         status_message
                     ),
                     job=completed_job,
+                    media_info=media_info,
                 )
 
             return
@@ -4019,8 +5478,8 @@ async def download_handler(
         if not quality_options:
 
             raise RuntimeError(
-                "هیچ کیفیت ویدئویی "
-                "قابل دانلودی پیدا نشد."
+                _tr("هیچ کیفیت ویدئویی "
+                "قابل دانلودی پیدا نشد.")
             )
 
         token = (
@@ -4030,6 +5489,8 @@ async def download_handler(
                 playlist_index=(
                     single_playlist_index
                 ),
+                media_info=media_info,
+                telegram_id=message.from_user.id,
             )
         )
 
@@ -4039,6 +5500,10 @@ async def download_handler(
                     quality_options
                 ),
                 token=token,
+                audio_token=token,
+                cover_token=token,
+                description_token=token,
+                language=ui_language.get(),
             )
         )
 
@@ -4051,10 +5516,7 @@ async def download_handler(
         )
 
         text = (
-            "🎬 <b>ویدئو آماده دانلود است</b>\n\n"
-
-            f"📌 <b>عنوان:</b> "
-            f"{safe_title}\n"
+            f"{_tr('🎬 <b>ویدئو آماده دانلود است</b>\n\n📌 <b>عنوان:</b> ')}{safe_title}\n"
         )
 
         if duration:
@@ -4113,15 +5575,12 @@ async def download_handler(
                     )
 
                 text += (
-                    f"⏱ <b>مدت:</b> "
-                    f"<code>"
-                    f"{duration_text}"
-                    f"</code>\n"
+                    f"{_tr('⏱ <b>مدت:</b> <code>')}{duration_text}</code>\n"
                 )
 
         text += (
-            "\n🎯 <b>کیفیت موردنظر را انتخاب کنید:</b>\n"
-            "📦 حجم‌ها تقریبی هستند."
+            _tr("\n🎯 <b>کیفیت موردنظر را انتخاب کنید:</b>\n"
+            "📦 حجم‌ها تقریبی هستند.")
         )
 
         await status_message.edit_text(
@@ -4140,29 +5599,47 @@ async def download_handler(
 
         safe_error = (
             html.escape(
-                str(
-                    exc
-                )[:1000]
+                download_error_text(exc)
             )
         )
 
         await safe_edit_message(
             status_message,
             (
-                "❌ <b>نتوانستم اطلاعات ویدئو را دریافت کنم</b>\n\n"
-
-                "⚠️ خطا:\n"
-
-                f"<code>"
-                f"{safe_error}"
-                f"</code>"
+                f"{_tr('❌ <b>نتوانستم اطلاعات ویدئو را دریافت کنم</b>\n\n⚠️ خطا:\n<code>')}{safe_error}</code>"
             ),
+            reply_markup=download_error_markup(exc),
         )
 
 
 # ============================================================
 # Main
 # ============================================================
+
+async def configure_telegram_menu_button(bot: Bot) -> None:
+    """Expose /menu from Telegram's supported input-area menu button.
+
+    Existing commands configured for the bot are retained.  A transient Bot
+    API failure must never prevent the polling process from starting.
+    """
+    try:
+        commands = await bot.get_my_commands()
+        if not any(command.command == "menu" for command in commands):
+            await bot.set_my_commands(
+                [
+                    *commands,
+                    BotCommand(
+                        command="menu",
+                        description="Open main menu / باز کردن منوی اصلی",
+                    ),
+                ]
+            )
+        await bot.set_chat_menu_button(menu_button=MenuButtonCommands())
+    except Exception as exc:
+        print(
+            "Could not configure the Telegram menu button: "
+            f"{type(exc).__name__}: {exc}"
+        )
 
 async def main():
 
@@ -4186,6 +5663,9 @@ async def main():
         )
     )
 
+    session.middleware(PollHeartbeatMiddleware(dp.storage.redis))
+    session.middleware(InterfaceRequests(dp.storage.redis))
+
     bot = (
         Bot(
             token=TOKEN,
@@ -4193,13 +5673,41 @@ async def main():
         )
     )
 
+    broadcast_task = None
+    credit_task = None
+    cache_task = None
     try:
+
+        # Telegram owns the area beside Attach, so a bot cannot put an
+        # arbitrary ReplyKeyboard button there. Its supported equivalent is
+        # the command-menu button: /menu restores the persistent bottom menu
+        # after a user has manually collapsed it.
+        await configure_telegram_menu_button(bot)
+
+        broadcast_task = asyncio.create_task(run_broadcast_sender(bot))
+        credit_task = asyncio.create_task(run_credit_notices(bot))
+        from app.utils.telegram_cache import cleanup_loop
+        cache_task = asyncio.create_task(cleanup_loop())
 
         await dp.start_polling(
             bot
         )
 
     finally:
+
+        if broadcast_task is not None:
+            broadcast_task.cancel()
+            await asyncio.gather(broadcast_task, return_exceptions=True)
+        if credit_task is not None:
+            credit_task.cancel()
+            await asyncio.gather(credit_task, return_exceptions=True)
+
+        if cache_task is not None:
+            cache_task.cancel()
+            await asyncio.gather(cache_task, return_exceptions=True)
+        await (
+            dp.storage.close()
+        )
 
         await (
             bot.session.close()

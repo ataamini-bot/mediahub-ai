@@ -1,3 +1,5 @@
-aiogram
+aiogram>=3.31,<4
 httpx
 aiohttp
+redis
+qrcode[pil]

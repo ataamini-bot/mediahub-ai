@@ -1,0 +1,116 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - develop
+      - "feature/**"
+      - "fix/**"
+  pull_request:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    # Match the install runner and PostgreSQL 16 client used by recovery tests.
+    runs-on: ubuntu-24.04
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: mediahub_test
+          POSTGRES_USER: mediahub_test
+          POSTGRES_PASSWORD: mediahub_test_password
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U mediahub_test -d mediahub_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      APP_ENV: test
+      DEBUG: "false"
+      SECRET_KEY: test-secret-key
+      JWT_SECRET_KEY: test-jwt-secret-key
+      POSTGRES_DB: mediahub_test
+      POSTGRES_USER: mediahub_test
+      POSTGRES_PASSWORD: mediahub_test_password
+      POSTGRES_HOST: 127.0.0.1
+      POSTGRES_PORT: "5432"
+      DATABASE_URL: postgresql+asyncpg://mediahub_test:mediahub_test_password@127.0.0.1:5432/mediahub_test
+      REDIS_URL: redis://127.0.0.1:6379/0
+      TELEGRAM_BOT_TOKEN: 123456789:test-token
+      TELEGRAM_SUPERADMIN_ID: "123456789"
+      BOT_BACKEND_API_KEY: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+      DATA_ENCRYPTION_KEY: MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDA=
+      ADMIN_NOTIFICATIONS_ENABLED: "false"
+      RUN_BACKUP_INTEGRATION: "1"
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            backend/requirements.txt
+            bot/requirements.txt
+
+      - name: Install dependencies
+        run: python -m pip install -r backend/requirements.txt -r bot/requirements.txt
+
+      - name: Compile Python sources
+        run: python -m compileall -q backend/app backend/alembic bot/app
+
+      - name: Install FFmpeg test dependency
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ffmpeg postgresql-client-16
+          echo /usr/lib/postgresql/16/bin >> "$GITHUB_PATH"
+
+      - name: Validate and apply migrations
+        working-directory: backend
+        run: |
+          alembic heads
+          alembic upgrade head
+          alembic current
+
+      - name: Run backend tests
+        env:
+          PYTHONPATH: backend
+        run: python -m pytest backend/tests -q
+
+      - name: Run bot tests
+        env:
+          PYTHONPATH: bot
+        run: python -m pytest bot/tests -q
+
+      - name: Test installation and recovery console
+        run: python -m pytest scripts/tests -q
+
+      - name: Validate release scripts and build backup image
+        run: |
+          for file in install.sh scripts/*.sh; do bash -n "$file"; done
+          docker build -f backup/Dockerfile -t mediahub-backup:ci .
+          docker run --rm mediahub-backup:ci --help
+
+  install-smoke:
+    needs: test
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install python-dotenv==1.2.3
+      - name: Fresh Docker stack and portable recovery
+        run: python scripts/ci_install_smoke.py

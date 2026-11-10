@@ -1,0 +1,198 @@
+from app.localization import tr as _tr, localized_collection as _localized_collection
+from aiogram import F, Router
+from aiogram.filters import BaseFilter, Command
+from aiogram.fsm.context import FSMContext
+from aiogram.types import Message
+
+from app.handlers.admin import show_admin_panel_message
+from app.handlers.payments import (
+    send_payment_offers_menu,
+    send_subscription_status,
+)
+from app.handlers.conversion import cleanup_staged_state, send_conversion_prompt
+from app.handlers.experience import (
+    perform_custom_button,
+    send_content_page,
+    send_support_menu,
+)
+from app.i18n import HOME_BUTTON_ACTIONS, normalize_language, translate
+from app.keyboards.language import build_language_keyboard
+from app.keyboards.payment import build_home_reply_keyboard
+from app.services.backend import register_telegram_user
+from app.runtime_config import (
+    action_for_runtime_text,
+    all_runtime_configurations,
+    runtime_configuration,
+)
+
+
+router = Router(name="home")
+router.message.filter(F.chat.type == "private")
+
+
+class RuntimeHomeButtonFilter(BaseFilter):
+    async def __call__(self, message: Message) -> dict | bool:
+        text = str(message.text or "").strip()
+        if not text or text.startswith("/") or "https://" in text or "http://" in text:
+            return False
+        legacy = HOME_BUTTON_ACTIONS.get(text)
+        if legacy is not None:
+            return {"runtime_home_action": {"action": legacy}}
+        action = action_for_runtime_text(text, await all_runtime_configurations())
+        return {"runtime_home_action": action} if action is not None else False
+
+
+@router.message(Command("menu"))
+async def restore_main_menu(
+    message: Message,
+    state: FSMContext,
+) -> None:
+    """Restore the persistent bottom menu from Telegram's command button."""
+    fallback_language = normalize_language(
+        message.from_user.language_code if message.from_user else None
+    )
+    include_admin = False
+
+    try:
+        user = await register_telegram_user(message)
+        language = normalize_language(user.get("effective_language"))
+        include_admin = bool(user.get("is_admin"))
+    except Exception:
+        language = fallback_language
+
+    await cleanup_staged_state(state)
+    await state.clear()
+    configuration = await runtime_configuration(language)
+    await message.answer(
+        translate(language, "home.ready"),
+        reply_markup=build_home_reply_keyboard(
+            language,
+            include_admin=include_admin,
+            configuration=configuration,
+        ),
+    )
+
+
+@router.message(F.text, RuntimeHomeButtonFilter())
+async def persistent_home_button(
+    message: Message,
+    state: FSMContext,
+    runtime_home_action: dict,
+) -> None:
+    """Route persistent-menu labels before the generic download handler."""
+    action = str(runtime_home_action.get("action") or "")
+    if not action or message.from_user is None:
+        return
+
+    fallback_language = normalize_language(message.from_user.language_code)
+
+    try:
+        user = await register_telegram_user(message)
+    except Exception:
+        await cleanup_staged_state(state)
+        await state.clear()
+        await message.answer(
+            translate(fallback_language, "start.registration_error"),
+            parse_mode="HTML",
+            reply_markup=build_home_reply_keyboard(fallback_language),
+        )
+        return
+
+    language = normalize_language(user.get("effective_language"))
+    include_admin = bool(user.get("is_admin"))
+    configuration = await runtime_configuration(language)
+    if action == "more":
+        await cleanup_staged_state(state)
+        await state.clear()
+        # Legacy keyboards used an inline "More options" button. Re-send the
+        # persistent ReplyKeyboard so old clients converge to the bottom-menu
+        # layout instead of creating a second main menu in the chat.
+        await message.answer(
+            translate(language, "home.ready"),
+            reply_markup=build_home_reply_keyboard(
+                language,
+                include_admin=include_admin,
+                configuration=configuration,
+            ),
+        )
+        return
+
+    if action == "buy":
+        await cleanup_staged_state(state)
+        await state.clear()
+        await send_payment_offers_menu(message, state)
+        return
+
+    if action == "subscription":
+        await cleanup_staged_state(state)
+        await state.clear()
+        await send_subscription_status(message, message.from_user.id)
+        return
+
+    if action == "language":
+        await cleanup_staged_state(state)
+        await state.clear()
+        await message.answer(
+            _tr("🌐 <b>زبان ربات را انتخاب کنید / Choose the bot language:</b>"),
+            parse_mode="HTML",
+            reply_markup=build_language_keyboard(),
+        )
+        return
+
+    if action == "support":
+        await cleanup_staged_state(state)
+        await state.clear()
+        await send_support_menu(
+            message,
+            state,
+            telegram_id=message.from_user.id,
+        )
+        return
+
+    if action == "convert":
+        await send_conversion_prompt(message, state)
+        return
+
+    if action in {"tutorial", "faq"}:
+        await cleanup_staged_state(state)
+        await state.clear()
+        await send_content_page(
+            message,
+            telegram_id=message.from_user.id,
+            key=action,
+        )
+        return
+
+    if action == "custom" and isinstance(runtime_home_action.get("button"), dict):
+        await cleanup_staged_state(state)
+        await state.clear()
+        await perform_custom_button(
+            message,
+            state,
+            telegram_id=message.from_user.id,
+            button=runtime_home_action["button"],
+        )
+        return
+
+    if action == "admin":
+        if not include_admin:
+            return
+        await cleanup_staged_state(state)
+        await state.clear()
+        await show_admin_panel_message(
+            message,
+            state,
+            register_user=False,
+        )
+        return
+
+    await cleanup_staged_state(state)
+    await state.clear()
+    await message.answer(
+        translate(language, "home.ready"),
+        reply_markup=build_home_reply_keyboard(
+            language,
+            include_admin=include_admin,
+            configuration=configuration,
+        ),
+    )

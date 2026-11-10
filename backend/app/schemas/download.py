@@ -10,6 +10,7 @@ from pydantic import (
 from app.models.download_job import (
     DownloadJobStatus,
 )
+from app.services.media_formats import normalize_output_format
 
 
 # ============================================================
@@ -19,6 +20,10 @@ from app.models.download_job import (
 class DownloadCreate(
     BaseModel
 ):
+    telegram_id: int = Field(
+        gt=0,
+    )
+
     source_url: str = Field(
         min_length=5,
         max_length=2048,
@@ -38,6 +43,19 @@ class DownloadCreate(
         str
         | None
     ) = None
+
+    output_format: (
+        str
+        | None
+    ) = None
+
+    estimated_size_bytes: (
+        int
+        | None
+    ) = Field(
+        default=None,
+        ge=0,
+    )
 
     # --------------------------------------------------------
     # Multi-video / playlist entry
@@ -101,6 +119,31 @@ class DownloadCreate(
 
         return value
 
+    @field_validator(
+        "output_format",
+        mode="before",
+    )
+    @classmethod
+    def validate_output_format(
+        cls,
+        value: object,
+    ) -> str | None:
+        if value is None or str(value).strip() == "":
+            return None
+        normalized = normalize_output_format(value)
+        if normalized is None:
+            raise ValueError(
+                "Unsupported output format."
+            )
+        return normalized
+
+
+class DownloadEntitlementResponse(BaseModel):
+    plan_id: int | None
+    plan_name: str
+    forced_join_required: bool
+    is_admin_bypass: bool
+
 
 # ============================================================
 # Download response
@@ -111,6 +154,21 @@ class DownloadResponse(
 ):
     id: int
     source_url: str
+
+    plan_id: (
+        int
+        | None
+    )
+
+    plan_name_snapshot: (
+        str
+        | None
+    )
+
+    plan_limits_snapshot: (
+        dict
+        | None
+    )
 
     format_id: (
         str
@@ -123,6 +181,11 @@ class DownloadResponse(
     )
 
     media_type: (
+        str
+        | None
+    )
+
+    output_format: (
         str
         | None
     )
@@ -180,6 +243,11 @@ class DownloadResponse(
         | None
     )
 
+    delivered_at: (
+        datetime
+        | None
+    )
+
     paused_at: (
         datetime
         | None
@@ -232,6 +300,7 @@ class MediaFormat(
 
     has_video: bool = False
     has_audio: bool = False
+    preferred_for_quality: bool = False
 
     video_codec: (
         str
@@ -240,6 +309,14 @@ class MediaFormat(
 
     audio_codec: (
         str
+        | None
+    ) = None
+
+    # Frames per second is optional because some extractors do not expose it.
+    # Keeping it in the public media-info response lets the Bot describe the
+    # selected output accurately without guessing from a quality label.
+    fps: (
+        float
         | None
     ) = None
 
@@ -266,6 +343,11 @@ class MediaEntry(
     ) = None
 
     title: (
+        str
+        | None
+    ) = None
+
+    description: (
         str
         | None
     ) = None
@@ -322,6 +404,14 @@ class MediaInfoResponse(
     source_url: str
 
     title: (
+        str
+        | None
+    ) = None
+
+    # Caption / post text when the upstream extractor provides it.  It is
+    # deliberately separate from ``title`` because many providers use a
+    # shortened title while retaining the full post description.
+    description: (
         str
         | None
     ) = None

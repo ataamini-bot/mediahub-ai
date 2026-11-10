@@ -1,3 +1,4 @@
+import json
 import hashlib
 import os
 import re
@@ -13,10 +14,12 @@ NotificationTopic = Literal[
     "payments",
     "backups",
     "system",
+    "support",
 ]
 
 
 TOPIC_ENV_NAMES = {
+    "support": "ADMIN_NOTIFICATIONS_SUPPORT_TOPIC_ID",
     "monitoring":
         "ADMIN_NOTIFICATIONS_MONITORING_TOPIC_ID",
 
@@ -269,11 +272,12 @@ def send_admin_notification(
     *,
     silent: bool = False,
     dedup_seconds: int = 0,
+    routes_override: dict | None = None,
 ) -> bool:
 
-    if not _env_enabled(
-        "ADMIN_NOTIFICATIONS_ENABLED"
-    ):
+    from app.services.operations import operations_cache
+    routes = routes_override if routes_override is not None else operations_cache.routes()
+    if not routes.get("enabled"):
 
         return False
 
@@ -285,36 +289,10 @@ def send_admin_notification(
         .strip()
     )
 
-    chat_id = (
-        os.getenv(
-            "ADMIN_NOTIFICATIONS_CHAT_ID",
-            ""
-        )
-        .strip()
-    )
-
-    topic_env_name = (
-        TOPIC_ENV_NAMES.get(
-            topic
-        )
-    )
-
-    if not topic_env_name:
-
-        print(
-            "Admin notification skipped: "
-            f"unknown topic={topic}"
-        )
-
+    chat_id = routes.get("chat_id")
+    if topic not in TOPIC_ENV_NAMES:
         return False
-
-    topic_id = (
-        os.getenv(
-            topic_env_name,
-            ""
-        )
-        .strip()
-    )
+    topic_id = (routes.get("topics") or {}).get(topic)
 
     if (
         not token
@@ -396,6 +374,11 @@ def send_admin_notification(
             data=data,
             timeout=20,
         ) as response:
+
+            result = json.loads(response.read().decode("utf-8"))
+            if not result.get("ok"):
+                _release_dedup_slot(topic, sanitized_text, dedup_seconds)
+                return False
 
             if (
                 response.status

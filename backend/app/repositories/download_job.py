@@ -20,17 +20,27 @@ class DownloadJobRepository:
         self,
         source_url: str,
         user_id: int | None = None,
+        plan_id: int | None = None,
+        plan_name_snapshot: str | None = None,
+        plan_limits_snapshot: dict | None = None,
         format_id: str | None = None,
         quality: str | None = None,
         media_type: str | None = None,
+        output_format: str | None = None,
+        playlist_index: int | None = None,
     ) -> DownloadJob:
 
         job = DownloadJob(
             source_url=source_url,
             user_id=user_id,
+            plan_id=plan_id,
+            plan_name_snapshot=plan_name_snapshot,
+            plan_limits_snapshot=plan_limits_snapshot,
             format_id=format_id,
             quality=quality,
             media_type=media_type,
+            output_format=output_format,
+            playlist_index=playlist_index,
             status=DownloadJobStatus.PENDING,
         )
 

@@ -83,3 +83,9 @@ test-*.mp4
 # Secrets and authentication cookies
 secrets/
 *.cookies.txt
+
+backups/
+
+# Private host operations state and resolved release image digests
+.mediahub/
+docker-compose.override.yml

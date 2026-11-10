@@ -4,20 +4,36 @@ from datetime import (
     timezone,
 )
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 from urllib.parse import urlparse
 import json
 import os
+import selectors as io_selectors
 import subprocess
+import time
 import requests
 
 import yt_dlp
 from sqlalchemy import select
 
 from app.db.worker_session import WorkerSessionLocal
+from app.services.instagram_formats import instagram_video_choices
 from app.models.download_job import (
     DownloadJob,
     DownloadJobStatus,
+)
+from app.services.social_media import (
+    BROWSER_USER_AGENT,
+    extract_social_image,
+    extract_threads_video,
+    is_allowed_social_media_url,
+    is_threads_url,
+    social_platform,
+    social_referer,
+)
+from app.services.media_formats import (
+    normalize_output_format,
+    output_format_kind,
 )
 from app.workers.celery_app import celery_app
 
@@ -46,6 +62,25 @@ MAX_DOWNLOAD_BYTES = (
     * 1024
     * 1024
 )
+
+UPLOAD_SOURCE_PREFIX = "upload://"
+
+
+def _resolve_max_download_bytes(plan_limits_snapshot: object) -> int:
+    snapshot = (
+        plan_limits_snapshot
+        if isinstance(plan_limits_snapshot, dict)
+        else {}
+    )
+    try:
+        max_file_size_mb = int(snapshot.get("max_file_size_mb") or 1900)
+    except (TypeError, ValueError):
+        max_file_size_mb = 1900
+
+    return min(
+        MAX_DOWNLOAD_BYTES,
+        max(1, max_file_size_mb) * 1024 * 1024,
+    )
 
 
 
@@ -856,6 +891,7 @@ def _download_social_image(
     job_id: int,
     source_url: str,
     playlist_index: int | None,
+    max_download_bytes: int,
 ) -> Path:
 
     if _is_instagram_url(
@@ -904,11 +940,33 @@ def _download_social_image(
 
         platform_name = "X"
 
+    elif social_platform(source_url) in {
+        "pinterest",
+        "tiktok",
+        "facebook",
+        "threads",
+    }:
+
+        item = extract_social_image(
+            source_url=source_url,
+            playlist_index=playlist_index,
+        )
+
+        platform = str(item["platform"])
+        url_validator = lambda url: is_allowed_social_media_url(
+            platform,
+            url,
+            "image",
+        )
+        referer = social_referer(platform)
+        platform_name = platform.title()
+
     else:
 
         raise ValueError(
             "Image downloads currently support "
-            "Instagram and X URLs"
+            "Instagram, X, Pinterest, TikTok, "
+            "Facebook and Threads URLs"
         )
 
     media_url = str(
@@ -952,7 +1010,7 @@ def _download_social_image(
 
         if (
             existing_bytes
-            > MAX_DOWNLOAD_BYTES
+            > max_download_bytes
         ):
 
             raise RuntimeError(
@@ -1141,14 +1199,13 @@ def _download_social_image(
     if (
         total_bytes is not None
         and total_bytes
-        > MAX_DOWNLOAD_BYTES
+        > max_download_bytes
     ):
 
         response.close()
 
         raise RuntimeError(
-            "Image exceeds the 1900 MB "
-            "download limit"
+            "Image exceeds the plan file-size limit"
         )
 
     mode = (
@@ -1202,12 +1259,11 @@ def _download_social_image(
 
                 if (
                     downloaded_bytes
-                    > MAX_DOWNLOAD_BYTES
+                    > max_download_bytes
                 ):
 
                     raise RuntimeError(
-                        "Image exceeds the 1900 MB "
-                        "download limit"
+                        "Image exceeds the plan file-size limit"
                     )
 
                 if (
@@ -1549,6 +1605,8 @@ def _update_download_stats(
     total_bytes: int | None,
     speed: float | None,
     eta: int | None,
+    *,
+    clear_total: bool = False,
 ) -> None:
 
     progress = max(
@@ -1595,7 +1653,9 @@ def _update_download_stats(
                 downloaded_bytes
             )
 
-        if (
+        if clear_total:
+            job.total_bytes = None
+        elif (
             total_bytes
             is not None
             and total_bytes > 0
@@ -2095,586 +2155,413 @@ def _has_audio_stream(
 
 
 # ============================================================
-# iOS / Instagram video compatibility
+# FFmpeg conversion
 # ============================================================
 
-def _probe_video_codec_for_ios(
-    file_path: Path,
-) -> tuple[
-    str | None,
-    str | None,
-]:
+def _resolve_uploaded_source(source_url: str) -> Path | None:
+    """Resolve a bot-uploaded file without allowing path traversal."""
 
-    try:
+    value = str(source_url or "")
+    if not value.startswith(UPLOAD_SOURCE_PREFIX):
+        return None
 
-        result = subprocess.run(
-            [
-                "ffprobe",
-                "-v",
-                "error",
-                "-select_streams",
-                "v:0",
-                "-show_entries",
-                "stream=codec_name,pix_fmt",
-                "-of",
-                "csv=p=0:s=|",
-                str(
-                    file_path
-                ),
-            ],
-            capture_output=True,
-            text=True,
-            check=True,
-            timeout=30,
-        )
-
-    except (
-        FileNotFoundError,
-        subprocess.SubprocessError,
-        OSError,
-    ):
-
-        return (
-            None,
-            None,
-        )
-
-    value = (
-        result.stdout
-        .strip()
-    )
-
-    if not value:
-
-        return (
-            None,
-            None,
-        )
-
-    parts = [
-        part
-        .strip()
-        .lower()
-        for part
-        in value.split(
-            "|"
-        )
-    ]
-
-    codec_name = (
-        parts[0]
-        if parts
-        and parts[0]
-        else None
-    )
-
-    pixel_format = (
-        parts[1]
-        if len(parts) > 1
-        and parts[1]
-        else None
-    )
-
-    return (
-        codec_name,
-        pixel_format,
-    )
-
-
-def _normalize_instagram_video_for_ios(
-    job_id: int,
-    file_path: Path,
-) -> Path:
-
-    codec_name, pixel_format = (
-        _probe_video_codec_for_ios(
-            file_path
-        )
-    )
-
-    is_compatible = (
-        file_path.suffix.lower()
-        == ".mp4"
-        and codec_name
-        == "h264"
-        and pixel_format
-        == "yuv420p"
-    )
-
-    print(
-        "Instagram iOS compatibility check: "
-        f"job={job_id}, "
-        f"file={file_path}, "
-        f"codec={codec_name}, "
-        f"pix_fmt={pixel_format}, "
-        f"compatible={is_compatible}"
-    )
-
-    # --------------------------------------------------------
-    # Already compatible:
-    #
-    # H.264 + yuv420p inside MP4.
-    # Do not waste CPU by transcoding it again.
-    # --------------------------------------------------------
-
-    if is_compatible:
-
-        return file_path
-
-    # --------------------------------------------------------
-    # Do not waste time transcoding an output that will be
-    # rejected by the global size check anyway.
-    # --------------------------------------------------------
-
-    try:
-
-        source_size = (
-            file_path.stat()
-            .st_size
-        )
-
-    except OSError as exc:
-
-        raise RuntimeError(
-            "Unable to inspect video "
-            "before iOS normalization"
-        ) from exc
-
+    name = value.removeprefix(UPLOAD_SOURCE_PREFIX)
     if (
-        source_size <= 0
-        or source_size
-        > MAX_DOWNLOAD_BYTES
+        not name
+        or name in {".", ".."}
+        or Path(name).name != name
+        or any(char not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-" for char in name)
     ):
+        raise RuntimeError("Invalid uploaded media reference")
 
-        return file_path
+    incoming_dir = (DOWNLOAD_DIR / "incoming").resolve()
+    candidate = (incoming_dir / name).resolve()
+    if candidate.parent != incoming_dir:
+        raise RuntimeError("Invalid uploaded media path")
+    if not candidate.is_file():
+        raise FileNotFoundError("Uploaded media file is no longer available")
+    return candidate
 
-    # --------------------------------------------------------
-    # Size-aware H.264 normalization
-    #
-    # Instagram may provide an efficient VP9 stream. Encoding
-    # that stream with an unconstrained CRF can make the final
-    # H.264 file several times larger than the size shown to
-    # the user.
-    #
-    # When duration is available, keep the final average
-    # bitrate close to the already-downloaded source file.
-    # --------------------------------------------------------
 
-    probe = (
-        _probe_media_file(
-            file_path
-        )
-    )
-
-    duration_seconds: (
-        float
-        | None
-    ) = None
-
-    has_audio_stream = False
-
-    if isinstance(
-        probe,
-        dict,
-    ):
-
-        format_info = (
-            probe.get(
-                "format"
-            )
-            or {}
-        )
-
-        if isinstance(
-            format_info,
-            dict,
-        ):
-
-            try:
-
-                candidate_duration = float(
-                    format_info.get(
-                        "duration"
-                    )
-                    or 0
-                )
-
-            except (
-                TypeError,
-                ValueError,
-            ):
-
-                candidate_duration = 0.0
-
-            if candidate_duration > 0:
-
-                duration_seconds = (
-                    candidate_duration
-                )
-
-        streams = (
-            probe.get(
-                "streams"
-            )
-            or []
-        )
-
-        if isinstance(
-            streams,
-            list,
-        ):
-
-            has_audio_stream = any(
-                isinstance(
-                    stream,
-                    dict,
-                )
-                and stream.get(
-                    "codec_type"
-                )
-                == "audio"
-                for stream in streams
-            )
-
-    video_encoding_options = [
-        "-crf",
-        "20",
-    ]
-
-    target_video_bitrate: (
-        int
-        | None
-    ) = None
-
-    if (
-        duration_seconds
-        is not None
-        and duration_seconds > 0
-    ):
-
-        source_total_bitrate = int(
-            (
-                source_size
-                * 8
-            )
-            / duration_seconds
-        )
-
-        target_audio_bitrate = (
-            128_000
-            if has_audio_stream
-            else 0
-        )
-
-        # Leave a small margin for MP4/container overhead.
-        target_video_bitrate = max(
-            250_000,
-            int(
-                source_total_bitrate
-                * 0.96
-            )
-            - target_audio_bitrate,
-        )
-
-        video_encoding_options = [
-            "-b:v",
-            str(
-                target_video_bitrate
-            ),
-
-            "-maxrate",
-            str(
-                int(
-                    target_video_bitrate
-                    * 1.5
-                )
-            ),
-
-            "-bufsize",
-            str(
-                target_video_bitrate
-                * 2
-            ),
-        ]
-
-    print(
-        "Instagram iOS size control: "
-        f"job={job_id}, "
-        f"source_size={source_size}, "
-        f"duration={duration_seconds}, "
-        f"target_video_bitrate="
-        f"{target_video_bitrate}"
-    )
-
-    # --------------------------------------------------------
-    # .part is intentional:
-    #
-    # _find_final_output_file() ignores .part files, so a
-    # failed/interrupted normalization cannot later be selected
-    # as a completed download.
-    # --------------------------------------------------------
-
-    temporary_path = (
-        DOWNLOAD_DIR
-        / (
-            f"{job_id}"
-            ".ios-normalized.mp4.part"
-        )
-    )
-
-    final_path = (
-        DOWNLOAD_DIR
-        / f"{job_id}.mp4"
-    )
-
+def _media_duration_seconds(probe: dict | None) -> float | None:
+    if not isinstance(probe, dict):
+        return None
+    format_info = probe.get("format")
+    if not isinstance(format_info, dict):
+        return None
     try:
+        duration = float(format_info.get("duration") or 0)
+    except (TypeError, ValueError):
+        return None
+    return duration if duration > 0 else None
 
-        temporary_path.unlink()
 
-    except FileNotFoundError:
+def _build_ffmpeg_conversion_command(
+    input_path: Path,
+    output_path: Path,
+    output_format: str,
+    probe: dict | None = None,
+) -> list[str]:
+    """Build a deterministic, allow-listed FFmpeg conversion command."""
 
-        pass
+    normalized = normalize_output_format(output_format)
+    if normalized is None:
+        raise ValueError("Unsupported output format")
 
-    except OSError as exc:
-
-        raise RuntimeError(
-            "Unable to prepare temporary "
-            "iOS video output"
-        ) from exc
-
-    print(
-        "Normalizing Instagram video "
-        "for iOS compatibility: "
-        f"job={job_id}, "
-        f"codec={codec_name}, "
-        f"pix_fmt={pixel_format}"
+    streams = probe.get("streams", []) if isinstance(probe, dict) else []
+    has_video = any(
+        isinstance(stream, dict) and stream.get("codec_type") == "video"
+        for stream in streams
     )
+    has_audio = any(
+        isinstance(stream, dict) and stream.get("codec_type") == "audio"
+        for stream in streams
+    )
+
+    kind = output_format_kind(normalized)
+    if kind == "audio" and not has_audio:
+        raise RuntimeError("The input file has no audio stream")
+    if kind == "video" and not has_video:
+        raise RuntimeError("The input file has no video stream")
 
     command = [
         "ffmpeg",
         "-y",
         "-v",
         "error",
-
+        "-nostdin",
         "-i",
-        str(
-            file_path
-        ),
-
-        "-map",
-        "0:v:0",
-
-        "-map",
-        "0:a:0?",
-
-        "-c:v",
-        "libx264",
-
-        "-preset",
-        "fast",
-
-        *video_encoding_options,
-
-        "-pix_fmt",
-        "yuv420p",
-
-        "-c:a",
-        "aac",
-
-        "-profile:a",
-        "aac_low",
-
-        "-b:a",
-        "128k",
-
-        "-movflags",
-        "+faststart",
-
-        "-f",
-        "mp4",
-
-        str(
-            temporary_path
-        ),
+        str(input_path),
     ]
 
+    if kind == "audio":
+        command.extend(["-map", "0:a:0", "-vn"])
+        audio_args = {
+            "mp3": ["-c:a", "libmp3lame", "-b:a", "192k", "-f", "mp3"],
+            "m4a": ["-c:a", "aac", "-b:a", "192k", "-f", "ipod"],
+            "wav": ["-c:a", "pcm_s16le", "-f", "wav"],
+            "aac": ["-c:a", "aac", "-b:a", "192k", "-f", "adts"],
+            "flac": ["-c:a", "flac", "-f", "flac"],
+            "ogg": ["-c:a", "libvorbis", "-q:a", "5", "-f", "ogg"],
+            "opus": ["-c:a", "libopus", "-b:a", "128k", "-f", "opus"],
+        }
+        command.extend(audio_args[normalized])
+    else:
+        command.extend(["-map", "0:v:0", "-map", "0:a:0?"])
+        video_args = {
+            "mp4": [
+                "-c:v", "libx264", "-preset", "veryfast", "-crf", "23",
+                "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "128k",
+                "-movflags", "+faststart", "-f", "mp4",
+            ],
+            "mkv": [
+                "-c:v", "libx264", "-preset", "veryfast", "-crf", "23",
+                "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "128k",
+                "-f", "matroska",
+            ],
+            "avi": [
+                "-c:v", "mpeg4", "-q:v", "5", "-c:a", "libmp3lame",
+                "-b:a", "128k", "-f", "avi",
+            ],
+            "mov": [
+                "-c:v", "libx264", "-preset", "veryfast", "-crf", "23",
+                "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "128k",
+                "-movflags", "+faststart", "-f", "mov",
+            ],
+            "webm": [
+                "-c:v", "libvpx-vp9", "-b:v", "0", "-crf", "32",
+                "-c:a", "libopus", "-b:a", "128k", "-f", "webm",
+            ],
+        }
+        command.extend(video_args[normalized])
+
+    command.extend([
+        "-progress", "pipe:1",
+        "-nostats",
+        str(output_path),
+    ])
+    return command
+
+
+def _terminate_process(process: subprocess.Popen) -> None:
+    if process.poll() is not None:
+        return
+    process.terminate()
     try:
+        process.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        process.kill()
+        process.wait(timeout=5)
 
-        result = subprocess.run(
-            command,
-            capture_output=True,
-            text=True,
-            check=False,
-        )
 
-    except FileNotFoundError as exc:
+def _read_ffmpeg_progress(process, tick: Callable[[float], None]) -> str:
+    """Drain both pipes until EOF. Noisy errors must never block the encoder."""
+    elapsed_media = 0.0
+    partial = b""
+    errors = bytearray()
+    next_tick = time.monotonic()
+    with io_selectors.DefaultSelector() as streams:
+        streams.register(process.stdout, io_selectors.EVENT_READ)
+        streams.register(process.stderr, io_selectors.EVENT_READ)
+        while streams.get_map() or process.poll() is None:
+            for key, _ in streams.select(timeout=max(0.0, next_tick - time.monotonic())):
+                chunk = os.read(key.fd, 65536)
+                if not chunk:
+                    streams.unregister(key.fileobj)
+                elif key.fileobj is process.stderr:
+                    errors.extend(chunk)
+                    del errors[:-2000]
+                else:
+                    *lines, partial = (partial + chunk).split(b"\n")
+                    partial = partial[-512:]
+                    for line in lines:
+                        field, _, value = line.partition(b"=")
+                        if field in (b"out_time_us", b"out_time_ms"):
+                            try:
+                                elapsed_media = max(elapsed_media, int(value) / 1_000_000)
+                            except ValueError:
+                                pass
+            if time.monotonic() >= next_tick:
+                tick(elapsed_media)
+                next_tick = time.monotonic() + 0.5
+    return errors.decode(errors="replace").strip()
 
-        raise RuntimeError(
-            "FFmpeg is not available "
-            "for iOS video normalization"
-        ) from exc
 
-    except OSError as exc:
+def _run_ffmpeg_conversion(
+    *,
+    job_id: int,
+    input_path: Path,
+    output_format: str,
+    max_download_bytes: int,
+) -> Path:
+    """Convert one local media file and report progress to the Job row."""
 
-        raise RuntimeError(
-            "Unable to start FFmpeg "
-            "for iOS video normalization"
-        ) from exc
+    normalized = normalize_output_format(output_format)
+    if normalized is None:
+        raise ValueError("Unsupported output format")
 
-    if (
-        result.returncode
-        != 0
-    ):
+    probe = _probe_media_file(input_path)
+    if probe is None:
+        raise RuntimeError("The input file is not a readable audio/video file")
 
-        try:
+    duration = _media_duration_seconds(probe)
+    temporary_path = DOWNLOAD_DIR / f"{job_id}.converted.{normalized}.part"
+    final_path = DOWNLOAD_DIR / f"{job_id}.{normalized}"
+    temporary_path.unlink(missing_ok=True)
+    if final_path != input_path:
+        final_path.unlink(missing_ok=True)
 
-            temporary_path.unlink()
-
-        except FileNotFoundError:
-
-            pass
-
-        error_text = (
-            result.stderr
-            .strip()
-        )
-
-        if len(
-            error_text
-        ) > 2000:
-
-            error_text = (
-                error_text[
-                    -2000:
-                ]
-            )
-
-        raise RuntimeError(
-            "iOS video normalization "
-            "failed"
-            + (
-                f": {error_text}"
-                if error_text
-                else ""
-            )
-        )
-
-    if (
-        not temporary_path.exists()
-    ):
-
-        raise RuntimeError(
-            "iOS video normalization "
-            "did not create an output file"
-        )
-
-    if (
-        temporary_path.stat()
-        .st_size
-        <= 0
-    ):
-
-        try:
-
-            temporary_path.unlink()
-
-        except FileNotFoundError:
-
-            pass
-
-        raise RuntimeError(
-            "iOS normalized video is empty"
-        )
-
-    normalized_codec, normalized_pix_fmt = (
-        _probe_video_codec_for_ios(
-            temporary_path
-        )
+    command = _build_ffmpeg_conversion_command(
+        input_path=input_path,
+        output_path=temporary_path,
+        output_format=normalized,
+        probe=probe,
     )
-
-    if (
-        normalized_codec
-        != "h264"
-        or normalized_pix_fmt
-        != "yuv420p"
-    ):
-
-        try:
-
-            temporary_path.unlink()
-
-        except FileNotFoundError:
-
-            pass
-
-        raise RuntimeError(
-            "iOS normalized video "
-            "failed codec validation: "
-            f"codec={normalized_codec}, "
-            f"pix_fmt={normalized_pix_fmt}"
-        )
-
-    # --------------------------------------------------------
-    # Atomic replacement.
-    #
-    # The original file stays untouched until FFmpeg has
-    # produced and validated the complete replacement.
-    # --------------------------------------------------------
-
-    original_path = (
-        file_path
-    )
-
-    try:
-
-        temporary_path.replace(
-            final_path
-        )
-
-    except OSError as exc:
-
-        try:
-
-            temporary_path.unlink()
-
-        except FileNotFoundError:
-
-            pass
-
-        raise RuntimeError(
-            "Unable to install "
-            "iOS-compatible video"
-        ) from exc
-
-    if (
-        original_path
-        != final_path
-        and original_path.exists()
-    ):
-
-        try:
-
-            original_path.unlink()
-
-        except OSError as exc:
-
-            print(
-                "Unable to delete original "
-                "incompatible video: "
-                f"{type(exc).__name__}: "
-                f"{exc}"
-            )
-
     print(
-        "Instagram video normalized "
-        "for iOS: "
-        f"job={job_id}, "
-        f"file={final_path}, "
-        "codec=h264, "
-        "pix_fmt=yuv420p"
+        "Starting FFmpeg conversion: "
+        f"job={job_id}, input={input_path.name}, output={normalized}"
     )
 
+    try:
+        process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, bufsize=0)
+    except FileNotFoundError as exc:
+        raise RuntimeError("FFmpeg is not available for media conversion") from exc
+    except OSError as exc:
+        raise RuntimeError("Unable to start FFmpeg media conversion") from exc
+
+    started = time.monotonic()
+    last_update = None
+
+    def tick(elapsed_media: float) -> None:
+        nonlocal last_update
+        _check_job_control(job_id)
+        output_size = temporary_path.stat().st_size if temporary_path.exists() else 0
+        if output_size > max_download_bytes:
+            raise RuntimeError("Converted output exceeds the plan file-size limit")
+        now = time.monotonic()
+        if last_update is None or now - last_update >= 1:
+            remaining = ((duration - elapsed_media) * (now - started) / elapsed_media
+                         if duration and 0 < elapsed_media < duration else None)
+            _update_download_stats(
+                job_id=job_id, progress=min(99, int(elapsed_media / duration * 100)) if duration else 0,
+                downloaded_bytes=output_size, total_bytes=None, clear_total=True,
+                speed=None, eta=max(1, int(remaining)) if remaining is not None else None,
+            )
+            last_update = now
+
+    with process:
+        try:
+            detail = _read_ffmpeg_progress(process, tick)
+            return_code = process.wait()
+        except BaseException:
+            _terminate_process(process)
+            temporary_path.unlink(missing_ok=True)
+            raise
+
+    if return_code != 0:
+        temporary_path.unlink(missing_ok=True)
+        raise RuntimeError("FFmpeg media conversion failed" + (f": {detail}" if detail else ""))
+    if not temporary_path.exists() or temporary_path.stat().st_size <= 0:
+        temporary_path.unlink(missing_ok=True)
+        raise RuntimeError("FFmpeg conversion did not create a valid output file")
+    if temporary_path.stat().st_size > max_download_bytes:
+        temporary_path.unlink(missing_ok=True)
+        raise RuntimeError("Converted output exceeds the plan file-size limit")
+
+    temporary_path.replace(final_path)
+    if input_path != final_path:
+        _cleanup_uploaded_source(input_path)
+    print(f"FFmpeg conversion completed: job={job_id}, elapsed_s={time.monotonic() - started:.2f}, file={final_path}")
     return final_path
+
+
+def _cleanup_uploaded_source(source_path: Path | None) -> None:
+    if source_path is None:
+        return
+    try:
+        source_path.unlink(missing_ok=True)
+    except OSError as exc:
+        print(f"Failed to remove uploaded source {source_path}: {exc}")
+
+
+def _cleanup_uploaded_source_reference(source_url: str | None) -> None:
+    """Best-effort cleanup for jobs cancelled before the worker starts."""
+
+    if not str(source_url or "").startswith(UPLOAD_SOURCE_PREFIX):
+        return
+    try:
+        _cleanup_uploaded_source(_resolve_uploaded_source(str(source_url)))
+    except (FileNotFoundError, RuntimeError):
+        # Missing or already-invalid staged files need no further action.
+        return
+
+
+# ============================================================
+# iOS / Instagram video compatibility
+# ============================================================
+
+def _ios_streams(probe: dict | None) -> tuple[dict, dict]:
+    streams = (probe or {}).get("streams") or []
+    return (
+        next((s for s in streams if s.get("codec_type") == "video"), {}),
+        next((s for s in streams if s.get("codec_type") == "audio"), {}),
+    )
+
+
+def _ios_video_compatible(stream: dict) -> bool:
+    return stream.get("codec_name") == "h264" and stream.get("pix_fmt") == "yuv420p"
+
+
+def _ios_audio_compatible(stream: dict) -> bool:
+    return stream.get("codec_name") == "aac" and stream.get("profile") == "LC"
+
+
+def _normalize_video_for_compatibility(
+    job_id: int, file_path: Path, max_download_bytes: int,
+) -> Path:
+    started = time.monotonic()
+    source_size = file_path.stat().st_size
+    if source_size <= 0 or source_size > max_download_bytes:
+        return file_path  # The caller rejects empty and over-limit files.
+
+    probe = _probe_media_file(file_path)
+    video, audio = _ios_streams(probe)
+    if not video:
+        raise RuntimeError("Unable to inspect video for compatibility conversion")
+    format_info = (probe or {}).get("format") or {}
+    copy_video = _ios_video_compatible(video)
+    copy_audio = _ios_audio_compatible(audio)
+    mp4 = file_path.suffix.lower() == ".mp4" and "mp4" in (
+        format_info.get("format_name") or ""
+    ).split(",")
+    compatible = mp4 and copy_video and (not audio or copy_audio)
+    print(
+        f"Video compatibility check: job={job_id}, codec={video.get('codec_name')}, "
+        f"pix_fmt={video.get('pix_fmt')}, compatible={compatible}"
+    )
+    if compatible:
+        print(f"Video compatibility ready: job={job_id}, mode=passthrough, elapsed_s={time.monotonic()-started:.2f}")
+        return file_path
+
+    mode = "remux" if copy_video else "transcode_video"
+    if copy_video and audio and not copy_audio:
+        mode = "transcode_audio"
+    audio_options = (
+        ["-an"] if not audio else ["-c:a", "copy"] if copy_audio else
+        ["-c:a", "aac", "-profile:a", "aac_low", "-b:a", "128k"]
+    )
+    video_options = ["-c:v", "copy"]
+    if not copy_video:
+        # Keep the bitrate budget close to the source even for efficient VP9.
+        # The preset changes encoding effort, not the frame size or frame rate.
+        try:
+            duration = float(format_info.get("duration") or 0)
+        except (ValueError, TypeError):
+            duration = 0
+        rate_options = ["-crf", "20"]
+        if duration > 0:
+            audio_rate = 128000 if audio else 0
+            if copy_audio:
+                try:
+                    measured_rate = int(audio.get("bit_rate") or 0)
+                    if measured_rate > 0:
+                        audio_rate = measured_rate
+                except (ValueError, TypeError):
+                    pass
+            target = max(250000, int(source_size * 8 / duration * 0.96) - audio_rate)
+            rate_options = ["-b:v", str(target), "-maxrate", str(target * 3 // 2), "-bufsize", str(target * 2)]
+            print(
+                f"Video compatibility size control: job={job_id}, source_size={source_size}, "
+                f"duration={duration}, target_video_bitrate={target}"
+            )
+        video_options = ["-c:v", "libx264", "-preset", "veryfast", *rate_options, "-pix_fmt", "yuv420p"]
+
+    temporary = DOWNLOAD_DIR / f"{job_id}.ios-normalized.mp4.part"
+    final = DOWNLOAD_DIR / f"{job_id}.mp4"
+    print(f"Video compatibility start: job={job_id}, mode={mode}")
+    try:
+        command = [
+            "ffmpeg", "-nostdin", "-y", "-v", "error", "-i", str(file_path),
+            "-map", "0:v:0", "-map", "0:a:0?", *video_options, *audio_options,
+            "-movflags", "+faststart", "-f", "mp4", str(temporary),
+        ]
+        result = subprocess.run(command, capture_output=True, text=True)
+        if result.returncode:
+            raise RuntimeError("iOS video normalization failed: " + result.stderr.strip()[-2000:])
+        new_size = temporary.stat().st_size
+        if not 0 < new_size <= max_download_bytes:
+            raise RuntimeError("iOS normalized video is empty or exceeds the plan file-size limit")
+        out_video, out_audio = _ios_streams(_probe_media_file(temporary))
+        if (not _ios_video_compatible(out_video) or bool(audio) != bool(out_audio)
+                or (out_audio and not _ios_audio_compatible(out_audio))):
+            raise RuntimeError("iOS normalized video failed stream validation")
+        temporary.replace(final)
+    finally:
+        temporary.unlink(missing_ok=True)
+    if file_path != final:
+        try:
+            file_path.unlink(missing_ok=True)
+        except OSError as exc:
+            print(f"Unable to delete original Instagram input: job={job_id}, error={type(exc).__name__}")
+    print(f"Video compatibility ready: job={job_id}, mode={mode}, elapsed_s={time.monotonic()-started:.2f}")
+    return final
+
+
+def _prepare_requested_output(
+    job_id: int, file_path: Path, media_type: str | None,
+    output_format: str | None, max_download_bytes: int,
+) -> Path:
+    # An MP4 video request is the opt-in H.264/AAC compatible version.
+    # Ordinary video downloads retain their original streams.
+    if media_type == "video" and output_format == "mp4":
+        return _normalize_video_for_compatibility(job_id, file_path, max_download_bytes)
+    if output_format:
+        return _run_ffmpeg_conversion(
+            job_id=job_id, input_path=file_path, output_format=output_format,
+            max_download_bytes=max_download_bytes,
+        )
+    print(f"Media output ready: job={job_id}, mode=original")
+    return file_path
 
 
 # ============================================================
@@ -2932,6 +2819,15 @@ def _get_non_youtube_format_selector(
         "formats",
         [],
     )
+
+    if _is_instagram_url(source_url):
+        choices = instagram_video_choices(formats)
+        if not choices:
+            raise RuntimeError(f"No usable Instagram video format found for quality {requested_quality}p")
+        quality = min(choices, key=lambda q: (abs(q - requested_quality), -q))
+        chosen, selector = choices[quality]
+        print(f"Selected Instagram format: quality={quality}p, codec={chosen.get('vcodec')}, id={chosen['format_id']}")
+        return selector
 
     usable_candidates: list[
         dict
@@ -3242,13 +3138,47 @@ def _get_non_youtube_format_selector(
 # Format selector
 # ============================================================
 
+def _instagram_format_selector(requested_quality: int) -> Callable:
+    """Select from yt-dlp's current extraction, without requesting the post twice."""
+    def select_format(context: dict):
+        formats = context.get("formats") or []
+        choices = instagram_video_choices(formats)
+        if not choices:
+            raise RuntimeError(f"No usable Instagram video format found for quality {requested_quality}p")
+        quality = min(choices, key=lambda q: (abs(q - requested_quality), -q))
+        video, _ = choices[quality]
+        audio_formats = [
+            f for f in formats if f.get("vcodec") == "none"
+            and f.get("acodec") not in (None, "none") and not f.get("has_drm")
+        ]
+        print(f"Selected Instagram format: quality={quality}p, codec={video.get('vcodec')}, id={video['format_id']}")
+        if video.get("acodec") not in (None, "none") or not audio_formats:
+            yield video
+            return
+        # yt-dlp supplies formats in ascending preference order.
+        audio = next((f for f in reversed(audio_formats) if f.get("ext") == "m4a"), audio_formats[-1])
+        yield {
+            "format_id": f"{video['format_id']}+{audio['format_id']}",
+            "ext": video["ext"], "requested_formats": [video, audio],
+            "protocol": f"{video['protocol']}+{audio['protocol']}",
+            "vcodec": video.get("vcodec"), "acodec": audio.get("acodec"),
+            "width": video.get("width"), "height": video.get("height"), "fps": video.get("fps"),
+        }
+    return select_format
+
+
 def _get_format_selector(
     source_url: str,
     format_id: str | None,
     quality: str | None,
     media_type: str | None,
     playlist_index: int | None = None,
-) -> str:
+) -> str | Callable:
+
+    if _is_instagram_url(source_url) and not format_id and media_type != "audio":
+        requested = _get_quality_height(quality)
+        if requested is not None:
+            return _instagram_format_selector(requested)
 
     # ========================================================
     # Audio
@@ -3749,6 +3679,7 @@ def cleanup_paused_download(
                 "has not expired yet"
             )
 
+    _cleanup_uploaded_source_reference(job.source_url)
     _cleanup_job_files(
         job_id
     )
@@ -3819,6 +3750,8 @@ def download_task(
             == DownloadJobStatus.CANCELLED
         ):
 
+            _cleanup_uploaded_source_reference(job.source_url)
+
             _cleanup_job_files(
                 job_id
             )
@@ -3832,6 +3765,8 @@ def download_task(
             job.status
             == DownloadJobStatus.EXPIRED
         ):
+
+            _cleanup_uploaded_source_reference(job.source_url)
 
             _cleanup_job_files(
                 job_id
@@ -3868,8 +3803,16 @@ def download_task(
             job.media_type
         )
 
+        output_format = (
+            job.output_format
+        )
+
         playlist_index = (
             job.playlist_index
+        )
+
+        max_download_bytes = _resolve_max_download_bytes(
+            job.plan_limits_snapshot
         )
 
     # ========================================================
@@ -3889,6 +3832,11 @@ def download_task(
         parents=True,
         exist_ok=True,
     )
+
+    # Upload-based conversion jobs keep the staged source outside the
+    # job-id glob until conversion succeeds.  Keep a reference so every
+    # terminal path can remove it without ever touching an arbitrary path.
+    uploaded_source: Path | None = None
 
     # --------------------------------------------------------
     # IMPORTANT:
@@ -4061,6 +4009,11 @@ def download_task(
             in download_part_stats.values()
         )
 
+        if downloaded_bytes > max_download_bytes:
+            raise RuntimeError(
+                "Downloaded data exceeds the plan file-size limit"
+            )
+
         part_totals = [
             part.get(
                 "total"
@@ -4090,6 +4043,11 @@ def download_task(
                 in part_totals
                 if value is not None
             )
+
+            if total_bytes > max_download_bytes:
+                raise RuntimeError(
+                    "Estimated output exceeds the plan file-size limit"
+                )
 
         else:
 
@@ -4340,26 +4298,68 @@ def download_task(
                     playlist_index=(
                         playlist_index
                     ),
+                    max_download_bytes=max_download_bytes,
                 )
             )
 
         # ====================================================
-        # Audio / Video
+        # Uploaded conversion
+        # ====================================================
+
+        elif media_type == "convert" and str(source_url).startswith(UPLOAD_SOURCE_PREFIX):
+            uploaded_source = _resolve_uploaded_source(source_url)
+            file_path = _run_ffmpeg_conversion(
+                job_id=job_id,
+                input_path=uploaded_source,
+                output_format=str(output_format or ""),
+                max_download_bytes=max_download_bytes,
+            )
+            _cleanup_uploaded_source(uploaded_source)
+            uploaded_source = None
+
+        # ====================================================
+        # Audio / Video / URL conversion
         # ====================================================
 
         else:
 
-            format_selector = (
-                _get_format_selector(
-                    source_url=source_url,
-                    format_id=format_id,
-                    quality=quality,
-                    media_type=media_type,
-                    playlist_index=(
-                        playlist_index
-                    ),
-                )
+            target_kind = output_format_kind(output_format) if output_format else None
+            download_media_type = (
+                target_kind
+                if media_type == "convert" and target_kind in {"audio", "video"}
+                else media_type
             )
+            if media_type == "convert" and target_kind is None:
+                raise RuntimeError("A valid conversion output format is required")
+
+            direct_download_url = source_url
+            threads_direct_video = (
+                download_media_type == "video"
+                and is_threads_url(source_url)
+            )
+
+            if threads_direct_video:
+
+                threads_video = extract_threads_video(
+                    source_url=source_url,
+                    playlist_index=playlist_index,
+                )
+                direct_download_url = str(threads_video["url"])
+                format_selector = "best"
+
+            else:
+
+                format_selector = (
+                    _get_format_selector(
+                        source_url=source_url,
+                        format_id=format_id,
+                        quality=quality,
+                        media_type=download_media_type,
+                        playlist_index=(
+                            playlist_index
+                        ),
+                    )
+                )
 
             common_options = {
                 "outtmpl":
@@ -4388,6 +4388,15 @@ def download_task(
                     False,
             }
 
+            if threads_direct_video:
+
+                common_options[
+                    "http_headers"
+                ] = {
+                    "User-Agent": BROWSER_USER_AGENT,
+                    "Referer": social_referer("threads"),
+                }
+
             # ================================================
             # Playlist item
             # ================================================
@@ -4395,6 +4404,7 @@ def download_task(
             if (
                 playlist_index
                 is not None
+                and not threads_direct_video
             ):
 
                 common_options[
@@ -4411,10 +4421,7 @@ def download_task(
             # Audio
             # ================================================
 
-            if (
-                media_type
-                == "audio"
-            ):
+            if download_media_type == "audio":
 
                 ydl_options = (
                     _get_yt_dlp_options(
@@ -4444,64 +4451,37 @@ def download_task(
                 f"format_id={format_id}, "
                 f"media_type={media_type}, "
                 f"playlist_index={playlist_index}, "
+                f"threads_direct={threads_direct_video}, "
                 f"youtube="
                 f"{_is_youtube_url(source_url)}, "
                 f"selector="
-                f"{format_selector}"
+                f"{format_selector if isinstance(format_selector, str) else 'instagram-auto'}"
             )
 
+            download_started = time.monotonic()
             with yt_dlp.YoutubeDL(
                 ydl_options
             ) as ydl:
 
                 ydl.download(
                     [
-                        source_url,
+                        direct_download_url,
                     ]
                 )
+            print(f"Media download complete: job={job_id}, elapsed_s={time.monotonic()-download_started:.2f}")
 
             _check_job_control(
                 job_id
             )
 
-            file_path = (
-                _find_final_output_file(
-                    job_id=job_id,
-                    media_type=media_type,
-                )
+            file_path = _find_final_output_file(
+                job_id=job_id,
+                media_type=download_media_type,
             )
 
-        # ====================================================
-        # Instagram / iOS compatibility
-        #
-        # Some Instagram DASH outputs contain VP9 video inside
-        # an MP4 container. Windows can decode those files, but
-        # Telegram/iOS may play only the audio or freeze the
-        # first video frame.
-        #
-        # Only incompatible Instagram video outputs are
-        # normalized. Existing H.264/yuv420p MP4 files are
-        # passed through unchanged.
-        # ====================================================
-
-        if (
-            media_type
-            == "video"
-            and "instagram.com"
-            in str(
-                source_url
-            ).lower()
-        ):
-
-            _check_job_control(
-                job_id
-            )
-
-            file_path = (
-                _normalize_instagram_video_for_ios(
-                    job_id=job_id,
-                    file_path=file_path,
-                )
+            file_path = _prepare_requested_output(
+                job_id=job_id, file_path=file_path, media_type=media_type,
+                output_format=output_format, max_download_bytes=max_download_bytes,
             )
 
             _check_job_control(
@@ -4526,12 +4506,12 @@ def download_task(
 
         if (
             file_size
-            > MAX_DOWNLOAD_BYTES
+            > max_download_bytes
         ):
 
             raise RuntimeError(
                 "Downloaded file exceeds "
-                "the 1900 MB limit"
+                "the plan file-size limit"
             )
 
         print(
@@ -4591,7 +4571,6 @@ def download_task(
     # ========================================================
 
     except DownloadPausedError:
-
         print(
             "Download job paused: "
             f"{job_id}"
@@ -4607,6 +4586,8 @@ def download_task(
     # ========================================================
 
     except DownloadCancelledError:
+
+        _cleanup_uploaded_source(uploaded_source)
 
         status = (
             _get_job_status(
@@ -4672,6 +4653,8 @@ def download_task(
             DownloadJobStatus.EXPIRED,
         ):
 
+            _cleanup_uploaded_source(uploaded_source)
+
             _cleanup_job_files(
                 job_id
             )
@@ -4695,7 +4678,6 @@ def download_task(
             self.request.retries
             < self.max_retries
         ):
-
             countdown = min(
                 60,
                 2 ** (
@@ -4716,6 +4698,8 @@ def download_task(
         _cleanup_job_files(
             job_id
         )
+
+        _cleanup_uploaded_source(uploaded_source)
 
         _set_failed(
             job_id=job_id,

@@ -1,0 +1,571 @@
+import re
+from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
+
+from sqlalchemy import and_, func, or_, select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.core.config import settings
+from app.models.admin import AdminAccount
+from app.models.download_job import DownloadJob, DownloadJobStatus
+from app.models.plan import Plan
+from app.models.subscription import Subscription, SubscriptionStatus
+from app.models.user import User, UserStatus
+from app.services.managed_settings import (
+    PublicOperationDisabled,
+    ensure_public_operation,
+    get_managed_setting,
+)
+
+
+TECHNICAL_MAX_FILE_SIZE_MB = 1900
+ADMIN_MAX_CONCURRENT_DOWNLOADS = 3
+
+
+def quota_day_start_utc(
+    now: datetime | None = None,
+    timezone_name: str | None = None,
+) -> datetime:
+    """Return the current quota day's local midnight in UTC."""
+    current_utc = now or datetime.now(timezone.utc)
+    if current_utc.tzinfo is None:
+        current_utc = current_utc.replace(tzinfo=timezone.utc)
+
+    quota_zone = ZoneInfo(timezone_name or settings.quota_timezone)
+    return (
+        current_utc.astimezone(quota_zone)
+        .replace(hour=0, minute=0, second=0, microsecond=0)
+        .astimezone(timezone.utc)
+    )
+
+
+def quota_week_start_utc(
+    now: datetime | None = None,
+    timezone_name: str | None = None,
+) -> datetime:
+    """Return Monday 00:00 of the current local quota week in UTC."""
+    current_utc = now or datetime.now(timezone.utc)
+    if current_utc.tzinfo is None:
+        current_utc = current_utc.replace(tzinfo=timezone.utc)
+    quota_zone = ZoneInfo(timezone_name or settings.quota_timezone)
+    local = current_utc.astimezone(quota_zone)
+    return (
+        (local - timedelta(days=local.weekday()))
+        .replace(hour=0, minute=0, second=0, microsecond=0)
+        .astimezone(timezone.utc)
+    )
+
+
+def quota_window_start_utc(
+    period: str | None,
+    now: datetime | None = None,
+    timezone_name: str | None = None,
+) -> datetime:
+    """Resolve the configured quota boundary while keeping daily as fallback."""
+    if str(period or "").strip().lower() == "weekly":
+        return quota_week_start_utc(now=now, timezone_name=timezone_name)
+    return quota_day_start_utc(now=now, timezone_name=timezone_name)
+
+
+class DownloadAccessError(RuntimeError):
+    code = "download_access_error"
+    status_code = 400
+
+    def __init__(self, message: str, **context: object):
+        super().__init__(message)
+        self.context = context
+
+    def detail(self) -> dict[str, object]:
+        return {
+            "code": self.code,
+            "message": str(self),
+            **self.context,
+        }
+
+
+class DownloadUserNotFound(DownloadAccessError):
+    code = "download_user_not_found"
+    status_code = 404
+
+
+class DownloadUserBlocked(DownloadAccessError):
+    code = "download_user_blocked"
+    status_code = 403
+
+
+class DownloadPlanUnavailable(DownloadAccessError):
+    code = "download_plan_unavailable"
+    status_code = 503
+
+
+class DailyDownloadLimitReached(DownloadAccessError):
+    code = "daily_download_limit_reached"
+    status_code = 429
+
+
+class WeeklyDownloadLimitReached(DownloadAccessError):
+    code = "weekly_download_limit_reached"
+    status_code = 429
+
+
+class WeeklyConversionLimitReached(DownloadAccessError):
+    """The one weekly conversion included with the Free plan was used."""
+
+    code = "weekly_conversion_limit_reached"
+    status_code = 429
+
+
+class ConcurrentDownloadLimitReached(DownloadAccessError):
+    code = "concurrent_download_limit_reached"
+    status_code = 429
+
+
+class DownloadQualityLimitExceeded(DownloadAccessError):
+    code = "download_quality_limit_exceeded"
+    status_code = 422
+
+
+class DownloadFileSizeLimitExceeded(DownloadAccessError):
+    code = "download_file_size_limit_exceeded"
+    status_code = 413
+
+
+class DownloadTemporarilyUnavailable(DownloadAccessError):
+    code = "download_temporarily_unavailable"
+    status_code = 503
+
+
+@dataclass(frozen=True, slots=True)
+class DownloadEntitlement:
+    user_id: int
+    plan_id: int | None
+    plan_name: str
+    plan_slug: str
+    daily_download_limit: int | None
+    max_file_size_mb: int
+    max_quality: int | None
+    max_concurrent_downloads: int
+    priority_processing: bool
+    forced_join_required: bool
+    download_limit_period: str = "daily"
+    is_admin_bypass: bool = False
+
+    def limits_snapshot(self) -> dict[str, object]:
+        return {
+            "plan_slug": self.plan_slug,
+            "daily_download_limit": self.daily_download_limit,
+            "download_limit_period": self.download_limit_period,
+            "max_file_size_mb": self.max_file_size_mb,
+            "max_quality": self.max_quality,
+            "max_concurrent_downloads": self.max_concurrent_downloads,
+            "priority_processing": self.priority_processing,
+            "forced_join_required": self.forced_join_required,
+            "is_admin_bypass": self.is_admin_bypass,
+        }
+
+
+class DownloadAccessService:
+    def __init__(self, session: AsyncSession):
+        self.session = session
+
+    @staticmethod
+    def parse_quality_height(value: str | None) -> int | None:
+        normalized = str(value or "").strip().lower()
+        if not normalized:
+            return None
+        if normalized == "4k":
+            return 2160
+        if normalized == "2k":
+            return 1440
+
+        match = re.search(r"(\d{3,4})", normalized)
+        return int(match.group(1)) if match else None
+
+    async def get_entitlement(self, telegram_id: int) -> DownloadEntitlement:
+        user_result = await self.session.execute(
+            select(User).where(User.telegram_id == telegram_id)
+        )
+        user = user_result.scalar_one_or_none()
+        if user is None:
+            raise DownloadUserNotFound(
+                "Telegram user must be registered before downloading"
+            )
+        if user.status != UserStatus.ACTIVE:
+            raise DownloadUserBlocked("User account is not active")
+        return await self._resolve_entitlement(user)
+
+    async def authorize_job(
+        self,
+        *,
+        telegram_id: int,
+        quality: str | None,
+        estimated_size_bytes: int | None,
+        media_type: str = "video",
+    ) -> DownloadEntitlement:
+        try:
+            await ensure_public_operation(self.session, "downloads")
+        except PublicOperationDisabled as exc:
+            raise DownloadTemporarilyUnavailable(
+                str(exc),
+                reason_code=exc.code,
+            ) from exc
+
+        user_result = await self.session.execute(
+            select(User)
+            .where(User.telegram_id == telegram_id)
+            .with_for_update()
+        )
+        user = user_result.scalar_one_or_none()
+
+        if user is None:
+            raise DownloadUserNotFound(
+                "Telegram user must be registered before downloading"
+            )
+        if user.status != UserStatus.ACTIVE:
+            raise DownloadUserBlocked("User account is not active")
+
+        entitlement = await self._resolve_entitlement(user)
+        self._validate_quality(entitlement, quality)
+        self._validate_estimated_size(entitlement, estimated_size_bytes)
+
+        if not entitlement.is_admin_bypass:
+            normalized_media_type = str(media_type or "video").strip().lower()
+            if (
+                normalized_media_type == "convert"
+                and entitlement.plan_slug == "free"
+            ):
+                # The Free plan includes one *separate* conversion per week.
+                # It must not consume the normal weekly download allowance.
+                await self._validate_free_conversion_limit(entitlement)
+            else:
+                # Paid conversions use the same quota as every other output.
+                await self._validate_download_limit(entitlement)
+            await self._validate_concurrency(entitlement)
+
+        return entitlement
+
+    async def mark_delivered(self, job_id: int) -> DownloadJob:
+        result = await self.session.execute(
+            select(DownloadJob)
+            .where(DownloadJob.id == job_id)
+            .with_for_update()
+        )
+        job = result.scalar_one_or_none()
+
+        if job is None:
+            raise LookupError("Download job not found")
+        if job.status != DownloadJobStatus.COMPLETED:
+            raise ValueError("Only a completed download can be delivered")
+
+        if job.delivered_at is None:
+            job.delivered_at = datetime.now(timezone.utc)
+            await self.session.commit()
+            await self.session.refresh(job)
+
+        return job
+
+    async def authorize_resume(self, job: DownloadJob) -> bool:
+        snapshot = (
+            job.plan_limits_snapshot
+            if isinstance(job.plan_limits_snapshot, dict)
+            else {}
+        )
+        priority_processing = bool(snapshot.get("priority_processing"))
+
+        if job.user_id is None or bool(snapshot.get("is_admin_bypass")):
+            return priority_processing
+
+        await self.session.execute(
+            select(User.id)
+            .where(User.id == job.user_id)
+            .with_for_update()
+        )
+        try:
+            concurrency_limit = int(
+                snapshot.get("max_concurrent_downloads") or 1
+            )
+        except (TypeError, ValueError):
+            concurrency_limit = 1
+
+        result = await self.session.execute(
+            select(func.count(DownloadJob.id)).where(
+                DownloadJob.user_id == job.user_id,
+                DownloadJob.id != job.id,
+                DownloadJob.status.in_(
+                    (
+                        DownloadJobStatus.PENDING,
+                        DownloadJobStatus.PROCESSING,
+                    )
+                ),
+            )
+        )
+        active_downloads = int(result.scalar_one())
+
+        if active_downloads >= concurrency_limit:
+            raise ConcurrentDownloadLimitReached(
+                "Concurrent download limit has been reached",
+                plan_name=job.plan_name_snapshot or "Current plan",
+                limit=concurrency_limit,
+                active=active_downloads,
+            )
+
+        return priority_processing
+
+    async def _resolve_entitlement(self, user: User) -> DownloadEntitlement:
+        admin_result = await self.session.execute(
+            select(AdminAccount.id).where(
+                AdminAccount.user_id == user.id,
+                AdminAccount.is_active.is_(True),
+            )
+        )
+        if admin_result.scalar_one_or_none() is not None:
+            return DownloadEntitlement(
+                user_id=user.id,
+                plan_id=None,
+                plan_name="Administrator",
+                plan_slug="administrator",
+                daily_download_limit=None,
+                max_file_size_mb=TECHNICAL_MAX_FILE_SIZE_MB,
+                max_quality=None,
+                max_concurrent_downloads=ADMIN_MAX_CONCURRENT_DOWNLOADS,
+                priority_processing=True,
+                forced_join_required=False,
+                download_limit_period="daily",
+                is_admin_bypass=True,
+            )
+
+        now = datetime.now(timezone.utc)
+        plan_result = await self.session.execute(
+            select(Plan, Subscription)
+            .join(Subscription, Subscription.plan_id == Plan.id)
+            .where(
+                Subscription.user_id == user.id,
+                Subscription.status.in_(
+                    (SubscriptionStatus.ACTIVE, SubscriptionStatus.SCHEDULED)
+                ),
+                Subscription.started_at <= now,
+                Subscription.expires_at > now,
+            )
+            .order_by(
+                Subscription.expires_at.desc(),
+                Subscription.id.desc(),
+            )
+            .limit(1)
+        )
+        plan_row = plan_result.first()
+        subscription: Subscription | None = None
+        plan: Plan | None = None
+        if plan_row is not None:
+            plan, subscription = plan_row
+
+        if plan is None:
+            free_result = await self.session.execute(
+                select(Plan).where(
+                    Plan.slug == "free",
+                    Plan.is_active.is_(True),
+                    Plan.deleted_at.is_(None),
+                )
+            )
+            plan = free_result.scalar_one_or_none()
+
+        if plan is None or plan.max_file_size_mb is None:
+            raise DownloadPlanUnavailable(
+                "No usable download plan is configured"
+            )
+
+        return DownloadEntitlement(
+            user_id=user.id,
+            plan_id=plan.id,
+            plan_name=plan.name,
+            plan_slug=str(plan.slug or "").strip().lower(),
+            daily_download_limit=(
+                subscription.daily_download_limit
+                if subscription is not None
+                else plan.daily_download_limit
+            ),
+            download_limit_period=(
+                subscription.download_limit_period
+                if subscription is not None
+                else (plan.download_limit_period or "daily")
+            ),
+            max_file_size_mb=min(
+                plan.max_file_size_mb,
+                TECHNICAL_MAX_FILE_SIZE_MB,
+            ),
+            max_quality=plan.max_quality,
+            max_concurrent_downloads=plan.max_concurrent_downloads,
+            priority_processing=plan.priority_processing,
+            forced_join_required=plan.forced_join_required,
+        )
+
+    @staticmethod
+    def _validate_quality(
+        entitlement: DownloadEntitlement,
+        quality: str | None,
+    ) -> None:
+        requested_quality = DownloadAccessService.parse_quality_height(quality)
+        maximum_quality = entitlement.max_quality
+
+        if (
+            requested_quality is not None
+            and maximum_quality is not None
+            and requested_quality > maximum_quality
+        ):
+            raise DownloadQualityLimitExceeded(
+                "Requested quality exceeds the plan limit",
+                plan_name=entitlement.plan_name,
+                requested_quality=requested_quality,
+                max_quality=maximum_quality,
+            )
+
+    @staticmethod
+    def _validate_estimated_size(
+        entitlement: DownloadEntitlement,
+        estimated_size_bytes: int | None,
+    ) -> None:
+        if estimated_size_bytes is None:
+            return
+
+        maximum_bytes = entitlement.max_file_size_mb * 1024 * 1024
+        if estimated_size_bytes > maximum_bytes:
+            raise DownloadFileSizeLimitExceeded(
+                "Estimated file size exceeds the plan limit",
+                plan_name=entitlement.plan_name,
+                estimated_size_bytes=estimated_size_bytes,
+                max_file_size_mb=entitlement.max_file_size_mb,
+            )
+
+    async def _validate_download_limit(
+        self,
+        entitlement: DownloadEntitlement,
+    ) -> None:
+        limit = entitlement.daily_download_limit
+        if limit is None:
+            return
+
+        timezone_name = await get_managed_setting(
+            self.session,
+            "quota.timezone",
+        )
+        period = entitlement.download_limit_period if entitlement.download_limit_period in {"daily", "weekly"} else "daily"
+        window_start = quota_window_start_utc(period, timezone_name=timezone_name)
+        reset_at = await self.session.scalar(select(User.quota_reset_at).where(User.id == entitlement.user_id))
+        if reset_at:
+            window_start = max(window_start, reset_at)
+        reserved_statuses = (
+            DownloadJobStatus.PENDING,
+            DownloadJobStatus.PROCESSING,
+            DownloadJobStatus.PAUSED,
+        )
+        usage_filters = [DownloadJob.user_id == entitlement.user_id]
+        if entitlement.plan_slug == "free":
+            # The Free plan's conversion allowance is counted independently.
+            # Keep legacy jobs with a null media type in the normal quota.
+            usage_filters.append(
+                or_(
+                    DownloadJob.media_type.is_(None),
+                    DownloadJob.media_type != "convert",
+                )
+            )
+        result = await self.session.execute(
+            select(func.count(DownloadJob.id)).where(
+                *usage_filters,
+                or_(
+                    DownloadJob.delivered_at >= window_start,
+                    DownloadJob.status.in_(reserved_statuses),
+                    and_(
+                        DownloadJob.status == DownloadJobStatus.COMPLETED,
+                        DownloadJob.delivered_at.is_(None),
+                        DownloadJob.created_at >= window_start,
+                    ),
+                ),
+            )
+        )
+        used_or_reserved = int(result.scalar_one())
+
+        if used_or_reserved >= limit:
+            error_type = WeeklyDownloadLimitReached if period == "weekly" else DailyDownloadLimitReached
+            period_label = "Weekly" if period == "weekly" else "Daily"
+            raise error_type(
+                f"{period_label} successful output limit has been reached",
+                plan_name=entitlement.plan_name,
+                limit=limit,
+                used=used_or_reserved,
+                period=period,
+            )
+
+    async def _validate_free_conversion_limit(
+        self,
+        entitlement: DownloadEntitlement,
+    ) -> None:
+        """Reserve the Free plan's single conversion in the local quota week."""
+        timezone_name = await get_managed_setting(
+            self.session,
+            "quota.timezone",
+        )
+        window_start = quota_window_start_utc(
+            "weekly",
+            timezone_name=timezone_name,
+        )
+        reset_at = await self.session.scalar(select(User.conversion_quota_reset_at).where(User.id == entitlement.user_id))
+        if reset_at:
+            window_start = max(window_start, reset_at)
+        reserved_statuses = (
+            DownloadJobStatus.PENDING,
+            DownloadJobStatus.PROCESSING,
+            DownloadJobStatus.PAUSED,
+        )
+        result = await self.session.execute(
+            select(func.count(DownloadJob.id)).where(
+                DownloadJob.user_id == entitlement.user_id,
+                DownloadJob.media_type == "convert",
+                or_(
+                    DownloadJob.delivered_at >= window_start,
+                    DownloadJob.status.in_(reserved_statuses),
+                    and_(
+                        DownloadJob.status == DownloadJobStatus.COMPLETED,
+                        DownloadJob.delivered_at.is_(None),
+                        DownloadJob.created_at >= window_start,
+                    ),
+                ),
+            )
+        )
+        used_or_reserved = int(result.scalar_one())
+        if used_or_reserved >= 1:
+            raise WeeklyConversionLimitReached(
+                "The Free plan includes one conversion per week",
+                plan_name=entitlement.plan_name,
+                limit=1,
+                used=used_or_reserved,
+                period="weekly",
+            )
+
+    async def _validate_daily_limit(self, entitlement: DownloadEntitlement) -> None:
+        """Backward-compatible wrapper for integrations using the old method."""
+        await self._validate_download_limit(entitlement)
+
+    async def _validate_concurrency(
+        self,
+        entitlement: DownloadEntitlement,
+    ) -> None:
+        result = await self.session.execute(
+            select(func.count(DownloadJob.id)).where(
+                DownloadJob.user_id == entitlement.user_id,
+                DownloadJob.status.in_(
+                    (
+                        DownloadJobStatus.PENDING,
+                        DownloadJobStatus.PROCESSING,
+                    )
+                ),
+            )
+        )
+        active_downloads = int(result.scalar_one())
+
+        if active_downloads >= entitlement.max_concurrent_downloads:
+            raise ConcurrentDownloadLimitReached(
+                "Concurrent download limit has been reached",
+                plan_name=entitlement.plan_name,
+                limit=entitlement.max_concurrent_downloads,
+                active=active_downloads,
+            )

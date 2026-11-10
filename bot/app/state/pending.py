@@ -22,7 +22,14 @@ def add_pending_selection(
     ]
     | None = None,
     playlist_index: int | None = None,
+    media_info: dict | None = None,
+    telegram_id: int | None = None,
+    source_job_id: int | None = None,
 ) -> str:
+
+    if telegram_id is None:
+        from app.middleware.interface import ui_actor
+        telegram_id = ui_actor.get()
 
     token = (
         uuid.uuid4()
@@ -50,6 +57,8 @@ def add_pending_selection(
     PENDING_SELECTIONS[
         token
     ] = {
+        "telegram_id": telegram_id,
+        "source_job_id": source_job_id,
         "source_url":
             source_url,
 
@@ -58,6 +67,21 @@ def add_pending_selection(
 
         "playlist_index":
             playlist_index,
+
+        # Keep the non-sensitive extraction result that powers the quality
+        # menu.  The Bot uses it for FPS/duration in the delivered-file
+        # caption and for the cover/description actions.  The source URL is
+        # already present above; no user credentials are kept here.
+        "media_info": (
+            dict(
+                media_info
+            )
+            if isinstance(
+                media_info,
+                dict,
+            )
+            else {}
+        ),
     }
 
     if (
@@ -79,6 +103,20 @@ def add_pending_selection(
         )
 
     return token
+
+
+def move_video_selection(token: str, selection: dict, *, height: int | None,
+                         chat_id: int, message_id: int) -> str | None:
+    """Replace one picker atomically so stale or concurrent taps cannot start jobs."""
+    if PENDING_SELECTIONS.get(token) is not selection:
+        return None
+    new_token = uuid.uuid4().hex[:16]
+    del PENDING_SELECTIONS[token]
+    PENDING_SELECTIONS[new_token] = {
+        **selection, "device_height": height,
+        "device_message": (chat_id, message_id) if height is not None else None,
+    }
+    return new_token
 
 
 # ============================================================

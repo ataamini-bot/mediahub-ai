@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 from typing import Any
 import ipaddress
 import os
+import re
 import socket
 from urllib.error import (
     HTTPError,
@@ -25,6 +26,17 @@ from app.models.download_job import (
 from app.repositories.download_job import (
     DownloadJobRepository,
 )
+from app.services.download_access import (
+    DownloadAccessService,
+)
+from app.services.social_media import (
+    get_social_media_info,
+)
+from app.services.media_formats import (
+    normalize_output_format,
+    output_format_kind,
+)
+from app.services.instagram_formats import instagram_video_choices
 from app.workers.tasks.download import (
     cleanup_paused_download,
     download_task,
@@ -41,6 +53,10 @@ BGUTIL_POT_BASE_URL = os.getenv(
 )
 
 FILESIZE_PROBE_TIMEOUT = 10
+
+
+class DownloadFormatError(ValueError):
+    """The requested final media format is incompatible or unsupported."""
 
 DEFAULT_USER_AGENT = (
     "Mozilla/5.0 "
@@ -380,6 +396,148 @@ def _positive_int(
     return result
 
 
+def _positive_float(
+    value: Any,
+) -> float | None:
+
+    if value is None:
+
+        return None
+
+    try:
+
+        result = float(
+            value
+        )
+
+    except (
+        TypeError,
+        ValueError,
+    ):
+
+        return None
+
+    if result <= 0:
+
+        return None
+
+    return result
+
+
+# ============================================================
+# Thumbnail helpers
+# ============================================================
+
+def _best_thumbnail_url(
+    item: dict[str, Any],
+) -> str | None:
+    """Return the largest advertised thumbnail for one extractor item.
+
+    yt-dlp usually exposes ``thumbnail`` as a convenient default, but the
+    full ``thumbnails`` list often contains a larger original.  The Bot uses
+    this URL for the explicit cover-download action, so prefer dimensions and
+    use the later candidate as a stable tie-breaker for extractors that omit
+    dimensions.
+    """
+
+    candidates: list[
+        dict[str, Any]
+    ] = []
+
+    fallback = item.get(
+        "thumbnail"
+    )
+
+    if isinstance(
+        fallback,
+        str,
+    ) and fallback.strip():
+
+        candidates.append(
+            {
+                "url": fallback.strip(),
+            }
+        )
+
+    for thumbnail in (
+        item.get(
+            "thumbnails"
+        )
+        or []
+    ):
+
+        if not isinstance(
+            thumbnail,
+            dict,
+        ):
+
+            continue
+
+        url = thumbnail.get(
+            "url"
+        )
+
+        if not isinstance(
+            url,
+            str,
+        ) or not url.strip():
+
+            continue
+
+        candidates.append(
+            {
+                **thumbnail,
+                "url": url.strip(),
+            }
+        )
+
+    if not candidates:
+
+        return None
+
+    def score(
+        candidate: dict[str, Any],
+    ) -> tuple[
+        int,
+        int,
+        int,
+    ]:
+
+        width = _positive_int(
+            candidate.get(
+                "width"
+            )
+        ) or 0
+
+        height = _positive_int(
+            candidate.get(
+                "height"
+            )
+        ) or 0
+
+        return (
+            width * height,
+            width,
+            height,
+        )
+
+    return str(
+        max(
+            enumerate(
+                candidates
+            ),
+            key=lambda pair: (
+                *score(
+                    pair[1]
+                ),
+                pair[0],
+            ),
+        )[1][
+            "url"
+        ]
+    )
+
+
 # ============================================================
 # Content-Range
 # ============================================================
@@ -614,9 +772,149 @@ def _probe_remote_filesize(
 # Format filesize
 # ============================================================
 
+def _is_manifest_format(
+    item: dict[str, Any],
+) -> bool:
+
+    protocol = str(
+        item.get("protocol")
+        or ""
+    ).strip().lower()
+
+    stream_url = str(
+        item.get("url")
+        or ""
+    ).strip().lower()
+
+    try:
+        path = urlparse(stream_url).path.lower()
+    except Exception:
+        path = ""
+
+    return (
+        any(
+            marker in protocol
+            for marker in (
+                "m3u8",
+                "dash",
+                "ism",
+            )
+        )
+        or path.endswith(".m3u8")
+        or path.endswith(".mpd")
+        or path.endswith(".ism")
+    )
+
+
+def _estimate_manifest_filesize(
+    item: dict[str, Any],
+    duration: Any,
+) -> int | None:
+
+    try:
+        duration_value = float(duration)
+    except (TypeError, ValueError):
+        return None
+
+    if duration_value <= 0:
+        return None
+
+    bitrate = item.get("tbr")
+
+    if bitrate is None:
+        try:
+            bitrate = float(item.get("vbr") or 0) + float(
+                item.get("abr") or 0
+            )
+        except (TypeError, ValueError):
+            bitrate = None
+
+    try:
+        bitrate_value = float(bitrate)
+    except (TypeError, ValueError):
+        return None
+
+    if bitrate_value <= 0:
+        return None
+
+    # yt-dlp bitrates are Kbit/s. Include a small allowance for segment and
+    # container overhead; the bot labels all pre-download sizes approximate.
+    return int(
+        bitrate_value
+        * 1000
+        / 8
+        * duration_value
+        * 1.03
+    )
+
+
+def _should_probe_direct_filesize(
+    stream_url: str,
+) -> bool:
+
+    try:
+        hostname = (
+            urlparse(stream_url).hostname
+            or ""
+        ).lower()
+    except Exception:
+        return False
+
+    exact_size_domains = (
+        "twimg.com",
+        "pinimg.com",
+        "dmcdn.net",
+        "vimeocdn.com",
+        "fbcdn.net",
+        "cdninstagram.com",
+    )
+
+    return any(
+        hostname == domain
+        or hostname.endswith("." + domain)
+        for domain in exact_size_domains
+    ) or bool(
+        re.fullmatch(
+            r"(?:[a-z0-9-]+\.)*[a-z0-9-]*tiktokcdn"
+            r"(?:-[a-z0-9-]+)?\.com",
+            hostname,
+        )
+    )
+
+
 def _get_format_filesize(
     item: dict[str, Any],
+    duration: Any = None,
 ) -> int | None:
+
+    # Never report the byte size of an HLS/DASH manifest as the size of the
+    # actual video. Prefer extractor estimates, then calculate from bitrate.
+    if _is_manifest_format(item):
+
+        filesize_approx = _positive_int(
+            item.get("filesize_approx")
+        )
+
+        if filesize_approx is not None:
+            return filesize_approx
+
+        bitrate_estimate = _estimate_manifest_filesize(
+            item,
+            duration,
+        )
+
+        if bitrate_estimate is not None:
+            return bitrate_estimate
+
+        extractor_size = _positive_int(
+            item.get("filesize")
+        )
+
+        # A tiny value here is the playlist document itself, not the media.
+        if extractor_size is not None and extractor_size > 4096:
+            return extractor_size
+
+        return None
 
     # Exact extractor value always wins.
     filesize = (
@@ -642,14 +940,9 @@ def _get_format_filesize(
         .lower()
     )
 
-    # X often provides filesize_approx even though its CDN
-    # exposes the real Content-Length / Content-Range.
-    if (
-        "video.twimg.com"
-        in stream_url
-        or "pbs.twimg.com"
-        in stream_url
-    ):
+    # Known media CDNs expose an exact Content-Length / Content-Range. Probe
+    # them before falling back to an extractor approximation.
+    if _should_probe_direct_filesize(stream_url):
 
         probed_size = (
             _probe_remote_filesize(
@@ -810,6 +1103,7 @@ def _detect_stream_types(
 
 def _normalize_format(
     item: dict[str, Any],
+    duration: Any = None,
 ) -> dict[str, Any] | None:
 
     format_id = (
@@ -955,8 +1249,19 @@ def _normalize_format(
 
     filesize = (
         _get_format_filesize(
-            item
+            item,
+            duration,
         )
+    )
+
+    fps = (
+        _positive_float(
+            item.get(
+                "fps"
+            )
+        )
+        if has_video
+        else None
     )
 
     return {
@@ -985,6 +1290,9 @@ def _normalize_format(
 
         "audio_codec":
             audio_codec,
+
+        "fps":
+            fps,
     }
 
 
@@ -994,6 +1302,9 @@ def _normalize_format(
 
 def _normalize_formats(
     raw_formats: list[Any] | None,
+    duration: Any = None,
+    *,
+    instagram: bool = False,
 ) -> list[
     dict[str, Any]
 ]:
@@ -1002,6 +1313,10 @@ def _normalize_formats(
         dict[str, Any]
     ] = []
 
+    preferred = (
+        {str(f["format_id"]) for f, _ in instagram_video_choices(raw_formats or []).values()}
+        if instagram else set()
+    )
     for item in (
         raw_formats
         or []
@@ -1016,7 +1331,8 @@ def _normalize_formats(
 
         normalized = (
             _normalize_format(
-                item
+                item,
+                duration,
             )
         )
 
@@ -1027,9 +1343,9 @@ def _normalize_formats(
 
             continue
 
-        result.append(
-            normalized
-        )
+        if normalized["format_id"] in preferred:
+            normalized["preferred_for_quality"] = True
+        result.append(normalized)
 
     return result
 
@@ -1228,60 +1544,33 @@ def _is_instagram_url(
     )
 
 
-def _get_instagram_gallery_info(
-    source_url: str,
-) -> dict[str, Any] | None:
-
-    if not _is_instagram_url(
-        source_url
-    ):
-
+def _get_instagram_raw_info(source_url: str) -> dict[str, Any] | None:
+    if not _is_instagram_url(source_url) or _is_instagram_story_url(source_url):
         return None
-
-    if _is_instagram_story_url(
-        source_url
-    ):
-
-        return None
-
     options = {
-        "quiet": True,
-        "no_warnings": True,
-        "skip_download": True,
-        "noplaylist": False,
-        "socket_timeout": 15,
-        "ignore_no_formats_error": True,
+        "quiet": True, "no_warnings": True, "skip_download": True,
+        "noplaylist": False, "socket_timeout": 15, "ignore_no_formats_error": True,
     }
-
     try:
-
-        with yt_dlp.YoutubeDL(
-            options
-        ) as ydl:
-
-            raw_info = (
-                ydl.extract_info(
-                    source_url,
-                    download=False,
-                    process=False,
-                )
-            )
-
+        with yt_dlp.YoutubeDL(options) as ydl:
+            raw_info = ydl.extract_info(source_url, download=False, process=False)
+            if not isinstance(raw_info, dict):
+                return None
+            if raw_info.get("_type") == "playlist":
+                # Gallery detection and quality selection both consume these entries.
+                raw_info["entries"] = list(raw_info.get("entries") or [])
+        return raw_info
     except Exception as exc:
-
-        print(
-            "Instagram raw yt-dlp extraction failed: "
-            f"{type(exc).__name__}: "
-            f"{exc}"
-        )
-
+        print(f"Instagram raw extraction failed: {type(exc).__name__}")
         return None
 
-    if not isinstance(
-        raw_info,
-        dict,
-    ):
 
+def _get_instagram_gallery_info(
+    source_url: str, *, raw_info: dict[str, Any] | None = None,
+) -> dict[str, Any] | None:
+    if raw_info is None:
+        raw_info = _get_instagram_raw_info(source_url)
+    if raw_info is None:
         return None
 
     if (
@@ -1412,11 +1701,11 @@ def _get_instagram_gallery_info(
         )
 
         thumbnail_url = (
-            item.get(
-                "thumbnail"
-            )
-            or best_thumbnail.get(
+            best_thumbnail.get(
                 "url"
+            )
+            or item.get(
+                "thumbnail"
             )
         )
 
@@ -1481,6 +1770,11 @@ def _get_instagram_gallery_info(
                 "title":
                     item.get(
                         "title"
+                    ),
+
+                "description":
+                    item.get(
+                        "description"
                     ),
 
                 "duration":
@@ -1548,6 +1842,11 @@ def _get_instagram_gallery_info(
         "title":
             raw_info.get(
                 "title"
+            ),
+
+        "description":
+            raw_info.get(
+                "description"
             ),
 
         "duration":
@@ -2006,6 +2305,13 @@ def _get_x_gallery_info(
                         else None
                     ),
 
+                "description":
+                    (
+                        str(content)
+                        if content
+                        else None
+                    ),
+
                 "duration":
                     duration,
 
@@ -2145,6 +2451,20 @@ def _get_x_gallery_info(
             "title":
                 title,
 
+            "description":
+                next(
+                    (
+                        entry.get(
+                            "description"
+                        )
+                        for entry in entries
+                        if entry.get(
+                            "description"
+                        )
+                    ),
+                    None,
+                ),
+
             "duration":
                 None,
 
@@ -2226,6 +2546,20 @@ def _get_x_gallery_info(
         "title":
             title,
 
+        "description":
+            next(
+                (
+                    entry.get(
+                        "description"
+                    )
+                    for entry in entries
+                    if entry.get(
+                        "description"
+                    )
+                ),
+                None,
+            ),
+
         "duration":
             None,
 
@@ -2288,68 +2622,81 @@ class DownloadService:
     async def create_job(
         self,
         source_url: str,
-        user_id: int | None = None,
+        telegram_id: int,
         format_id: str | None = None,
         quality: str | None = None,
         media_type: str | None = None,
+        output_format: str | None = None,
         playlist_index: int | None = None,
+        estimated_size_bytes: int | None = None,
     ) -> DownloadJob:
 
-        # ----------------------------------------------------
-        # Keep repository backward-compatible.
-        #
-        # The current repository does not yet need to know
-        # about playlist_index; we save it after creation.
-        # ----------------------------------------------------
+        normalized_media_type = str(media_type or "video").strip().lower()
+        if normalized_media_type not in {"audio", "video", "image", "convert"}:
+            raise DownloadFormatError("Unsupported media type")
+
+        normalized_output_format = normalize_output_format(output_format)
+        if output_format is not None and normalized_output_format is None:
+            raise DownloadFormatError("Unsupported output format")
+        if normalized_media_type == "convert" and normalized_output_format is None:
+            raise DownloadFormatError("A target output format is required")
+        if normalized_media_type == "image" and normalized_output_format is not None:
+            raise DownloadFormatError("Images cannot be converted by this job")
+        if normalized_output_format is not None:
+            target_kind = output_format_kind(normalized_output_format)
+            if normalized_media_type == "audio" and target_kind != "audio":
+                raise DownloadFormatError("Audio jobs require an audio output format")
+            if normalized_media_type == "video" and target_kind != "video":
+                raise DownloadFormatError("Video jobs require a video output format")
+
+        entitlement = await DownloadAccessService(
+            self.session
+        ).authorize_job(
+            telegram_id=telegram_id,
+            quality=quality,
+            estimated_size_bytes=estimated_size_bytes,
+            media_type=normalized_media_type,
+        )
 
         job = (
             await self.repository.create(
                 source_url=(
                     source_url
                 ),
-                user_id=(
-                    user_id
-                ),
+                user_id=entitlement.user_id,
+                plan_id=entitlement.plan_id,
+                plan_name_snapshot=entitlement.plan_name,
+                plan_limits_snapshot=entitlement.limits_snapshot(),
                 format_id=(
                     format_id
                 ),
                 quality=(
                     quality
                 ),
-                media_type=(
-                    media_type
-                ),
+                media_type=normalized_media_type,
+                output_format=normalized_output_format,
+                playlist_index=playlist_index,
             )
         )
-
-        if (
-            playlist_index
-            is not None
-        ):
-
-            job.playlist_index = (
-                playlist_index
-            )
-
-            await (
-                self.session.commit()
-            )
-
-            await (
-                self.session.refresh(
-                    job
-                )
-            )
 
         # ----------------------------------------------------
         # Queue Celery task
         # ----------------------------------------------------
 
-        task = (
-            download_task.delay(
-                job.id
+        try:
+            task = download_task.apply_async(
+                args=[job.id],
+                priority=(
+                    0
+                    if entitlement.priority_processing
+                    else 5
+                ),
             )
-        )
+        except Exception as exc:
+            job.status = DownloadJobStatus.FAILED
+            job.error_message = "Unable to queue download task"
+            await self.session.commit()
+            raise RuntimeError("Unable to queue download task") from exc
 
         # ----------------------------------------------------
         # Save Celery task ID
@@ -2527,6 +2874,10 @@ class DownloadService:
                 "can be resumed"
             )
 
+        priority_processing = await DownloadAccessService(
+            self.session
+        ).authorize_resume(job)
+
         job.status = (
             DownloadJobStatus.PENDING
         )
@@ -2548,11 +2899,21 @@ class DownloadService:
             )
         )
 
-        task = (
-            download_task.delay(
-                job.id
+        try:
+            task = download_task.apply_async(
+                args=[job.id],
+                priority=(
+                    0
+                    if priority_processing
+                    else 5
+                ),
             )
-        )
+        except Exception as exc:
+            job.status = DownloadJobStatus.PAUSED
+            job.paused_at = datetime.now(timezone.utc)
+            job.error_message = "Unable to queue resumed download task"
+            await self.session.commit()
+            raise RuntimeError("Unable to queue resumed download task") from exc
 
         job.celery_task_id = (
             task.id
@@ -2669,20 +3030,33 @@ class DownloadService:
             )
 
         # ====================================================
+        # Public image posts + Threads
+        #
+        # Pinterest, TikTok and Facebook image posts are not
+        # represented as downloadable video formats by yt-dlp.
+        # Threads currently has no yt-dlp extractor at all.
+        # Video-only posts on the other platforms return None
+        # here and continue through the normal yt-dlp path.
+        # ====================================================
+
+        social_media_info = get_social_media_info(
+            source_url,
+            playlist_index,
+        )
+
+        if social_media_info is not None:
+            return social_media_info
+
+        # ====================================================
         # Instagram mixed media
         # ====================================================
 
         instagram_gallery = None
-
-        if _is_instagram_url(
-            source_url
-        ):
-
-            instagram_gallery = (
-                _get_instagram_gallery_info(
-                    source_url
-                )
-            )
+        instagram_raw = None
+        if _is_instagram_url(source_url):
+            instagram_raw = _get_instagram_raw_info(source_url)
+            if instagram_raw is not None:
+                instagram_gallery = _get_instagram_gallery_info(source_url, raw_info=instagram_raw)
 
         if instagram_gallery:
 
@@ -3073,13 +3447,10 @@ class DownloadService:
         with yt_dlp.YoutubeDL(
             options
         ) as ydl:
-
-            info = (
-                ydl.extract_info(
-                    source_url,
-                    download=False,
-                )
-            )
+            if instagram_raw is not None:
+                info = ydl.process_ie_result(instagram_raw, download=False)
+            else:
+                info = ydl.extract_info(source_url, download=False)
 
         # ====================================================
         # Playlist / multi-video
@@ -3215,11 +3586,23 @@ class DownloadService:
 
                     continue
 
+                entry_duration = (
+                    _normalize_duration(
+                        raw_entry.get(
+                            "duration"
+                        )
+                    )
+                )
+
                 entry_formats = (
                     _normalize_formats(
                         raw_entry.get(
                             "formats"
-                        )
+                        ),
+                        duration=(
+                            entry_duration
+                        ),
+                        instagram=_is_instagram_url(source_url),
                     )
                 )
 
@@ -3263,16 +3646,17 @@ class DownloadService:
                                 "title"
                             ),
 
-                        "duration":
-                            _normalize_duration(
-                                raw_entry.get(
-                                    "duration"
-                                )
+                        "description":
+                            raw_entry.get(
+                                "description"
                             ),
 
+                        "duration":
+                            entry_duration,
+
                         "thumbnail":
-                            raw_entry.get(
-                                "thumbnail"
+                            _best_thumbnail_url(
+                                raw_entry
                             ),
 
                         "formats":
@@ -3326,8 +3710,14 @@ class DownloadService:
             )
 
             top_thumbnail = (
+                _best_thumbnail_url(
+                    info
+                )
+            )
+
+            top_description = (
                 info.get(
-                    "thumbnail"
+                    "description"
                 )
             )
 
@@ -3364,6 +3754,13 @@ class DownloadService:
                     or top_thumbnail
                 )
 
+                top_description = (
+                    selected.get(
+                        "description"
+                    )
+                    or top_description
+                )
+
             return {
                 "source_url":
                     source_url,
@@ -3372,6 +3769,9 @@ class DownloadService:
                     info.get(
                         "title"
                     ),
+
+                "description":
+                    top_description,
 
                 "duration":
                     top_duration,
@@ -3413,11 +3813,23 @@ class DownloadService:
         # Single media
         # ====================================================
 
+        normalized_duration = (
+            _normalize_duration(
+                info.get(
+                    "duration"
+                )
+            )
+        )
+
         formats = (
             _normalize_formats(
                 info.get(
                     "formats"
-                )
+                ),
+                duration=(
+                    normalized_duration
+                ),
+                instagram=_is_instagram_url(source_url),
             )
         )
 
@@ -3430,16 +3842,17 @@ class DownloadService:
                     "title"
                 ),
 
-            "duration":
-                _normalize_duration(
-                    info.get(
-                        "duration"
-                    )
+            "description":
+                info.get(
+                    "description"
                 ),
 
+            "duration":
+                normalized_duration,
+
             "thumbnail":
-                info.get(
-                    "thumbnail"
+                _best_thumbnail_url(
+                    info
                 ),
 
             "formats":

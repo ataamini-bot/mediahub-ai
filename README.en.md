@@ -10,9 +10,9 @@ This README is available in Persian, English, Russian, and Simplified Chinese. T
 
 ## Project status
 
-**Version 1 release candidate: `v1.0.0-rc.1`.** The current implementation is on the [`feature/admin-foundation`](https://github.com/ataamini-bot/mediahub-ai/tree/feature/admin-foundation) branch. This README describes that candidate; the repository's default branch may contain an earlier version.
+**Version 1 release candidate: `v1.0.0-rc.1`.** The [v1 acceptance checklist (Persian)](docs/V1_RELEASE.md) records what has been verified and what remains before the stable release.
 
-The installation command below uses the pinned candidate commit `71ba5a1a5daa2183f730d5d82fdc00813b261283`, which passed [CI](https://github.com/ataamini-bot/mediahub-ai/actions/runs/37816641875). A stable v1 release remains subject to live acceptance and deployment checks.
+The installation command below uses the pinned candidate commit `16775b765c501e3afe2ad18eff8fb86afd6c0743`, which passed [CI](https://github.com/ataamini-bot/mediahub-ai/actions/runs/42596467273). A stable v1 release remains subject to live acceptance and deployment checks.
 
 ## Features
 
@@ -20,6 +20,7 @@ The installation command below uses the pinned candidate commit `71ba5a1a5daa218
 
 - Download from supported public URLs, including YouTube, public Instagram content, TikTok, Facebook, X, Pinterest, and Threads.
 - Select available video qualities up to 4K, subject to the source and configured plan.
+- After choosing a quality, choose the playback device for the appropriate video output.
 - Extract audio, cover images, and descriptions when available.
 - Convert uploaded media into supported video and audio formats.
 - Receive files named after the source media title.
@@ -47,6 +48,7 @@ Prices, payment destinations, plan settings, and discount rules are managed by t
 - Administrator roles, permissions, and activity logs.
 - Broadcasts with audience and language selection, preview, confirmation, a persistent queue, and delivery reports.
 - Download and payment statistics.
+- Authorized admins can enter a numeric Telegram user ID in their private bot chat to export that user's download links to Excel, sorted by date and time in Tehran.
 - Reporting topics for Monitoring, Payments, Backups, System, and Support.
 - Scheduled encrypted backups and restore verification.
 
@@ -70,7 +72,7 @@ Run this on a fresh server where `/opt/mediahub-ai` does not already exist:
 ```bash
 (
   set -euo pipefail
-  release='71ba5a1a5daa2183f730d5d82fdc00813b261283'
+  release='16775b765c501e3afe2ad18eff8fb86afd6c0743'
   sudo apt-get update
   sudo apt-get install -y ca-certificates curl
   installer="$(mktemp /tmp/mediahub-install.XXXXXX)"
@@ -147,7 +149,7 @@ Use **Create and export backup** to produce a portable backup, and **Import back
 
 Stable updates require a published release tag and matching container images. Update-source settings support an HTTPS Git repository and a container registry. The update process takes a verified backup before database migration and preserves previous application images for compatible rollback. Application rollback does not automatically downgrade the database.
 
-See the [installation and recovery guide](https://github.com/ataamini-bot/mediahub-ai/blob/feature/admin-foundation/docs/INSTALLATION.md) for the complete procedures and the differences between restoring an existing installation and recovering onto a fresh server.
+See the [installation and recovery guide](docs/INSTALLATION.md) for the complete procedures and the differences between restoring an existing installation and recovering onto a fresh server.
 
 ## Media cleanup and retained data
 
@@ -155,7 +157,7 @@ Downloaded and generated media files are temporary working files and are removed
 
 Source URLs and download metadata remain in the database for operator activity logs, quotas, and administration. Payment, subscription, and internal-credit records are also retained. Users do not receive a download-history menu, and full source URLs are not shown in delivered-file details. Database backups include the retained records.
 
-Deleting a server-side file does not remove the copy already delivered in Telegram. See [media-file cleanup](https://github.com/ataamini-bot/mediahub-ai/blob/feature/admin-foundation/docs/MEDIA_FILE_CLEANUP.md) for the exact behavior.
+Deleting a server-side file does not remove the copy already delivered in Telegram. See [media-file cleanup](docs/MEDIA_FILE_CLEANUP.md) for the exact behavior.
 
 ## Architecture
 
@@ -188,14 +190,14 @@ Media processing uses yt-dlp and FFmpeg. Database changes are managed with Alemb
 
 The detailed guides below are currently written in Persian:
 
-- [Installation, Telegram setup, updates, and recovery](https://github.com/ataamini-bot/mediahub-ai/blob/feature/admin-foundation/docs/INSTALLATION.md)
-- [Launch operations and acceptance checks](https://github.com/ataamini-bot/mediahub-ai/blob/feature/admin-foundation/docs/LAUNCH_OPERATIONS.md)
-- [Media filenames and related outputs](https://github.com/ataamini-bot/mediahub-ai/blob/feature/admin-foundation/docs/MEDIA_OUTPUTS.md)
-- [Media conversion](https://github.com/ataamini-bot/mediahub-ai/blob/feature/admin-foundation/docs/MEDIA_CONVERSION.md)
-- [Broadcasts](https://github.com/ataamini-bot/mediahub-ai/blob/feature/admin-foundation/docs/BROADCASTS.md)
-- [Internal credit](https://github.com/ataamini-bot/mediahub-ai/blob/feature/admin-foundation/docs/INTERNAL_CREDIT.md)
-- [Discount codes](https://github.com/ataamini-bot/mediahub-ai/blob/feature/admin-foundation/docs/COUPONS.md)
-- [Media cleanup and activity records](https://github.com/ataamini-bot/mediahub-ai/blob/feature/admin-foundation/docs/MEDIA_FILE_CLEANUP.md)
+- [Installation, Telegram setup, updates, and recovery](docs/INSTALLATION.md)
+- [Launch operations and acceptance checks](docs/LAUNCH_OPERATIONS.md)
+- [Media filenames and related outputs](docs/MEDIA_OUTPUTS.md)
+- [Media conversion](docs/MEDIA_CONVERSION.md)
+- [Broadcasts](docs/BROADCASTS.md)
+- [Internal credit](docs/INTERNAL_CREDIT.md)
+- [Discount codes](docs/COUPONS.md)
+- [Media cleanup and activity records](docs/MEDIA_FILE_CLEANUP.md)
 
 CI covers backend, bot, and installer tests, plus an isolated Docker installation and backup/restore exercise. Live Telegram behavior and source-website availability require separate acceptance checks.
 

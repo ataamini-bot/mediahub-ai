@@ -26,9 +26,7 @@ RUN curl -fsSL https://deno.land/install.sh | sh \
 COPY requirements.txt .
 
 RUN pip install --no-cache-dir --upgrade pip \
-    && pip install --no-cache-dir -r requirements.txt \
-    && pip install --no-cache-dir \
-        bgutil-ytdlp-pot-provider==1.3.2
+    && pip install --no-cache-dir -r requirements.txt
 
 # ------------------------------------------------------------
 # Application
