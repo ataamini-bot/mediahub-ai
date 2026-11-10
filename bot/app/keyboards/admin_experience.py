@@ -1,0 +1,471 @@
+from app.localization import tr as _tr, localized_collection as _localized_collection
+from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+
+
+CONTENT_LABELS = {
+    "welcome_title": "عنوان خوش‌آمدگویی",
+    "welcome_instruction": "راهنمای کوتاه صفحه شروع",
+    "tutorial": "آموزش استفاده از ربات",
+    "faq": "سوالات متداول",
+    "support_intro": "متن انتخاب موضوع پشتیبانی",
+    "support_prompt": "راهنمای ارسال پیام پشتیبانی",
+    "support_sent": "تأیید ثبت درخواست پشتیبانی",
+    "forced_join": "پیام عضویت اجباری",
+    "membership_verified": "پیام تأیید عضویت",
+}
+
+BUTTON_LABELS = {
+    "buy": "خرید اشتراک",
+    "subscription": "وضعیت اشتراک",
+    "language": "تغییر زبان",
+    "support": "پشتیبانی",
+    "convert": "تبدیل فایل",
+    "tutorial": "آموزش استفاده",
+    "faq": "سوالات متداول",
+    "admin": "پنل مدیریت",
+    "check_membership": "بررسی عضویت",
+    "back_home": "منوی اصلی",
+}
+
+BUTTON_STYLE_LABELS = {
+    "default": "معمولی",
+    "primary": "آبی (Primary)",
+    "success": "سبز (Success)",
+    "danger": "قرمز (Danger)",
+}
+
+
+def build_copy_root_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text=_tr("🇮🇷 فارسی"), callback_data="admin:copy:lang:fa"),
+                InlineKeyboardButton(text="🇬🇧 English", callback_data="admin:copy:lang:en"),
+            ],
+            [InlineKeyboardButton(text=_tr("🔙 دکمه‌های صفحه اصلی"), callback_data="admin:homebuttons")],
+        ]
+    )
+
+
+def build_home_buttons_root_keyboard() -> InlineKeyboardMarkup:
+    """Show the admin tools that belong to the home-button section."""
+
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text=_tr("📝 متن‌ها و عنوان دکمه‌ها"),
+                    callback_data="admin:copy",
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text=_tr("↕️ ترتیب و چیدمان دکمه‌ها"),
+                    callback_data="admin:homelayout",
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text=_tr("🔙 تنظیمات ربات"),
+                    callback_data="admin:settings",
+                )
+            ],
+        ]
+    )
+
+
+def build_home_layout_language_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text=_tr("🇮🇷 فارسی"), callback_data="admin:layout:lang:fa"),
+                InlineKeyboardButton(text="🇬🇧 English", callback_data="admin:layout:lang:en"),
+            ],
+            [
+                InlineKeyboardButton(
+                    text=_tr("🔙 دکمه‌های صفحه اصلی"),
+                    callback_data="admin:homebuttons",
+                )
+            ],
+        ]
+    )
+
+
+def build_home_layout_keyboard(language: str, layout: dict) -> InlineKeyboardMarkup:
+    """Build the one/two/three-column and built-in button order editor."""
+
+    columns = int(layout.get("columns") or 2)
+    order = list(layout.get("order") or [])
+    rows: list[list[InlineKeyboardButton]] = [
+        [
+            InlineKeyboardButton(
+                text=("✅ " if columns == count else "") + _tr(f"{count} در هر ردیف"),
+                callback_data=f"admin:layout:cols:{language}:{count}",
+            )
+            for count in (1, 2, 3)
+        ]
+    ]
+    for index, key in enumerate(order, start=1):
+        label = BUTTON_LABELS.get(key, key)
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text="⬆️",
+                    callback_data=f"admin:layout:move:{language}:{key}:up",
+                ),
+                InlineKeyboardButton(
+                    text=f"{index}. {_tr(label)}",
+                    callback_data="admin:layout:noop",
+                ),
+                InlineKeyboardButton(
+                    text="⬇️",
+                    callback_data=f"admin:layout:move:{language}:{key}:down",
+                ),
+            ]
+        )
+    rows.append([
+        InlineKeyboardButton(
+            text=_tr("🔙 انتخاب زبان"),
+            callback_data="admin:homelayout",
+        )
+    ])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def build_copy_section_keyboard(language: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text=_tr("📝 متن محتواها"),
+                    callback_data=f"admin:copy:section:{language}:content",
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text=_tr("🔘 عنوان دکمه‌ها"),
+                    callback_data=f"admin:copy:section:{language}:buttons",
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text=_tr("🎨 رنگ دکمه‌ها"),
+                    callback_data=f"admin:copy:section:{language}:styles",
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text=_tr("🛠 دکمه‌های صفحه اصلی"),
+                    callback_data="admin:homebuttons:list",
+                )
+            ],
+            [InlineKeyboardButton(text=_tr("🔙 انتخاب زبان"), callback_data="admin:copy")],
+        ]
+    )
+
+
+def build_copy_items_keyboard(language: str, section: str) -> InlineKeyboardMarkup:
+    labels = CONTENT_LABELS if section == "content" else BUTTON_LABELS
+    rows = [
+        [
+            InlineKeyboardButton(
+                text=f"✏️ {label}",
+                callback_data=f"admin:copy:item:{language}:{section}:{key}",
+            )
+        ]
+        for key, label in labels.items()
+    ]
+    rows.append(
+        [
+            InlineKeyboardButton(
+                text=_tr("🔙 بازگشت"),
+                callback_data=f"admin:copy:lang:{language}",
+            )
+        ]
+    )
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def build_copy_style_items_keyboard(
+    language: str,
+    values: dict | None = None,
+) -> InlineKeyboardMarkup:
+    values = values if isinstance(values, dict) else {}
+    rows = [
+        [
+            InlineKeyboardButton(
+                text=f"🎨 {label}: {BUTTON_STYLE_LABELS.get(str(values.get(key) or 'default'), BUTTON_STYLE_LABELS['default'])}",
+                callback_data=f"admin:copy:style-item:{language}:{key}",
+            )
+        ]
+        for key, label in BUTTON_LABELS.items()
+    ]
+    rows.append([
+        InlineKeyboardButton(
+            text=_tr("🔙 بازگشت"),
+            callback_data=f"admin:copy:lang:{language}",
+        )
+    ])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def build_copy_style_keyboard(
+    language: str,
+    key: str,
+    current: str = "default",
+) -> InlineKeyboardMarkup:
+    rows = []
+    for style, label in BUTTON_STYLE_LABELS.items():
+        marker = "✅ " if style == current else ""
+        kwargs = {
+            "text": marker + _tr(label),
+            "callback_data": f"admin:copy:style-set:{language}:{key}:{style}",
+        }
+        if style in {"primary", "success", "danger"}:
+            kwargs["style"] = style
+        rows.append([InlineKeyboardButton(**kwargs)])
+    rows.append([
+        InlineKeyboardButton(
+            text=_tr("انصراف"),
+            callback_data=f"admin:copy:section:{language}:styles",
+        )
+    ])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def build_copy_cancel_keyboard(language: str, section: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text=_tr("انصراف"),
+                    callback_data=f"admin:copy:section:{language}:{section}",
+                )
+            ]
+        ]
+    )
+
+
+def build_home_buttons_admin_keyboard(buttons: list[dict]) -> InlineKeyboardMarkup:
+    rows: list[list[InlineKeyboardButton]] = []
+    for button in buttons:
+        status = "🟢" if button.get("is_active") else "⚫️"
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text=f"{status} {str(button.get('label_fa') or _tr('بدون نام'))[:50]}",
+                    callback_data=f"admin:homebutton:{button['id']}",
+                )
+            ]
+        )
+    rows.extend(
+        [
+            [InlineKeyboardButton(text=_tr("➕ افزودن دکمه"), callback_data="admin:homebutton:add")],
+            [InlineKeyboardButton(text=_tr("🔙 دکمه‌های صفحه اصلی"), callback_data="admin:homebuttons")],
+        ]
+    )
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def build_home_button_detail_keyboard(button: dict) -> InlineKeyboardMarkup:
+    button_id = int(button["id"])
+    toggle = _tr("⛔️ غیرفعال‌کردن") if button.get("is_active") else _tr("✅ فعال‌کردن")
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text=_tr("✏️ عنوان فارسی"),
+                    callback_data=f"admin:homebutton:edit:fa:{button_id}",
+                ),
+                InlineKeyboardButton(
+                    text=_tr("✏️ عنوان انگلیسی"),
+                    callback_data=f"admin:homebutton:edit:en:{button_id}",
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text=_tr("🎨 تغییر رنگ"),
+                    callback_data=f"admin:homebutton:style:{button_id}",
+                ),
+                InlineKeyboardButton(
+                    text=_tr("🔗 تغییر عملکرد"),
+                    callback_data=f"admin:homebutton:action:{button_id}",
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text=toggle,
+                    callback_data=f"admin:homebutton:toggle:{button_id}",
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text=_tr("🗑 حذف دکمه"),
+                    callback_data=f"admin:homebutton:deleteask:{button_id}",
+                    style="danger",
+                )
+            ],
+            [InlineKeyboardButton(text=_tr("🔙 فهرست دکمه‌ها"), callback_data="admin:homebuttons:list")],
+        ]
+    )
+
+
+def build_home_action_keyboard(*, button_id: int | None = None) -> InlineKeyboardMarkup:
+    suffix = str(button_id) if button_id is not None else "new"
+    actions = [
+        (_tr("🔗 بازکردن لینک"), "url"),
+        (_tr("📝 نمایش متن"), "message"),
+        (_tr("💎 خرید اشتراک"), "buy"),
+        (_tr("👤 وضعیت اشتراک"), "subscription"),
+        (_tr("🛟 پشتیبانی"), "support"),
+        (_tr("📘 آموزش"), "tutorial"),
+        (_tr("❓ سوالات متداول"), "faq"),
+    ]
+    rows = [
+        [
+            InlineKeyboardButton(
+                text=label,
+                callback_data=f"admin:hbaction:{suffix}:{action}",
+            )
+        ]
+        for label, action in actions
+    ]
+    rows.append([InlineKeyboardButton(text=_tr("انصراف"), callback_data="admin:homebuttons:list")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def build_home_style_keyboard(*, button_id: int | None = None) -> InlineKeyboardMarkup:
+    suffix = str(button_id) if button_id is not None else "new"
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text=_tr("معمولی"), callback_data=f"admin:hbstyle:{suffix}:default"),
+                InlineKeyboardButton(
+                    text=_tr("آبی"),
+                    callback_data=f"admin:hbstyle:{suffix}:primary",
+                    style="primary",
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text=_tr("سبز"),
+                    callback_data=f"admin:hbstyle:{suffix}:success",
+                    style="success",
+                ),
+                InlineKeyboardButton(
+                    text=_tr("قرمز"),
+                    callback_data=f"admin:hbstyle:{suffix}:danger",
+                    style="danger",
+                ),
+            ],
+            [InlineKeyboardButton(text=_tr("انصراف"), callback_data="admin:homebuttons:list")],
+        ]
+    )
+
+
+def build_home_button_delete_keyboard(button_id: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text=_tr("بله، حذف شود"),
+                    callback_data=f"admin:homebutton:delete:{button_id}",
+                    style="danger",
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text=_tr("انصراف"),
+                    callback_data=f"admin:homebutton:{button_id}",
+                )
+            ],
+        ]
+    )
+
+
+def channel_language_label(language: str) -> str:
+    return {"fa": _tr("فارسی"), "en": "English", "all": _tr("هر دو زبان")}.get(language, _tr("هر دو زبان"))
+
+
+def build_channel_language_keyboard(channel_id: int | None = None) -> InlineKeyboardMarkup:
+    target = str(channel_id) if channel_id is not None else "create"
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=channel_language_label(language),
+                              callback_data=f"admin:channel:set-language:{target}:{language}")]
+        for language in ("fa", "en", "all")
+    ] + [[InlineKeyboardButton(text=_tr("انصراف"), callback_data=(
+        f"admin:channel:{channel_id}" if channel_id is not None else "admin:channels"
+    ))]])
+
+
+def build_channels_admin_keyboard(channels: list[dict]) -> InlineKeyboardMarkup:
+    rows: list[list[InlineKeyboardButton]] = []
+    for channel in channels:
+        status = "🟢" if channel.get("is_active") else "⚫️"
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text=f"{status} {str(channel.get('title') or _tr('بدون نام'))[:38]} · {channel_language_label(channel.get('language', 'all'))}",
+                    callback_data=f"admin:channel:{channel['id']}",
+                )
+            ]
+        )
+    rows.extend(
+        [
+            [InlineKeyboardButton(text=_tr("➕ افزودن کانال"), callback_data="admin:channel:add")],
+            [InlineKeyboardButton(text=_tr("🔙 تنظیمات ربات"), callback_data="admin:settings")],
+        ]
+    )
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def build_channel_detail_keyboard(channel: dict) -> InlineKeyboardMarkup:
+    channel_id = int(channel["id"])
+    toggle = _tr("⛔️ غیرفعال‌کردن") if channel.get("is_active") else _tr("✅ فعال‌کردن")
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(
+                text=_tr("🌐 تغییر زبان کانال"),
+                callback_data=f"admin:channel:language:{channel_id}",
+            )],
+            [
+                InlineKeyboardButton(
+                    text=toggle,
+                    callback_data=f"admin:channel:toggle:{channel_id}",
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text=_tr("🗑 حذف کانال"),
+                    callback_data=f"admin:channel:deleteask:{channel_id}",
+                    style="danger",
+                )
+            ],
+            [InlineKeyboardButton(text=_tr("🔙 فهرست کانال‌ها"), callback_data="admin:channels")],
+        ]
+    )
+
+
+def build_channel_delete_keyboard(channel_id: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text=_tr("بله، حذف شود"),
+                    callback_data=f"admin:channel:delete:{channel_id}",
+                    style="danger",
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text=_tr("انصراف"),
+                    callback_data=f"admin:channel:{channel_id}",
+                )
+            ],
+        ]
+    )
+
+
+# Resolve static labels using the language of the current update.
+CONTENT_LABELS = _localized_collection(CONTENT_LABELS)
+BUTTON_LABELS = _localized_collection(BUTTON_LABELS)

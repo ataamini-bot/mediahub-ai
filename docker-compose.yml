@@ -44,7 +44,9 @@ services:
 
 
   telegram-api:
-    image: aiogram/telegram-bot-api:latest
+    # Button colors require Telegram Bot API 9.4 or newer. Keep the server on
+    # a known modern release instead of silently reusing an old cached latest.
+    image: ${TELEGRAM_BOT_API_IMAGE:-aiogram/telegram-bot-api:10.3}
     container_name: mediahub-telegram-api
     restart: unless-stopped
 
@@ -57,12 +59,32 @@ services:
       - --api-id=${TELEGRAM_API_ID}
       - --api-hash=${TELEGRAM_API_HASH}
       - --http-port=8081
+      # Keep Local Bot API uploads under the volume shared with the
+      # Bot container. This is required for large audio/video files, which
+      # cannot safely rely on Telegram's public 20 MB file endpoint.
+      - --dir=/var/lib/telegram-bot-api
 
     volumes:
       - telegram_api_data:/var/lib/telegram-bot-api
 
     networks:
       - mediahub
+
+
+  bgutil-provider:
+    # Match backend/requirements.txt. Internal service only: no host port.
+    image: brainicism/bgutil-ytdlp-pot-provider:2.0.2
+    container_name: mediahub-bgutil-provider
+    restart: unless-stopped
+    init: true
+    networks:
+      - mediahub
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:4416/ping').then(async r => { if (!r.ok || (await r.json()).version !== '2.0.2') process.exit(1); }).catch(() => process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      start_period: 15s
+      retries: 4
 
 
   backend:
@@ -81,15 +103,19 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      bgutil-provider:
+        condition: service_healthy
 
     volumes:
       - media_data:/app/media
       - downloads_data:/app/downloads
       - temp_data:/app/tmp
+      - monitor_data:/app/monitor-data
       - ./secrets:/app/secrets:ro
+      - ./backups:/backups
 
     ports:
-      - "8000:8000"
+      - "127.0.0.1:8000:8000"
 
     networks:
       - mediahub
@@ -110,6 +136,7 @@ services:
       BACKEND_URL: http://backend:8000
       DOWNLOAD_DIR: /app/downloads
       TELEGRAM_BOT_API: http://telegram-api:8081
+      TELEGRAM_BOT_API_DATA_DIR: /var/lib/telegram-bot-api
 
     depends_on:
       backend:
@@ -122,6 +149,11 @@ services:
     volumes:
       - downloads_data:/app/downloads
       - temp_data:/app/tmp
+      # Local Bot API returns a local file path. The Bot must see the same
+      # data directory to stream an uploaded conversion input safely.
+      # Remove fetched media after staging it for conversion. Session/database
+      # files are excluded from the Bot's cleanup targets.
+      - telegram_api_data:/var/lib/telegram-bot-api
 
     networks:
       - mediahub
@@ -145,6 +177,8 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      bgutil-provider:
+        condition: service_healthy
 
     volumes:
       - media_data:/app/media
@@ -166,11 +200,44 @@ services:
 
     command: python -m app.monitoring.health_monitor
 
+    volumes:
+      - downloads_data:/app/downloads:ro
+      - monitor_data:/app/monitor-data
+      - ./backups:/backups:ro
+
     env_file:
       - .env
 
     networks:
       - mediahub
+
+
+  backup:
+    build:
+      context: .
+      dockerfile: backup/Dockerfile
+    container_name: mediahub-backup
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      BACKUP_DIR: /backups
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ./backups:/backups
+      - ./.env:/config/mediahub.env:ro
+      - ./release.json:/config/release.json:ro
+      - ./secrets:/config/secrets:ro
+    networks:
+      - mediahub
+    healthcheck:
+      test: ["CMD", "/opt/backup-venv/bin/python", "-m", "app.backup.engine", "health"]
+      interval: 60s
+      timeout: 10s
+      start_period: 120s
+      retries: 3
 
 
 networks:
@@ -185,3 +252,4 @@ volumes:
   downloads_data:
   temp_data:
   telegram_api_data:
+  monitor_data:

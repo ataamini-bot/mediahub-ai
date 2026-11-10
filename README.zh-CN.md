@@ -10,9 +10,9 @@ MediaHub 将媒体工具和管理功能整合到 Telegram 中：用户发送链�
 
 ## 项目状态
 
-**版本 1 的候选发布版：`v1.0.0-rc.1`。** 当前实现位于 [`feature/admin-foundation`](https://github.com/ataamini-bot/mediahub-ai/tree/feature/admin-foundation) 分支。本 README 描述的是该候选版本；仓库默认分支可能仍包含较早版本。
+**版本 1 候选版：`v1.0.0-rc.1`。** [版本 1 验收清单（波斯语）](docs/V1_RELEASE.md)列出了已通过的检查以及发布稳定版前还需完成的步骤。
 
-下方安装命令固定使用提交 `71ba5a1a5daa2183f730d5d82fdc00813b261283`，该提交已通过 [CI 检查](https://github.com/ataamini-bot/mediahub-ai/actions/runs/37816641875)。版本 1 的稳定发布仍需完成实际环境验收和部署检查。
+下方安装命令固定使用提交 `16775b765c501e3afe2ad18eff8fb86afd6c0743`，该提交已通过 [CI 检查](https://github.com/ataamini-bot/mediahub-ai/actions/runs/42596467273)。版本 1 的稳定发布仍需完成实际环境验收和部署检查。
 
 ## 功能
 
@@ -20,6 +20,7 @@ MediaHub 将媒体工具和管理功能整合到 Telegram 中：用户发送链�
 
 - 从受支持的公开链接下载媒体，包括 YouTube、Instagram 公开内容、TikTok、Facebook、X、Pinterest 和 Threads。
 - 根据源内容和套餐配置选择可用的视频画质，最高支持 4K。
+- 选择画质后，可以指定播放设备，以获取适合该设备的视频。
 - 在源内容提供相应信息时提取音频、封面和描述。
 - 将上传的媒体转换为支持的视频或音频格式。
 - 使用原始媒体标题为发送的文件命名。
@@ -47,6 +48,7 @@ MediaHub 将媒体工具和管理功能整合到 Telegram 中：用户发送链�
 - 管理员角色、权限及操作日志。
 - 群发消息：选择受众和语言、预览、确认、持久化发送队列和投递报告。
 - 下载和付款统计。
+- 有相应权限的管理员可在与机器人的私聊中输入用户的 Telegram 数字 ID，导出按德黑兰当地时间排序的下载链接 Excel 文件。
 - 用于报告的 Monitoring、Payments、Backups、System 和 Support 话题。
 - 定时加密备份和恢复验证。
 
@@ -70,7 +72,7 @@ MediaHub 将媒体工具和管理功能整合到 Telegram 中：用户发送链�
 ```bash
 (
   set -euo pipefail
-  release='71ba5a1a5daa2183f730d5d82fdc00813b261283'
+  release='16775b765c501e3afe2ad18eff8fb86afd6c0743'
   sudo apt-get update
   sudo apt-get install -y ca-certificates curl
   installer="$(mktemp /tmp/mediahub-install.XXXXXX)"
@@ -147,7 +149,7 @@ sudo bash scripts/check_launch.sh
 
 稳定更新需要已发布的版本标签及对应的容器镜像。更新源设置支持 HTTPS Git 仓库和容器镜像仓库。更新流程会在数据库迁移前创建并验证备份，同时保留旧应用镜像，以便在兼容时回滚。应用回滚不会自动将数据库结构降级。
 
-完整操作流程，以及在现有安装上恢复和在新服务器上恢复的区别，请参阅[波斯语安装与恢复指南](https://github.com/ataamini-bot/mediahub-ai/blob/feature/admin-foundation/docs/INSTALLATION.md)。
+完整操作流程，以及在现有安装上恢复和在新服务器上恢复的区别，请参阅[波斯语安装与恢复指南](docs/INSTALLATION.md)。
 
 ## 媒体清理与保留的数据
 
@@ -155,7 +157,7 @@ sudo bash scripts/check_launch.sh
 
 源链接和下载元数据会保留在数据库中，用于运营日志、额度统计和管理。付款、订阅和内部余额记录也会保留。用户界面不提供下载历史菜单，已发送文件的详情中也不会显示完整源链接。数据库备份包含这些保留记录。
 
-删除服务器上的文件不会删除已经发送到 Telegram 的副本。具体行为请参阅[波斯语媒体文件清理说明](https://github.com/ataamini-bot/mediahub-ai/blob/feature/admin-foundation/docs/MEDIA_FILE_CLEANUP.md)。
+删除服务器上的文件不会删除已经发送到 Telegram 的副本。具体行为请参阅[波斯语媒体文件清理说明](docs/MEDIA_FILE_CLEANUP.md)。
 
 ## 系统架构
 
@@ -188,14 +190,14 @@ sudo bash scripts/check_launch.sh
 
 以下详细指南目前使用波斯语：
 
-- [安装、Telegram 配置、更新和恢复](https://github.com/ataamini-bot/mediahub-ai/blob/feature/admin-foundation/docs/INSTALLATION.md)
-- [上线操作和验收检查](https://github.com/ataamini-bot/mediahub-ai/blob/feature/admin-foundation/docs/LAUNCH_OPERATIONS.md)
-- [媒体文件名和相关输出](https://github.com/ataamini-bot/mediahub-ai/blob/feature/admin-foundation/docs/MEDIA_OUTPUTS.md)
-- [媒体转换](https://github.com/ataamini-bot/mediahub-ai/blob/feature/admin-foundation/docs/MEDIA_CONVERSION.md)
-- [消息群发](https://github.com/ataamini-bot/mediahub-ai/blob/feature/admin-foundation/docs/BROADCASTS.md)
-- [内部余额](https://github.com/ataamini-bot/mediahub-ai/blob/feature/admin-foundation/docs/INTERNAL_CREDIT.md)
-- [优惠码](https://github.com/ataamini-bot/mediahub-ai/blob/feature/admin-foundation/docs/COUPONS.md)
-- [媒体清理和活动记录](https://github.com/ataamini-bot/mediahub-ai/blob/feature/admin-foundation/docs/MEDIA_FILE_CLEANUP.md)
+- [安装、Telegram 配置、更新和恢复](docs/INSTALLATION.md)
+- [上线操作和验收检查](docs/LAUNCH_OPERATIONS.md)
+- [媒体文件名和相关输出](docs/MEDIA_OUTPUTS.md)
+- [媒体转换](docs/MEDIA_CONVERSION.md)
+- [消息群发](docs/BROADCASTS.md)
+- [内部余额](docs/INTERNAL_CREDIT.md)
+- [优惠码](docs/COUPONS.md)
+- [媒体清理和活动记录](docs/MEDIA_FILE_CLEANUP.md)
 
 CI 覆盖 Backend、Bot 和安装程序测试，并执行隔离的 Docker 安装及备份恢复测试。Telegram 的实际行为和来源网站的可用性需要单独验收。
 

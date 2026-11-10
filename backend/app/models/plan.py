@@ -1,6 +1,18 @@
+from datetime import datetime
 from decimal import Decimal
 
-from sqlalchemy import Boolean, Integer, Numeric, String, Text
+from sqlalchemy import (
+    Boolean,
+    CheckConstraint,
+    DateTime,
+    Integer,
+    Numeric,
+    String,
+    Text,
+    false,
+    text,
+    true,
+)
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base, TimestampMixin
@@ -8,6 +20,37 @@ from app.db.base import Base, TimestampMixin
 
 class Plan(Base, TimestampMixin):
     __tablename__ = "plans"
+    __table_args__ = (
+        CheckConstraint(
+            "duration_days >= 0",
+            name="ck_plans_duration_days_nonnegative",
+        ),
+        CheckConstraint("price >= 0", name="ck_plans_price_nonnegative"),
+        CheckConstraint(
+            "daily_download_limit IS NULL OR daily_download_limit > 0",
+            name="ck_plans_daily_limit_positive",
+        ),
+        CheckConstraint(
+            "download_limit_period IN ('daily', 'weekly')",
+            name="ck_plans_download_limit_period",
+        ),
+        CheckConstraint(
+            "max_file_size_mb IS NULL OR max_file_size_mb > 0",
+            name="ck_plans_file_size_positive",
+        ),
+        CheckConstraint(
+            "max_quality IS NULL OR max_quality > 0",
+            name="ck_plans_quality_positive",
+        ),
+        CheckConstraint(
+            "max_concurrent_downloads BETWEEN 1 AND 3",
+            name="ck_plans_concurrency_range",
+        ),
+        CheckConstraint(
+            "sort_order >= 0",
+            name="ck_plans_sort_order_nonnegative",
+        ),
+    )
 
     id: Mapped[int] = mapped_column(
         Integer,
@@ -18,6 +61,14 @@ class Plan(Base, TimestampMixin):
     name: Mapped[str] = mapped_column(
         String(100),
         nullable=False,
+    )
+
+    # Optional for compatibility with legacy/internal rows. Admin-created
+    # plans always receive a value and public English catalogs fall back to
+    # the Persian name only when an older row has not been edited yet.
+    name_en: Mapped[str | None] = mapped_column(
+        String(100),
+        nullable=True,
     )
 
     slug: Mapped[str] = mapped_column(
@@ -32,10 +83,19 @@ class Plan(Base, TimestampMixin):
         nullable=True,
     )
 
+    description_en: Mapped[str | None] = mapped_column(
+        Text,
+        nullable=True,
+    )
+
     price: Mapped[Decimal] = mapped_column(
         Numeric(12, 2),
         default=Decimal("0"),
         nullable=False,
+    )
+
+    price_usdt: Mapped[Decimal | None] = mapped_column(
+        Numeric(12, 4), nullable=True
     )
 
     duration_days: Mapped[int] = mapped_column(
@@ -43,22 +103,28 @@ class Plan(Base, TimestampMixin):
         nullable=False,
     )
 
-    daily_download_limit: Mapped[int] = mapped_column(
+    daily_download_limit: Mapped[int | None] = mapped_column(
         Integer,
-        default=10,
+        nullable=True,
+    )
+
+    # The numeric limit is retained for compatibility with existing plans;
+    # this field determines the window in which it is consumed.
+    download_limit_period: Mapped[str] = mapped_column(
+        String(16),
+        default="daily",
+        server_default="daily",
         nullable=False,
     )
 
-    max_file_size_mb: Mapped[int] = mapped_column(
+    max_file_size_mb: Mapped[int | None] = mapped_column(
         Integer,
-        default=100,
-        nullable=False,
+        nullable=True,
     )
 
-    max_quality: Mapped[int] = mapped_column(
+    max_quality: Mapped[int | None] = mapped_column(
         Integer,
-        default=720,
-        nullable=False,
+        nullable=True,
     )
 
     ai_enabled: Mapped[bool] = mapped_column(
@@ -73,8 +139,48 @@ class Plan(Base, TimestampMixin):
         nullable=False,
     )
 
+    is_unlimited: Mapped[bool] = mapped_column(
+        Boolean,
+        default=False,
+        nullable=False,
+    )
+
+    max_concurrent_downloads: Mapped[int] = mapped_column(
+        Integer,
+        default=1,
+        server_default=text("1"),
+        nullable=False,
+    )
+
+    forced_join_required: Mapped[bool] = mapped_column(
+        Boolean,
+        default=False,
+        server_default=false(),
+        nullable=False,
+    )
+
+    sort_order: Mapped[int] = mapped_column(
+        Integer,
+        default=0,
+        server_default=text("0"),
+        nullable=False,
+    )
+
+    is_system: Mapped[bool] = mapped_column(
+        Boolean,
+        default=False,
+        server_default=false(),
+        nullable=False,
+    )
+
     is_active: Mapped[bool] = mapped_column(
         Boolean,
         default=True,
+        server_default=true(),
         nullable=False,
+    )
+
+    deleted_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
     )

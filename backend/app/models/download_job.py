@@ -9,6 +9,7 @@ from sqlalchemy import (
     Float,
     ForeignKey,
     Integer,
+    JSON,
     String,
     Text,
 )
@@ -45,6 +46,9 @@ class DownloadJob(
 ):
     __tablename__ = "download_jobs"
 
+    # File lifecycle only. Source links, ownership and activity remain for admins.
+    files_removed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
+
     # ========================================================
     # Primary key
     # ========================================================
@@ -67,6 +71,31 @@ class DownloadJob(
             ondelete="SET NULL",
         ),
         index=True,
+        nullable=True,
+    )
+
+    plan_id: Mapped[
+        Optional[int]
+    ] = mapped_column(
+        ForeignKey(
+            "plans.id",
+            ondelete="SET NULL",
+        ),
+        index=True,
+        nullable=True,
+    )
+
+    plan_name_snapshot: Mapped[
+        Optional[str]
+    ] = mapped_column(
+        String(100),
+        nullable=True,
+    )
+
+    plan_limits_snapshot: Mapped[
+        Optional[dict]
+    ] = mapped_column(
+        JSON,
         nullable=True,
     )
 
@@ -99,6 +128,16 @@ class DownloadJob(
         Optional[str]
     ] = mapped_column(
         String(50),
+        nullable=True,
+    )
+
+    # Requested final container/extension.  ``None`` preserves the legacy
+    # downloader behaviour; audio extraction and conversion jobs set this to
+    # one of the validated media output formats.
+    output_format: Mapped[
+        Optional[str]
+    ] = mapped_column(
+        String(16),
         nullable=True,
     )
 
@@ -236,6 +275,16 @@ class DownloadJob(
             timezone=True
         ),
         nullable=True,
+    )
+
+    delivered_at: Mapped[
+        Optional[datetime]
+    ] = mapped_column(
+        DateTime(
+            timezone=True
+        ),
+        nullable=True,
+        index=True,
     )
 
     paused_at: Mapped[

@@ -1,0 +1,263 @@
+from datetime import datetime
+from decimal import Decimal
+import re
+from typing import Any, Literal
+from uuid import UUID
+
+from pydantic import BaseModel, Field, computed_field, field_validator, model_validator
+
+from app.core.language import effective_language as resolve_effective_language
+from app.models.payment import PaymentStatus
+from app.schemas.coupon import normalize_coupon_code
+
+
+class PaymentOfferResponse(BaseModel):
+    coupon: dict[str, Any] = Field(default_factory=dict)
+    code: str
+    label: str
+    duration_days: int = Field(gt=0)
+    price: Decimal
+    currency: Literal["IRT", "USDT"] = "IRT"
+    daily_download_limit: int | None
+    max_file_size_mb: int | None
+    max_quality: int | None
+    max_concurrent_downloads: int
+    priority_processing: bool
+    forced_join_required: bool
+    download_limit_period: Literal["daily", "weekly"] = "daily"
+    description: str | None = None
+    description_fa: str | None = None
+    description_en: str | None = None
+
+
+class PaymentDestinationResponse(BaseModel):
+    type: Literal["card", "usdt", "credit"] = "card"
+    id: int | None = None
+    label: str | None = None
+    card_number: str | None = None
+    card_holder: str | None = None
+    bank_name: str | None = None
+    network_name: str | None = None
+    network_code: str | None = None
+    address: str | None = None
+    asset_symbol: str | None = None
+    contract_address: str | None = None
+    explorer_url: str | None = None
+    confirmations_required: int | None = None
+
+
+class PaymentReceiptRulesResponse(BaseModel):
+    max_size_mb: int
+    allowed_types: list[str]
+
+
+class PaymentConfigurationResponse(BaseModel):
+    offers: list[PaymentOfferResponse]
+    destination: PaymentDestinationResponse | None
+    destinations: list[PaymentDestinationResponse] = Field(default_factory=list)
+    receipt: PaymentReceiptRulesResponse
+
+
+class PaymentCreate(BaseModel):
+    order_id: UUID | None = None
+    telegram_id: int = Field(gt=0)
+    offer_code: str = Field(min_length=3, max_length=100)
+    currency: Literal["IRT", "USDT"] = "IRT"
+    payment_card_id: int | None = Field(default=None, gt=0)
+    usdt_destination_id: int | None = Field(default=None, gt=0)
+    txid: str | None = Field(default=None, min_length=16, max_length=255)
+    receipt_file_id: str | None = Field(default=None, min_length=1, max_length=512)
+    receipt_file_unique_id: str | None = Field(
+        default=None,
+        max_length=255,
+    )
+    receipt_file_type: Literal["photo", "document"] | None = None
+    receipt_file_size: int | None = Field(default=None, ge=0)
+    receipt_mime_type: str | None = Field(default=None, max_length=128)
+    receipt_file_name: str | None = Field(default=None, max_length=255)
+    user_receipt_message_id: int | None = Field(default=None, gt=0)
+
+    @field_validator("offer_code")
+    @classmethod
+    def normalize_offer_code(cls, value: str) -> str:
+        return value.strip().lower()
+
+    @field_validator("txid")
+    @classmethod
+    def normalize_txid(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        if not re.fullmatch(r"[A-Za-z0-9_-]{16,255}", normalized):
+            raise ValueError(
+                "TxID must contain 16-255 letters, digits, underscores, or hyphens"
+            )
+        return normalized
+
+    @model_validator(mode="after")
+    def destination_matches_currency(self):
+        if self.currency == "USDT" and self.usdt_destination_id is None:
+            raise ValueError("USDT destination is required")
+        if self.currency == "USDT" and self.txid is None:
+            raise ValueError("TxID is required for USDT payment")
+        if self.currency == "USDT" and self.payment_card_id is not None:
+            raise ValueError("Payment card is not valid for USDT payment")
+        if self.currency == "IRT" and self.usdt_destination_id is not None:
+            raise ValueError("USDT destination is not valid for IRT payment")
+        if self.currency == "IRT" and self.txid is not None:
+            raise ValueError("TxID is not valid for IRT payment")
+        if self.currency == "IRT" and (
+            self.receipt_file_id is None or self.receipt_file_type is None
+        ):
+            raise ValueError("Receipt image or PDF is required for IRT payment")
+        if (self.receipt_file_id is None) != (self.receipt_file_type is None):
+            raise ValueError("Receipt file id and type must be supplied together")
+        return self
+
+
+class PaymentAdminMessageUpdate(BaseModel):
+    admin_chat_id: int
+    admin_message_id: int = Field(gt=0)
+    admin_message_thread_id: int | None = Field(default=None, gt=0)
+
+
+class PaymentAdminReview(BaseModel):
+    admin_telegram_id: int = Field(gt=0)
+
+
+class PaymentReject(PaymentAdminReview):
+    reason: str = Field(min_length=2, max_length=1000)
+
+    @field_validator("reason")
+    @classmethod
+    def normalize_reason(cls, value: str) -> str:
+        return value.strip()
+
+
+class PaymentResponse(BaseModel):
+    discount_snapshot: dict[str, Any] = Field(default_factory=dict)
+    id: int
+    order_id: UUID | None = None
+    user_id: int
+    plan_id: int
+    amount: Decimal
+    offer_code: str
+    duration_months: Literal[1, 3, 6, 12] | None
+    duration_days: int
+    plan_name_snapshot: str
+    plan_limits_snapshot: dict[str, Any]
+    status: PaymentStatus
+    receipt_file_id: str | None
+    receipt_file_unique_id: str | None
+    receipt_file_type: str | None
+    receipt_file_size: int | None
+    receipt_mime_type: str | None
+    receipt_file_name: str | None
+    user_receipt_message_id: int | None
+    admin_chat_id: int | None
+    admin_message_id: int | None
+    admin_message_thread_id: int | None
+    reviewed_by_telegram_id: int | None
+    reviewed_at: datetime | None
+    rejection_reason: str | None
+    subscription_id: int | None
+    payment_method: str
+    payment_card_id: int | None
+    payment_destination_snapshot: dict[str, Any]
+    txid: str | None
+    usdt_network_code: str | None
+    subscription_change_type: str | None
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class PaymentUserResponse(BaseModel):
+    telegram_id: int
+    username: str | None
+    first_name: str | None
+    last_name: str | None
+    language_code: str | None
+    preferred_language: str | None
+    is_admin: bool
+
+    @computed_field(return_type=str)
+    @property
+    def effective_language(self) -> str:
+        return resolve_effective_language(
+            preferred_language=self.preferred_language,
+            telegram_language_code=self.language_code,
+        )
+
+    model_config = {"from_attributes": True}
+
+
+class SubscriptionResponse(BaseModel):
+    id: int
+    plan_id: int
+    started_at: datetime
+    expires_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class PaymentActionResponse(BaseModel):
+    payment: PaymentResponse
+    user: PaymentUserResponse
+    subscription: SubscriptionResponse | None = None
+    already_reviewed: bool = False
+    already_submitted: bool = False
+
+
+class PaymentOrderCreate(BaseModel):
+    coupon_code: str | None = None
+
+    @field_validator("coupon_code", mode="before")
+    @classmethod
+    def coupon(cls, value):
+        return None if value is None else normalize_coupon_code(value)
+
+    telegram_id: int = Field(gt=0)
+    offer_code: str = Field(min_length=3, max_length=100)
+    currency: Literal["IRT", "USDT"]
+    method: Literal["manual", "credit"] = "manual"
+    usdt_destination_id: int | None = Field(default=None, gt=0)
+
+    @model_validator(mode="after")
+    def validate_destination(self):
+        self.offer_code = self.offer_code.strip().lower()
+        if (self.currency == "USDT" and self.method == "manual") != (self.usdt_destination_id is not None):
+            raise ValueError("Choose a network for USDT only")
+        return self
+
+
+class PaymentOrderActor(BaseModel):
+    telegram_id: int = Field(gt=0)
+
+
+class PaymentOrderResponse(BaseModel):
+    id: UUID
+    status: Literal["open", "submitted", "cancelled"]
+    currency: Literal["IRT", "USDT"]
+    offer: PaymentOfferResponse
+    destination: PaymentDestinationResponse
+    receipt: PaymentReceiptRulesResponse
+    created_at: datetime
+    payment_id: int | None = None
+
+
+class CurrentSubscriptionResponse(BaseModel):
+    scheduled: list[dict[str, Any]] = Field(default_factory=list)
+    is_active: bool
+    plan_slug: str | None = None
+    plan_name: str | None = None
+    plan_name_en: str | None = None
+    started_at: datetime | None = None
+    expires_at: datetime | None = None
+    duration_days: int | None = None
+    registered_at: datetime | None = None
+    downloads_done: int = 0
+    daily_download_limit: int | None = None
+    download_limit_period: Literal["daily", "weekly"] = "daily"
+    remaining_downloads: int | None = None

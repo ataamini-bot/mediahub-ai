@@ -12,9 +12,9 @@
 
 ## وضعیت پروژه
 
-**نامزد انتشار نسخهٔ ۱: `v1.0.0-rc.1`.** کد فعلی در شاخهٔ [`feature/admin-foundation`](https://github.com/ataamini-bot/mediahub-ai/tree/feature/admin-foundation) قرار دارد. این راهنما مربوط به همین نامزد انتشار است؛ شاخهٔ پیش‌فرض مخزن ممکن است نسخهٔ قدیمی‌تری داشته باشد.
+**نامزد انتشار نسخهٔ ۱: `v1.0.0-rc.1`.** [فهرست پذیرش نسخهٔ ۱](docs/V1_RELEASE.md) نتیجهٔ آزمون‌ها و مراحل باقی‌مانده تا انتشار پایدار را نشان می‌دهد.
 
-دستور نصب زیر از کامیت مشخص `71ba5a1a5daa2183f730d5d82fdc00813b261283` استفاده می‌کند که [آزمون‌های CI](https://github.com/ataamini-bot/mediahub-ai/actions/runs/37816641875) آن موفق بوده‌اند. انتشار پایدار نسخهٔ ۱ همچنان به تکمیل تست‌های زنده و بررسی استقرار وابسته است.
+دستور نصب زیر از کامیت مشخص `16775b765c501e3afe2ad18eff8fb86afd6c0743` استفاده می‌کند که [آزمون‌های CI](https://github.com/ataamini-bot/mediahub-ai/actions/runs/42596467273) آن موفق بوده‌اند. انتشار پایدار نسخهٔ ۱ همچنان به تکمیل تست‌های زنده و بررسی استقرار وابسته است.
 
 ## امکانات
 
@@ -22,6 +22,7 @@
 
 - دانلود از لینک‌های عمومی پشتیبانی‌شده، از جمله YouTube، محتوای عمومی Instagram، TikTok، Facebook، X، Pinterest و Threads.
 - انتخاب کیفیت‌های موجود ویدئو تا 4K، مطابق امکانات منبع و تنظیمات پلن.
+- پس از انتخاب کیفیت، کاربر می‌تواند دستگاه پخش را انتخاب کند تا خروجی مناسب آن آماده شود.
 - استخراج صدا، کاور و توضیحات، در صورت موجودبودن.
 - تبدیل رسانهٔ آپلودشده به فرمت‌های صوتی و ویدئویی پشتیبانی‌شده.
 - دریافت فایل با نامی برگرفته از عنوان رسانهٔ اصلی.
@@ -49,6 +50,7 @@
 - نقش‌ها و دسترسی‌های مدیران و گزارش فعالیت آن‌ها.
 - پیام همگانی با انتخاب مخاطب و زبان، پیش‌نمایش، تأیید، صف پایدار و گزارش ارسال.
 - آمار دانلود و پرداخت.
+- مدیر مجاز می‌تواند در چت خصوصی، با شناسهٔ عددی تلگرام کاربر، فایل اکسل لینک‌های دانلود او را به ترتیب زمان تهران بگیرد.
 - تاپیک‌های گزارش Monitoring، Payments، Backups، System و Support.
 - بکاپ رمزنگاری‌شدهٔ زمان‌بندی‌شده و بررسی صحت بازیابی.
 
@@ -74,7 +76,7 @@
 ```bash
 (
   set -euo pipefail
-  release='71ba5a1a5daa2183f730d5d82fdc00813b261283'
+  release='16775b765c501e3afe2ad18eff8fb86afd6c0743'
   sudo apt-get update
   sudo apt-get install -y ca-certificates curl
   installer="$(mktemp /tmp/mediahub-install.XXXXXX)"
@@ -165,7 +167,7 @@ sudo bash scripts/check_launch.sh
 
 به‌روزرسانی پایدار به تگ منتشرشده و ایمیج‌های همان نسخه نیاز دارد. در تنظیم منبع به‌روزرسانی می‌توان مخزن Git با HTTPS و رجیستری کانتینر را مشخص کرد. پیش از تغییر ساختار دیتابیس، بکاپ بررسی‌شده تهیه می‌شود و ایمیج‌های قبلی برنامه برای بازگشت سازگار نگه داشته می‌شوند. بازگشت نسخهٔ برنامه، دیتابیس را خودکار به ساختار قبلی برنمی‌گرداند.
 
-مراحل کامل و تفاوت بازیابی روی نصب موجود با بازیابی روی سرور تازه در [راهنمای نصب و بازیابی](https://github.com/ataamini-bot/mediahub-ai/blob/feature/admin-foundation/docs/INSTALLATION.md) آمده است.
+مراحل کامل و تفاوت بازیابی روی نصب موجود با بازیابی روی سرور تازه در [راهنمای نصب و بازیابی](docs/INSTALLATION.md) آمده است.
 
 ## پاک‌سازی رسانه و داده‌های نگهداری‌شده
 
@@ -173,7 +175,7 @@ sudo bash scripts/check_launch.sh
 
 لینک‌های منبع و مشخصات دانلود برای گزارش فعالیت مدیر، سهمیه‌ها و مدیریت سرویس در دیتابیس باقی می‌مانند. سوابق پرداخت، اشتراک و اعتبار داخلی هم نگهداری می‌شوند. کاربر منوی تاریخچهٔ دانلود ندارد و لینک کامل منبع در جزئیات فایل ارسالی نشان داده نمی‌شود. بکاپ دیتابیس شامل سوابق نگهداری‌شده است.
 
-حذف فایل از سرور، نسخه‌ای را که قبلاً در تلگرام ارسال شده حذف نمی‌کند. جزئیات رفتار در [راهنمای پاک‌سازی فایل رسانه](https://github.com/ataamini-bot/mediahub-ai/blob/feature/admin-foundation/docs/MEDIA_FILE_CLEANUP.md) آمده است.
+حذف فایل از سرور، نسخه‌ای را که قبلاً در تلگرام ارسال شده حذف نمی‌کند. جزئیات رفتار در [راهنمای پاک‌سازی فایل رسانه](docs/MEDIA_FILE_CLEANUP.md) آمده است.
 
 ## معماری
 
@@ -204,14 +206,14 @@ sudo bash scripts/check_launch.sh
 
 ## مستندات و بررسی صحت
 
-- [نصب، تنظیم تلگرام، به‌روزرسانی و بازیابی](https://github.com/ataamini-bot/mediahub-ai/blob/feature/admin-foundation/docs/INSTALLATION.md)
-- [عملیات عرضه و تست پذیرش](https://github.com/ataamini-bot/mediahub-ai/blob/feature/admin-foundation/docs/LAUNCH_OPERATIONS.md)
-- [نام فایل و خروجی‌های مرتبط](https://github.com/ataamini-bot/mediahub-ai/blob/feature/admin-foundation/docs/MEDIA_OUTPUTS.md)
-- [تبدیل رسانه](https://github.com/ataamini-bot/mediahub-ai/blob/feature/admin-foundation/docs/MEDIA_CONVERSION.md)
-- [پیام همگانی](https://github.com/ataamini-bot/mediahub-ai/blob/feature/admin-foundation/docs/BROADCASTS.md)
-- [اعتبار داخلی](https://github.com/ataamini-bot/mediahub-ai/blob/feature/admin-foundation/docs/INTERNAL_CREDIT.md)
-- [کد تخفیف](https://github.com/ataamini-bot/mediahub-ai/blob/feature/admin-foundation/docs/COUPONS.md)
-- [پاک‌سازی رسانه و سابقهٔ فعالیت](https://github.com/ataamini-bot/mediahub-ai/blob/feature/admin-foundation/docs/MEDIA_FILE_CLEANUP.md)
+- [نصب، تنظیم تلگرام، به‌روزرسانی و بازیابی](docs/INSTALLATION.md)
+- [عملیات عرضه و تست پذیرش](docs/LAUNCH_OPERATIONS.md)
+- [نام فایل و خروجی‌های مرتبط](docs/MEDIA_OUTPUTS.md)
+- [تبدیل رسانه](docs/MEDIA_CONVERSION.md)
+- [پیام همگانی](docs/BROADCASTS.md)
+- [اعتبار داخلی](docs/INTERNAL_CREDIT.md)
+- [کد تخفیف](docs/COUPONS.md)
+- [پاک‌سازی رسانه و سابقهٔ فعالیت](docs/MEDIA_FILE_CLEANUP.md)
 
 CI آزمون‌های Backend، Bot و نصاب را به همراه نصب Docker در محیط جدا و آزمایش بکاپ و بازیابی اجرا می‌کند. عملکرد زندهٔ تلگرام و دسترس‌پذیری سایت‌های منبع به تست پذیرش جداگانه نیاز دارند.
 

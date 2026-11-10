@@ -1,7 +1,7 @@
 fastapi
 uvicorn[standard]
 
-sqlalchemy
+sqlalchemy[asyncio]
 asyncpg
 psycopg[binary]
 alembic
@@ -13,13 +13,17 @@ redis
 celery
 
 python-jose[cryptography]
+cryptography
 passlib[bcrypt]
 python-multipart
 
 httpx
 aiofiles
+XlsxWriter==3.2.9
 
-yt-dlp
+yt-dlp[default,curl-cffi]
+# Keep the plugin and docker-compose.yml provider on the same release.
+bgutil-ytdlp-pot-provider==2.0.2
 
 structlog
 

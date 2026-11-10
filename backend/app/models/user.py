@@ -1,7 +1,15 @@
 import enum
 from datetime import datetime
 
-from sqlalchemy import BigInteger, Boolean, DateTime, Enum, Integer, String
+from sqlalchemy import (
+    BigInteger,
+    Boolean,
+    CheckConstraint,
+    DateTime,
+    Enum,
+    Integer,
+    String,
+)
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base, TimestampMixin
@@ -15,6 +23,13 @@ class UserStatus(str, enum.Enum):
 
 class User(Base, TimestampMixin):
     __tablename__ = "users"
+    __table_args__ = (
+        CheckConstraint(
+            "preferred_language IS NULL "
+            "OR preferred_language IN ('fa', 'en')",
+            name="ck_users_preferred_language",
+        ),
+    )
 
     id: Mapped[int] = mapped_column(
         Integer,
@@ -49,6 +64,13 @@ class User(Base, TimestampMixin):
         nullable=True,
     )
 
+    # Explicit choice made inside the bot.  ``language_code`` above is
+    # Telegram-provided metadata and must not overwrite this preference.
+    preferred_language: Mapped[str | None] = mapped_column(
+        String(5),
+        nullable=True,
+    )
+
     status: Mapped[UserStatus] = mapped_column(
         Enum(UserStatus),
         default=UserStatus.ACTIVE,
@@ -65,3 +87,7 @@ class User(Base, TimestampMixin):
         DateTime(timezone=True),
         nullable=True,
     )
+
+    # Reset the accounting window without deleting delivery or financial history.
+    quota_reset_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    conversion_quota_reset_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
