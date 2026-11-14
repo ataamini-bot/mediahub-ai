@@ -24,6 +24,7 @@ celery_app.conf.update(
 celery_app.conf.imports = (
     "app.workers.tasks.health",
     "app.workers.tasks.download",
+    "app.workers.tasks.media_tools",
 )
 
 

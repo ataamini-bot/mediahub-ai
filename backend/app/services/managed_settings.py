@@ -14,6 +14,7 @@ SettingKind = Literal[
     "boolean",
     "integer",
     "timezone",
+    "amount",
     "string_map",
     "style_map",
     "home_layout",
@@ -54,6 +55,8 @@ BUTTON_KEYS = frozenset(
         "language",
         "support",
         "convert",
+    "music",
+    "portrait",
         "tutorial",
         "faq",
         "admin",
@@ -68,6 +71,8 @@ HOME_MENU_BUTTON_KEYS = (
     "support",
     "language",
     "convert",
+    "music",
+    "portrait",
     "tutorial",
     "faq",
     "admin",
@@ -199,11 +204,36 @@ MANAGED_SETTINGS: dict[str, ManagedSetting] = {
 }
 
 
+from app.tool_texts import TOOL_TEXTS, validate_tool_text
+for _language in ("fa", "en"):
+    _key = f"bot.tool_texts.{_language}"
+    MANAGED_SETTINGS[_key] = ManagedSetting(key=_key, category="bot_content", kind="string_map",
+        default={}, label_fa=f"متن‌های آهنگ و عکس ({_language})", description_fa="پیام‌ها و دکمه‌های آهنگ و عکس",
+        allowed_keys=frozenset(TOOL_TEXTS))
+
+
+for _currency in ("irt", "usdt"):
+    _key = f"portrait.price_{_currency}"
+    MANAGED_SETTINGS[_key] = ManagedSetting(key=_key, category="payments", kind="amount", default="0",
+        label_fa="قیمت تک عکس (" + ("تومان" if _currency == "irt" else "USDT") + ")",
+        description_fa="قیمت یک عکس بدون اشتراک؛ صفر یعنی غیرفعال")
+
+
 def validate_managed_setting(key: str, value: Any) -> Any:
     definition = MANAGED_SETTINGS.get(key)
     if definition is None:
         return value
 
+    if definition.kind == "amount":
+        from decimal import Decimal, InvalidOperation
+        try:
+            amount = Decimal(str(value))
+            unit = Decimal("1") if key.endswith("_irt") else Decimal("0.0001")
+            if not amount.is_finite() or not 0 <= amount <= 1_000_000_000_000 or amount != amount.quantize(unit):
+                raise InvalidOperation
+            return format(amount.quantize(unit), "f")
+        except (InvalidOperation, ValueError):
+            raise SettingValidationError("Invalid price") from None
     if definition.kind == "boolean":
         if not isinstance(value, bool):
             raise SettingValidationError("Setting value must be boolean")
@@ -242,6 +272,11 @@ def validate_managed_setting(key: str, value: Any) -> Any:
                 raise SettingValidationError("Text setting values cannot be blank")
             if len(rendered) > maximum:
                 raise SettingValidationError("Text setting value is too long")
+            if key.startswith("bot.tool_texts."):
+                try:
+                    rendered = validate_tool_text(raw_key, rendered)
+                except ValueError as exc:
+                    raise SettingValidationError(str(exc)) from None
             normalized[str(raw_key)] = rendered
         return normalized
 

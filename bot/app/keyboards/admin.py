@@ -495,8 +495,18 @@ def build_admin_plans_keyboard(plans: list[dict]) -> InlineKeyboardMarkup:
 
 
 def build_admin_plan_detail_keyboard(plan: dict) -> InlineKeyboardMarkup:
+    from app.middleware.interface import ui_language
     plan_id = int(plan["id"])
     rows: list[list[InlineKeyboardButton]] = []
+    english = ui_language.get() == "en"
+    for kind, fa, en in (("music", "🎵 تشخیص آهنگ", "🎵 Music recognition"), ("portrait", "📸 عکس پرسنلی", "📸 Portrait photos")):
+        configured = (plan.get("tool_limits") or {}).get(kind) or {}
+        period = configured.get("period", "daily")
+        period_label = ("Weekly" if period == "weekly" else "Daily") if english else ("هفتگی" if period == "weekly" else "روزانه")
+        rows.append([
+            InlineKeyboardButton(text=en if english else fa, callback_data=f"admin:plan:edit:{kind}:{plan_id}"),
+            InlineKeyboardButton(text=period_label, callback_data=f"admin:plan:toolperiod:{kind}:{plan_id}"),
+        ])
 
     if not plan.get("is_system"):
         rows.extend(

@@ -194,6 +194,8 @@ dp.include_router(broadcasts_router)
 dp.include_router(credit_router)
 dp.include_router(coupons_router)
 dp.include_router(coupon_checkout_router)
+from app.handlers.media_tools import router as media_tools_router
+dp.include_router(media_tools_router)
 dp.include_router(conversion_router)
 dp.include_router(
     experience_router

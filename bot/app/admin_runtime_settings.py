@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from typing import Literal
 
 
-SettingKind = Literal["boolean", "integer", "timezone"]
+SettingKind = Literal["boolean", "integer", "timezone", "amount"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -23,6 +23,10 @@ class RuntimeSettingDefinition:
 
 
 RUNTIME_SETTINGS: tuple[RuntimeSettingDefinition, ...] = (
+    RuntimeSettingDefinition(key="portrait.price_irt", category="payments", label="قیمت تکی عکس (تومان)",
+        description="قیمت ساخت یک عکس بدون اشتراک؛ صفر یعنی غیرفعال", kind="amount"),
+    RuntimeSettingDefinition(key="portrait.price_usdt", category="payments", label="قیمت تکی عکس (USDT)",
+        description="قیمت ساخت یک عکس برای زبان انگلیسی؛ صفر یعنی غیرفعال", kind="amount"),
     RuntimeSettingDefinition(
         key="bot.maintenance_mode",
         category="bot",

@@ -153,6 +153,11 @@ async def persistent_home_button(
         await send_conversion_prompt(message, state)
         return
 
+    if action in {"music", "portrait"}:
+        from app.handlers.media_tools import send_tool_prompt
+        await send_tool_prompt(message, state, action, message.from_user.id)
+        return
+
     if action in {"tutorial", "faq"}:
         await cleanup_staged_state(state)
         await state.clear()

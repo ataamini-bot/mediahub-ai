@@ -5,6 +5,7 @@ from typing import Any
 
 from app.i18n import HOME_BUTTON_ACTIONS, normalize_language, translate
 from app.services.backend import get_bot_configuration
+from app.tool_texts import TOOL_TEXTS
 
 
 CACHE_TTL_SECONDS = 30
@@ -24,6 +25,8 @@ HOME_MENU_BUTTON_KEYS = (
     "support",
     "language",
     "convert",
+    "music",
+    "portrait",
     "tutorial",
     "faq",
     "admin",
@@ -73,12 +76,15 @@ def fallback_configuration(language: str) -> dict[str, Any]:
     return {
         "language": normalized,
         "content": dict(FALLBACK_CONTENT[normalized]),
+        "tool_texts": {key: value[normalized] for key, value in TOOL_TEXTS.items()},
         "buttons": {
             "buy": translate(normalized, "home.buy"),
             "subscription": translate(normalized, "home.subscription"),
             "language": translate(normalized, "home.language"),
             "support": "🛟 پشتیبانی" if normalized == "fa" else "🛟 Support",
             "convert": translate(normalized, "home.convert"),
+            "music": translate(normalized, "home.music"),
+            "portrait": translate(normalized, "home.portrait"),
             "tutorial": "📘 آموزش استفاده" if normalized == "fa" else "📘 How to use",
             "faq": "❓ سوالات متداول" if normalized == "fa" else "❓ FAQ",
             "admin": translate(normalized, "home.admin"),
@@ -123,6 +129,7 @@ async def runtime_configuration(
         if not isinstance(result, dict):
             raise TypeError("Bot configuration response is not an object")
         fallback = fallback_configuration(normalized)
+        result["tool_texts"] = {**fallback["tool_texts"], **(result.get("tool_texts") or {})}
         content = result.get("content")
         buttons = result.get("buttons")
         result["content"] = {
@@ -165,6 +172,11 @@ async def all_runtime_configurations() -> tuple[dict[str, Any], dict[str, Any]]:
         runtime_configuration("en"),
     )
     return fa, en
+
+
+def cached_configuration(language):
+    cached = _cache.get(language)
+    return cached[1] if cached else {}
 
 
 def clear_runtime_configuration_cache() -> None:
@@ -223,6 +235,10 @@ def runtime_home_layout(configuration: dict) -> dict[str, Any]:
         for key in candidate_order:
             if key in HOME_MENU_BUTTON_KEYS and key not in cleaned:
                 cleaned.append(key)
+        if "convert" in cleaned:
+            for new_key in ("portrait", "music"):
+                if new_key not in cleaned:
+                    cleaned.insert(cleaned.index("convert") + 1, new_key)
         # A partial/corrupt setting must never hide a primary action. Append
         # missing keys in the default order while keeping every valid move.
         cleaned.extend(key for key in HOME_MENU_BUTTON_KEYS if key not in cleaned)
@@ -248,6 +264,8 @@ def action_for_runtime_text(
         "language": "language",
         "support": "support",
         "convert": "convert",
+        "music": "music",
+        "portrait": "portrait",
         "tutorial": "tutorial",
         "faq": "faq",
         "admin": "admin",

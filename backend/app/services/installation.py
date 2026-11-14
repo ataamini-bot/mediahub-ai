@@ -42,13 +42,16 @@ async def configure(db, payload):
     if action == "reconcile_restore":
         from app.services.broadcasts import cancel_restored_broadcasts
         from app.services.credit import reconcile_credit_notices_after_restore
+        from app.services.media_tools import reconcile_restored_tools
         result = await db.execute(update(DownloadJob).where(DownloadJob.status.in_([
             DownloadJobStatus.PENDING, DownloadJobStatus.PROCESSING, DownloadJobStatus.PAUSED
         ])).values(status=DownloadJobStatus.CANCELLED))
         broadcasts = await cancel_restored_broadcasts(db)
         notices = await reconcile_credit_notices_after_restore(db)
+        tools = await reconcile_restored_tools(db)
         AuditService(db).record(action="system.database_restored", target_type="database",
-            details={"unfinished_jobs_cancelled": result.rowcount, "credit_notices_uncertain": notices, **broadcasts})
+            details={"unfinished_jobs_cancelled": result.rowcount, "credit_notices_uncertain": notices,
+                     "media_tools_cancelled": tools, **broadcasts})
         return {"reconciled": True}
     telegram_id = settings.telegram_superadmin_id
     if not telegram_id:
@@ -66,6 +69,11 @@ async def configure(db, payload):
         raise ValueError("An active superadmin is required")
     if action == "bootstrap":
         return {"bootstrap": True}
+    if action in {"media_tools_status", "media_tools_configure"}:
+        from app.services.media_tool_config import configure_tool, read_config, public_config
+        if action == "media_tools_configure":
+            return await configure_tool(db, payload["configuration"], user)
+        return {kind: public_config(await read_config(db, kind)) for kind in ("music", "portrait")}
     if action == "forum":
         routes = payload["routes"]
         if set(routes["topics"]) != set(TOPICS):

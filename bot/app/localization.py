@@ -8,9 +8,12 @@ CATALOG = json.loads(Path(__file__).with_name('locales').joinpath('en.json').rea
 
 def tr(value):
     from app.middleware.interface import ui_language
-    if isinstance(value, str) and ui_language.get() == 'en':
-        return CATALOG.get(value, value)
-    return value
+    if not isinstance(value, str):
+        return value
+    from app.tool_texts import authored_copy
+    language = ui_language.get()
+    default = CATALOG.get(value, value) if language == 'en' else value
+    return authored_copy(value, language, default)
 
 
 def _resolve(value):

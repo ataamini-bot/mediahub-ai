@@ -251,6 +251,7 @@ class PlanManagementService:
         price: Decimal,
         price_usdt: Decimal | None = None,
         daily_download_limit: int | None,
+        tool_limits: dict | None = None,
         download_limit_period: str = "daily",
         max_file_size_mb: int,
         max_quality: int,
@@ -280,6 +281,7 @@ class PlanManagementService:
             ),
             duration_days=self.normalize_duration_days(duration_days),
             daily_download_limit=normalized_daily_limit,
+            tool_limits=self.normalize_tool_limits(tool_limits or {}),
             download_limit_period=self.normalize_download_limit_period(download_limit_period),
             max_file_size_mb=self.normalize_file_size_mb(max_file_size_mb),
             max_quality=self.normalize_quality(max_quality),
@@ -329,6 +331,7 @@ class PlanManagementService:
         price_usdt_supplied: bool = False,
         daily_download_limit: int | None = None,
         daily_limit_supplied: bool = False,
+        tool_limits: dict | None = None,
         download_limit_period: str | None = None,
         max_file_size_mb: int | None = None,
         max_quality: int | None = None,
@@ -402,6 +405,10 @@ class PlanManagementService:
             plan.daily_download_limit = normalized_limit
             plan.is_unlimited = normalized_limit is None
 
+        if tool_limits is not None:
+            # Patch one tool without resetting the other tool's quota.
+            plan.tool_limits = {**(plan.tool_limits or {}), **self.normalize_tool_limits(tool_limits)}
+
         if download_limit_period is not None:
             plan.download_limit_period = self.normalize_download_limit_period(download_limit_period)
 
@@ -468,6 +475,14 @@ class PlanManagementService:
         if result.scalar_one_or_none() is not None:
             raise PlanConflict("An active plan with this name already exists")
 
+    @staticmethod
+    def normalize_tool_limits(value):
+        from app.services.media_tool_config import validate_plan_tool_limits
+        try:
+            return validate_plan_tool_limits(value)
+        except ValueError as exc:
+            raise PlanValidationError("Tool limits require music/portrait, a limit from -1 to 10000, and daily/weekly period") from exc
+
     def _record_audit(
         self,
         *,
@@ -498,6 +513,7 @@ class PlanManagementService:
                     else None
                 ),
                 "daily_download_limit": plan.daily_download_limit,
+                "tool_limits": plan.tool_limits or {},
                 "download_limit_period": plan.download_limit_period,
                 "max_file_size_mb": plan.max_file_size_mb,
                 "max_quality": plan.max_quality,

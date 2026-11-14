@@ -108,6 +108,7 @@ async def test_free_plan_limits_are_editable_but_identity_is_protected():
                 actor_user_id=actor.id,
                 actor_telegram_id=telegram_id,
                 reason="Customize Free limitations",
+                tool_limits={"music": {"limit": 2, "period": "weekly"}, "portrait": {"limit": 0}},
                 daily_download_limit=5,
                 daily_limit_supplied=True,
                 max_file_size_mb=450,
@@ -117,6 +118,7 @@ async def test_free_plan_limits_are_editable_but_identity_is_protected():
                 forced_join_required=False,
             )
 
+            assert updated.tool_limits == {"music": {"limit": 2, "period": "weekly"}, "portrait": {"limit": 0, "period": "daily"}}
             assert updated.daily_download_limit == 5
             assert updated.max_file_size_mb == 450
             assert updated.max_quality == 1080

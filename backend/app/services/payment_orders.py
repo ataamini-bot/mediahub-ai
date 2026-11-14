@@ -88,6 +88,8 @@ class PaymentOrderService:
         await ensure_public_operation(self.session, "payments")
         offer = await get_payment_offer(self.session, data.offer_code, currency=data.currency)
         discount = None
+        if data.coupon_code and offer.purpose != "subscription":
+            raise PaymentOrderError("portrait_coupon_unavailable")
         if data.coupon_code:
             _, discount = await CouponService(self.session).eligible(data.coupon_code, data.currency, user.id, offer)
         management = PaymentManagementService(self.session)
@@ -107,7 +109,7 @@ class PaymentOrderService:
                 destination = legacy_payment_card_snapshot()
         language = "en" if data.currency == "USDT" else "fa"
         snapshot = PaymentOfferResponse(
-            code=offer.code, label=offer.label, duration_days=offer.duration_days,
+            code=offer.code, label=offer.label, purpose=offer.purpose, duration_days=offer.duration_days,
             price=offer.price, currency=data.currency, **offer.limits_snapshot(),
             description=offer.localized_description(language),
             description_fa=offer.description, description_en=offer.description_en,
