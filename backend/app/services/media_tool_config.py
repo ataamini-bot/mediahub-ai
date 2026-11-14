@@ -6,18 +6,16 @@ from sqlalchemy import select
 from app.models.app_setting import ApplicationSetting
 from app.services.application_settings import ApplicationSettingsService
 
-KINDS = ("music", "portrait")
-DEFAULTS = {"enabled": False, "per_user_daily": 2, "global_daily": 30,
-            "model": "gpt-image-2.6-flare"}
+KINDS = ("music",)
+DEFAULTS = {"enabled": False, "per_user_daily": 2, "global_daily": 30}
 
 
 class ToolConfiguration(BaseModel):
-    kind: Literal["music", "portrait"]
+    kind: Literal["music"]
     enabled: bool
     per_user_daily: int = Field(default=2, ge=1, le=100)
     global_daily: int = Field(default=30, ge=1, le=10000)
     token: SecretStr | None = None
-    model: Literal["gpt-image-2.6-flare", "gpt-image-2.6-sunburst", "gpt-image-2"] = "gpt-image-2.6-flare"
 
 
 class PlanToolLimit(BaseModel):

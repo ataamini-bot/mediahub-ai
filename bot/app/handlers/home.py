@@ -153,7 +153,7 @@ async def persistent_home_button(
         await send_conversion_prompt(message, state)
         return
 
-    if action in {"music", "portrait"}:
+    if action == "music":
         from app.handlers.media_tools import send_tool_prompt
         await send_tool_prompt(message, state, action, message.from_user.id)
         return

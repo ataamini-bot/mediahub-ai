@@ -491,22 +491,20 @@ class Console:
         print("UNINSTALL=OK DATA=PRESERVED")
 
     def tools(self):
-        print("\nOptional media tools: AudD music recognition / OpenAI portrait editing.")
+        print("\nOptional music recognition: AudD.")
         print("These providers bill your own account. No paid test request is sent by setup.")
         print("Music downloads use a separate public full-length source confirmed by the user.")
         current = self.local({"action": "media_tools_status"})
-        kind = {"1": "music", "2": "portrait"}[ask("1. Music recognition  2. Portrait photos", pattern=r"[12]")]
+        kind = "music"
         previous = current[kind]
         enabled = ask("Enable this tool? yes/no", default="yes" if previous["enabled"] else "no", pattern=r"yes|no") == "yes"
         configuration = {"kind": kind, "enabled": enabled,
-            "per_user_daily": previous["per_user_daily"], "global_daily": previous["global_daily"], "model": previous["model"]}
+            "per_user_daily": previous["per_user_daily"], "global_daily": previous["global_daily"]}
         if enabled:
             if not previous["configured"] or ask("Replace saved provider key? yes/no", default="no", pattern=r"yes|no") == "yes":
-                configuration["token"] = ask("AudD API token" if kind == "music" else "OpenAI API key", secret=True, pattern=r"[^\s]{10,512}")
+                configuration["token"] = ask("AudD API token", secret=True, pattern=r"[^\s]{10,512}")
             configuration["per_user_daily"] = int(ask("Daily attempts per user (1-100, bot quota timezone)", str(previous["per_user_daily"]), pattern=r"[1-9][0-9]?|100"))
             configuration["global_daily"] = int(ask("Daily attempts for the whole bot (1-10000)", str(previous["global_daily"]), pattern=r"[1-9][0-9]{0,3}|10000"))
-            if kind == "portrait":
-                configuration["model"] = ask("Image model", previous["model"], pattern=r"gpt-image-2(?:\.6-(?:flare|sunburst))?")
         self.local({"action": "media_tools_configure", "configuration": configuration})
         print("MEDIA_TOOLS=CONFIGURED. The bot reads this setting without a restart.")
 
@@ -517,7 +515,7 @@ class Console:
                    "6": ("Check system health", lambda: run(["bash", "scripts/check_launch.sh"], cwd=self.root)),
                    "7": ("Roll back application", self.rollback), "8": ("Configure update source", self.source),
                    "9": ("Uninstall containers (keep data)", self.uninstall),
-                   "10": ("Music recognition and portrait photos", self.tools)}
+                   "10": ("Music recognition", self.tools)}
         while True:
             print("\nMediaHub AI - Server Management")
             for key, (label, _) in options.items():

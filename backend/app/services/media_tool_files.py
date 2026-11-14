@@ -3,7 +3,7 @@ import os
 from pathlib import Path
 from uuid import UUID
 
-MAX_INPUT_BYTES = {"music": 25 * 1024**2, "portrait": 10 * 1024**2}
+MAX_INPUT_BYTES = {"music": 25 * 1024**2}
 
 
 def root():
@@ -26,7 +26,7 @@ def input_file(telegram_id, request_id, kind):
     return path
 
 
-def remove_files(telegram_id, request_id, *, keep_result=False):
+def remove_files(telegram_id, request_id):
     path = folder(telegram_id, request_id)
     # Never follow user symlinks or recurse into unexpected subdirectories.
     if path.is_dir():
@@ -34,8 +34,6 @@ def remove_files(telegram_id, request_id, *, keep_result=False):
             if temporary.is_file() or temporary.is_symlink():
                 temporary.unlink(missing_ok=True)
         for name in ("input", "sample.wav", "photo.png", "result.jpg", "result.tmp"):
-            if keep_result and name == "result.jpg":
-                continue
             (path / name).unlink(missing_ok=True)
         try:
             path.rmdir()

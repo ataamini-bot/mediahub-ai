@@ -11,7 +11,7 @@ from app.models.media_tool import MediaToolRequest
 from app.models.user import User, UserStatus
 from app.services.media_tool_config import read_worker_config
 from app.services.media_tool_files import folder, input_file, remove_files
-from app.services.media_tool_providers import ToolError, automatic_song_candidate, create_portrait, find_full_tracks, recognize_music
+from app.services.media_tool_providers import ToolError, automatic_song_candidate, find_full_tracks, recognize_music
 from app.workers.celery_app import celery_app
 
 logger = logging.getLogger(__name__)
@@ -28,11 +28,15 @@ def run_tool(request_id):
         if not row or row.status != "pending":
             return
         user = db.get(User, row.user_id)
+        if row.kind != "music":
+            row.status, row.error_code = "cancelled", "tool_disabled"
+            db.commit()
+            if user:
+                remove_files(user.telegram_id, row.id)
+            return
         config = read_worker_config(db, row.kind)
         if not user or user.status != UserStatus.ACTIVE or not config["enabled"] or not config["token"]:
             row.status, row.error_code = "cancelled", "tool_disabled"
-            from app.services.portrait_purchases import refund_failed_credit
-            refund_failed_credit(db, row)
             db.commit()
             if user:
                 remove_files(user.telegram_id, row.id)
@@ -66,8 +70,6 @@ def run_tool(request_id):
             logger.warning("Music sources ready: request=%s, count=%s, automatic=%s, elapsed_s=%.2f",
                            request_id, len(result["candidates"]), result["automatic_candidate"] is not None,
                            time.monotonic() - started)
-        else:
-            result = create_portrait(source, config, options)
     except ToolError as exc:
         error = exc.code
     except SoftTimeLimitExceeded:
@@ -76,7 +78,7 @@ def run_tool(request_id):
         # Do not log provider responses, credentials, photo bytes or file paths.
         error = "tool_failed"
     finally:
-        remove_files(telegram_id, request_id, keep_result=bool(result and kind == "portrait" and not error))
+        remove_files(telegram_id, request_id)
     with WorkerSessionLocal() as db:
         row = db.scalar(select(MediaToolRequest).where(MediaToolRequest.id == request_id).with_for_update())
         if not row or row.status != "processing":
@@ -87,6 +89,4 @@ def run_tool(request_id):
         row.status = "uncertain" if error == "provider_uncertain" else "failed" if error else "completed"
         if error or kind == "music":
             row.files_removed_at = row.completed_at
-        from app.services.portrait_purchases import refund_failed_credit
-        refund_failed_credit(db, row)
         db.commit()

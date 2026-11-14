@@ -73,7 +73,7 @@ async def configure(db, payload):
         from app.services.media_tool_config import configure_tool, read_config, public_config
         if action == "media_tools_configure":
             return await configure_tool(db, payload["configuration"], user)
-        return {kind: public_config(await read_config(db, kind)) for kind in ("music", "portrait")}
+        return {kind: public_config(await read_config(db, kind)) for kind in ("music",)}
     if action == "forum":
         routes = payload["routes"]
         if set(routes["topics"]) != set(TOPICS):

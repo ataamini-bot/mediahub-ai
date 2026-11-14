@@ -46,25 +46,13 @@ def test_runtime_overrides_language_html_and_invalid_fallback(monkeypatch):
         ui_language.reset(token)
 
 
-def test_portrait_offer_uses_separate_product_and_no_coupon():
-    item={'code':'portrait-once','purpose':'portrait','label':'One portrait','price':'1.2500'}
-    assert payments._find_offer({'offers':[], 'portrait_offer':item},'portrait-once') is item
-    token=ui_language.set('en')
-    try:
-        body=payments._offer_details_text(item,'en')
-        assert 'without a subscription' in body and '1.25' in body
-    finally:
-        ui_language.reset(token)
-    buttons=[b.callback_data for row in build_payment_offer_detail_keyboard('en',portrait=True).inline_keyboard for b in row]
-    assert 'credit:pay:start' in buttons and 'payment:offer:continue' in buttons
-    assert not any('coupon' in data for data in buttons)
 
 
 def test_both_free_and_paid_plan_have_separate_quota_controls():
     for system in (False, True):
         plan={'id':9,'is_system':system,'is_active':True,'is_deleted':False,'tool_limits':{'music':{'limit':3,'period':'weekly'}}}
         controls=[b.callback_data for row in build_admin_plan_detail_keyboard(plan).inline_keyboard for b in row]
-        for kind in ('music','portrait'):
+        for kind in ('music',):
             assert f'admin:plan:edit:{kind}:9' in controls
             assert f'admin:plan:toolperiod:{kind}:9' in controls
 

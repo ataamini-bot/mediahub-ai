@@ -29,9 +29,10 @@ def test_tools_are_localized_and_follow_conversion_in_main_menu(language):
     buttons = [b for r in build_home_reply_keyboard(language).keyboard for b in r]
     actions = [home_action_for_text(b.text) for b in buttons]
     position = actions.index("convert")
-    assert actions[position:position+3] == ["convert", "music", "portrait"]
+    assert actions[position:position+2] == ["convert", "music"]
+    assert "portrait" not in actions
     inline = [b.callback_data for r in build_home_keyboard(language).inline_keyboard for b in r]
-    assert "tool:open:music" in inline and "tool:open:portrait" in inline
+    assert "tool:open:music" in inline and "tool:open:portrait" not in inline
 
 
 def test_cleanup_unsubmitted_input_preserves_handed_off_file(tmp_path, monkeypatch):
@@ -47,23 +48,6 @@ def test_cleanup_unsubmitted_input_preserves_handed_off_file(tmp_path, monkeypat
     assert not path.exists()
 
 
-def test_confirmation_discloses_provider_and_normal_clothing(monkeypatch):
-    async def exercise():
-        context = state()
-        request_id = uuid4().hex
-        await context.update_data(tool_kind="portrait", tool_clothing="natural", tool_background="blue")
-        message = SimpleNamespace(answer=AsyncMock())
-        token = ui_language.set("en")
-        try:
-            await tools.confirmation(message, context, request_id)
-        finally:
-            ui_language.reset(token)
-        body = message.answer.await_args.args[0]
-        assert "OpenAI" not in body and "Keep my clothing" in body and "Light blue" in body
-        assert "external provider" in body and "official documents" in body
-        callbacks = [b.callback_data for r in message.answer.await_args.kwargs["reply_markup"].inline_keyboard for b in r]
-        assert all(len(v.encode()) <= 64 for v in callbacks)
-    asyncio.run(exercise())
 
 
 def test_duplicate_confirmation_reuses_durable_request_id(monkeypatch):
@@ -115,23 +99,6 @@ def test_no_full_source_never_sends_clip_audio(monkeypatch):
     asyncio.run(exercise())
 
 
-def test_portrait_duplicate_delivery_is_claimed_once(monkeypatch, tmp_path):
-    async def exercise():
-        monkeypatch.setattr(tools, "ROOT", tmp_path)
-        request_id = uuid4().hex
-        path = tools.tool_folder(42, request_id)
-        path.mkdir()
-        (path / "result.jpg").write_bytes(b"photo")
-        row = {"status": "completed", "kind": "portrait", "files_removed": False}
-        post = AsyncMock(side_effect=[{"claimed": True}, {"released": True}])
-        monkeypatch.setattr(tools, "_payment_request", post)
-        event = callback("")
-        await tools.show_result(event.message, 42, request_id, row)
-        await tools.show_result(event.message, 42, request_id, row)
-        event.message.answer_document.assert_awaited_once()
-        assert not (path / "result.jpg").exists()
-        assert post.await_count == 2
-    asyncio.run(exercise())
 
 
 def test_foreign_or_expired_confirmation_does_not_submit(monkeypatch):

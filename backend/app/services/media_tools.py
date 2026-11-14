@@ -45,11 +45,9 @@ async def submit(db, data):
     if user is None or user.status != UserStatus.ACTIVE:
         raise MediaToolError("access_denied", 403)
     existing = await db.get(MediaToolRequest, data.request_id)
-    options = {"clothing": data.clothing, "background": data.background} if data.kind == "portrait" else {}
-    if data.use_paid_credit:
-        if data.kind != "portrait":
-            raise MediaToolError("request_conflict", 422)
-        options["use_paid_credit"] = True
+    if data.kind != "music":
+        raise MediaToolError("tool_disabled", 410)
+    options = {}
     if data.kind == "music" and data.auto_mp3:
         options["auto_mp3"] = True
     if data.source_url is not None:
@@ -74,25 +72,16 @@ async def submit(db, data):
         MediaToolRequest.kind == data.kind, MediaToolRequest.created_at >= midnight))
     if totals.scalar_one() >= config["global_daily"]:
         raise MediaToolError("tool_global_limit", 429)
-    credit = None
-    if data.use_paid_credit:
-        from app.models.portrait_credit import PortraitCredit
-        credit = await db.scalar(select(PortraitCredit).where(PortraitCredit.user_id == user.id,
-            PortraitCredit.request_id.is_(None)).order_by(PortraitCredit.created_at).limit(1).with_for_update())
-        if credit is None:
-            raise MediaToolError("portrait_credit_missing", 409)
-    else:
-        limit, period = await plan_tool_limit(db, user.telegram_id, data.kind, config)
-        if limit == 0:
-            raise MediaToolError("tool_plan_disabled", 403)
-        window = quota_window_start_utc(period, timezone_name=timezone_name)
-        personal = await db.scalar(select(func.count()).where(MediaToolRequest.kind == data.kind,
-            MediaToolRequest.user_id == user.id, MediaToolRequest.created_at >= window,
-            ~MediaToolRequest.options["use_paid_credit"].as_boolean().is_(True)))
-        if limit != -1 and personal >= limit:
-            if period == "weekly":
-                raise MediaToolError("tool_weekly_limit", 429)
-            raise MediaToolError("tool_daily_limit", 429)
+    limit, period = await plan_tool_limit(db, user.telegram_id, data.kind, config)
+    if limit == 0:
+        raise MediaToolError("tool_plan_disabled", 403)
+    window = quota_window_start_utc(period, timezone_name=timezone_name)
+    personal = await db.scalar(select(func.count()).where(MediaToolRequest.kind == data.kind,
+        MediaToolRequest.user_id == user.id, MediaToolRequest.created_at >= window))
+    if limit != -1 and personal >= limit:
+        if period == "weekly":
+            raise MediaToolError("tool_weekly_limit", 429)
+        raise MediaToolError("tool_daily_limit", 429)
     if await db.scalar(select(MediaToolRequest.id).where(MediaToolRequest.user_id == user.id,
             MediaToolRequest.status.in_(("pending", "processing"))).limit(1)):
         raise MediaToolError("tool_busy")
@@ -103,9 +92,6 @@ async def submit(db, data):
             raise MediaToolError("input_expired", 422) from None
     row = MediaToolRequest(id=data.request_id, user_id=user.id, kind=data.kind, options=options, status="pending")
     db.add(row)
-    await db.flush()
-    if credit is not None:
-        credit.request_id = row.id
     await db.commit()
     return row, True
 
@@ -125,11 +111,6 @@ async def plan_tool_limit(db, telegram_id, kind, config):
 
 
 async def reconcile_restored_tools(db):
-    from app.models.portrait_credit import PortraitCredit
-    unstarted = select(MediaToolRequest.id).where(
-        MediaToolRequest.status == "pending", MediaToolRequest.started_at.is_(None))
-    await db.execute(update(PortraitCredit).where(
-        PortraitCredit.request_id.in_(unstarted)).values(request_id=None))
     # Restored inputs are intentionally absent from backups. In particular a
     # previously processing paid request must never be billed again.
     result = await db.execute(update(MediaToolRequest).where(MediaToolRequest.status.in_(
@@ -171,13 +152,15 @@ def sweep_tools(db, *, now=None):
         .where(MediaToolRequest.files_removed_at.is_(None)).with_for_update(of=MediaToolRequest, skip_locked=True)).all()
     active = set()
     for row, telegram_id in rows:
+        if row.kind != "music":
+            remove_files(telegram_id, row.id)
+            row.status, row.error_code, row.files_removed_at = "cancelled", "tool_disabled", now
+            continue
         stale = now - row.created_at > timedelta(minutes=15)
         if row.status in {"pending", "processing"} and stale:
             row.status = "uncertain" if row.started_at else "failed"
             row.error_code = "provider_uncertain" if row.started_at else "queue_expired"
             row.completed_at = now
-            from app.services.portrait_purchases import refund_failed_credit
-            refund_failed_credit(db, row)
         if row.status in {"pending", "processing"}:
             active.add(folder(telegram_id, row.id).name)
             continue
@@ -187,8 +170,6 @@ def sweep_tools(db, *, now=None):
         try:
             remove_files(telegram_id, row.id)
             row.files_removed_at = now
-            if row.status == "completed" and row.kind == "portrait":
-                row.status = "expired"
         except OSError:
             continue
     # Unconfirmed uploads are never queued; remove them after one hour.

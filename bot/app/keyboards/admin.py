@@ -499,7 +499,7 @@ def build_admin_plan_detail_keyboard(plan: dict) -> InlineKeyboardMarkup:
     plan_id = int(plan["id"])
     rows: list[list[InlineKeyboardButton]] = []
     english = ui_language.get() == "en"
-    for kind, fa, en in (("music", "🎵 تشخیص آهنگ", "🎵 Music recognition"), ("portrait", "📸 عکس پرسنلی", "📸 Portrait photos")):
+    for kind, fa, en in (("music", "🎵 تشخیص آهنگ", "🎵 Music recognition"),):
         configured = (plan.get("tool_limits") or {}).get(kind) or {}
         period = configured.get("period", "daily")
         period_label = ("Weekly" if period == "weekly" else "Daily") if english else ("هفتگی" if period == "weekly" else "روزانه")

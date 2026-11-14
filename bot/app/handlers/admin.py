@@ -303,7 +303,7 @@ def _admin_plan_text(plan: dict) -> str:
 def _plan_tool_limits_text(limits):
     english = ui_language.get() == "en"
     lines = []
-    for kind, fa, en in (("music", "تشخیص آهنگ", "Music recognition"), ("portrait", "عکس پرسنلی", "Portrait photos")):
+    for kind, fa, en in (("music", "تشخیص آهنگ", "Music recognition"),):
         value = limits.get(kind)
         if value is None:
             rendered = "Server daily default" if english else "پیش‌فرض روزانه سرور"
@@ -2099,7 +2099,7 @@ async def confirm_create_plan(
 
 @router.callback_query(
     F.data.regexp(
-        r"^admin:plan:edit:(name|name_en|description|description_en|duration|price|usdt|daily|size|quality|concurrency|order|music|portrait):\d+$"
+        r"^admin:plan:edit:(name|name_en|description|description_en|duration|price|usdt|daily|size|quality|concurrency|order|music):\d+$"
     )
 )
 async def start_edit_plan_field(
@@ -2150,7 +2150,7 @@ async def start_edit_plan_field(
                 "size": _tr("حداکثر حجم جدید را به MB وارد کنید (۱ تا ۱۹۰۰):"),
                 "order": _tr("ترتیب نمایش را وارد کنید؛ عدد کوچک‌تر بالاتر نمایش داده می‌شود:"),
             }
-            if field in {"music", "portrait"}:
+            if field in {"music"}:
                 prompts[field] = (
                     "Enter the attempt limit: 0 disables this tool, -1 is unlimited, and 1–10000 sets a cap. "
                     "Send default to use the server daily default. Change Daily/Weekly beside the tool button. "
@@ -2183,7 +2183,7 @@ async def receive_plan_edit_value(message: Message, state: FSMContext) -> None:
     changes: dict = {}
     error: str | None = None
 
-    if field in {"music", "portrait"}:
+    if field in {"music"}:
         normalized = raw_value.translate(str.maketrans("۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩", "01234567890123456789"))
         if normalized.lower() == "default":
             changes["tool_limits"] = {field: None}
@@ -2307,7 +2307,7 @@ async def select_plan_edit_choice(
     await callback.answer()
 
 
-@router.callback_query(F.data.regexp(r"^admin:plan:toolperiod:(music|portrait):\d+$"))
+@router.callback_query(F.data.regexp(r"^admin:plan:toolperiod:(music):\d+$"))
 async def toggle_plan_tool_period(callback: CallbackQuery, state: FSMContext):
     if not isinstance(callback.message, Message):
         return

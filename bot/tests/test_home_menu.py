@@ -31,7 +31,6 @@ def test_persistent_home_keyboard_is_localized_and_kept_open():
         "🌐 تغییر زبان | Language",
         "🔄 تبدیل فایل",
         "🎵 تشخیص آهنگ",
-        "📸 عکس پرسنلی",
         "📘 آموزش استفاده",
         "❓ سوالات متداول",
     ]
@@ -85,14 +84,13 @@ def test_persistent_home_keyboard_honors_admin_order_and_one_two_three_columns()
         configuration=configuration,
     )
 
-    assert [len(row) for row in keyboard.keyboard] == [3, 3, 3, 1]
+    assert [len(row) for row in keyboard.keyboard] == [3, 3, 3]
     assert _button_texts(keyboard) == [
         "🛟 Support",
         "💎 Buy subscription",
         "👤 My subscription",
         "🔄 Convert media",
         "🎵 Identify music",
-        "📸 Portrait photo",
         "🌐 Language",
         "❓ FAQ",
         "📘 How to use",
@@ -113,7 +111,7 @@ def test_persistent_home_keyboard_honors_admin_order_and_one_two_three_columns()
         include_admin=False,
         configuration=configuration,
     )
-    assert [len(row) for row in two_per_row.keyboard] == [2, 2, 2, 2, 1]
+    assert [len(row) for row in two_per_row.keyboard] == [2, 2, 2, 2]
 
 
 def test_persistent_home_labels_resolve_without_fuzzy_matching():

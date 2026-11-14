@@ -24,7 +24,6 @@ BUTTON_LABELS = {
     "support": "پشتیبانی",
     "convert": "تبدیل فایل",
     "music": "تشخیص آهنگ",
-    "portrait": "عکس پرسنلی",
     "tutorial": "آموزش استفاده",
     "faq": "سوالات متداول",
     "admin": "پنل مدیریت",
@@ -140,7 +139,7 @@ def build_home_layout_keyboard(language: str, layout: dict) -> InlineKeyboardMar
 def build_copy_section_keyboard(language: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text=_tr("🎵📸 متن‌های آهنگ و عکس"), callback_data=f"admin:copy:section:{language}:tools")],
+            [InlineKeyboardButton(text=_tr("🎵 متن‌های تشخیص آهنگ"), callback_data=f"admin:copy:section:{language}:tools")],
             [InlineKeyboardButton(text=_tr("🔎 جستجو در همه متن‌ها"), callback_data=f"admin:copy:search:{language}")],
             [
                 InlineKeyboardButton(

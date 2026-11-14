@@ -8,32 +8,11 @@
     "html": true,
     "scope": "tools"
   },
-  "b_portrait_photo_b_send": {
-    "label": "📸 ساخت عکس پرسنلی",
-    "fa": "📸 <b>ساخت عکس پرسنلی</b>\n\nیک عکس واضح از روبه‌رو با چهره و شانه‌های کامل بفرستید؛ برای کیفیت بهتر، آن را به‌صورت فایل ارسال کنید (JPG، PNG یا WebP، حداکثر ۱۰ مگابایت).\nبعد لباس و پس‌زمینه را انتخاب می‌کنید. نور و کنتراست به‌صورت ملایم اصلاح می‌شود و از تغییر چهره پرهیز می‌کنیم.\nعکس خودتان یا فردی را بفرستید که برای این ویرایش اجازه داده است.",
-    "en": "📸 <b>Portrait photo</b>\n\nSend a clear front-facing photo showing the whole face and shoulders. For best quality, send it as a file (JPG, PNG or WebP, up to 10 MB).\nNext choose clothing and background. We request mild lighting and contrast correction while preserving your facial features.\nUse your own photo or one you have permission to edit.",
-    "fields": [],
-    "maximum": 3000,
-    "html": true,
-    "scope": "tools"
-  },
   "confirm_to_send_a_sample": {
     "label": "با تأیید شما، نمونه‌ای از ۱۲ ثانیه اول فایل یا لینک برا",
     "fa": "با تأیید شما، نمونه‌ای از ۱۲ ثانیه اول فایل یا لینک برای شناسایی به سرویس بیرونی تشخیص آهنگ ارسال می‌شود. این تلاش از سهمیه تشخیص آهنگ پلن شما مصرف می‌کند. در صورت پیدا شدن یک منبع با تطبیق کافی، دانلود و ارسال MP3 ۳۲۰ خودکار شروع می‌شود و یک دانلود از سهمیه عادی مصرف می‌کند. در غیر این صورت ابتدا منبع را انتخاب می‌کنید.",
     "en": "Confirm to send a sample of the first 12 seconds of the file or link to an external music recognition service. This uses one recognition attempt from your plan. A single sufficiently matching full-track source will download and send automatically as MP3 320 kbps, using one normal download. Otherwise you choose the source first.",
     "fields": [],
-    "maximum": 3000,
-    "html": false,
-    "scope": "tools"
-  },
-  "clothing_clothes_background_ba": {
-    "label": "لباس: {clothes}",
-    "fa": "لباس: {clothes}\nپس‌زمینه: {background}\nاصلاح نور و کنتراست: ملایم\n\nبا تأیید شما، عکس برای ویرایش به سرویس بیرونی پردازش تصویر ارسال می‌شود و یک تلاش از سهمیه پلن مصرف می‌کند. فایل‌های موقت پردازش پس از ارسال خروجی از سرور ربات پاک می‌شوند. نگهداری داده در سرویس خارجی تابع مقررات همان سرویس است. خروجی را از نظر شباهت چهره بررسی کنید؛ پذیرش آن برای مدارک رسمی تضمین نمی‌شود.",
-    "en": "Clothing: {clothes}\nBackground: {background}\nLighting and contrast: mild\n\nConfirm to send your photo to an external image editing service and use one attempt from your plan. Temporary processing files are removed from this bot's server after delivery. The external provider has its own data retention policy. Check facial likeness; acceptance for official documents is not guaranteed.",
-    "fields": [
-      "background",
-      "clothes"
-    ],
     "maximum": 3000,
     "html": false,
     "scope": "tools"
@@ -73,15 +52,6 @@
     "en": "Cancel",
     "fields": [],
     "maximum": 64,
-    "html": false,
-    "scope": "tools"
-  },
-  "choose_the_background_color": {
-    "label": "رنگ پس‌زمینه را انتخاب کنید:",
-    "fa": "رنگ پس‌زمینه را انتخاب کنید:",
-    "en": "Choose the background color:",
-    "fields": [],
-    "maximum": 3000,
     "html": false,
     "scope": "tools"
   },
@@ -148,15 +118,6 @@
     "html": false,
     "scope": "tools"
   },
-  "please_send_a_photo": {
-    "label": "یک عکس ارسال کنید.",
-    "fa": "یک عکس ارسال کنید.",
-    "en": "Please send a photo.",
-    "fields": [],
-    "maximum": 3000,
-    "html": false,
-    "scope": "tools"
-  },
   "send_one_video_post_link": {
     "label": "یک لینک ویدئو یا پست بفرستید، یا ویس و فایل را مستقیم ا",
     "fa": "یک لینک ویدئو یا پست بفرستید، یا ویس و فایل را مستقیم ارسال کنید.",
@@ -186,28 +147,10 @@
     "html": false,
     "scope": "tools"
   },
-  "choose_the_clothing": {
-    "label": "لباس عکس را انتخاب کنید:",
-    "fa": "لباس عکس را انتخاب کنید:",
-    "en": "Choose the clothing:",
-    "fields": [],
-    "maximum": 3000,
-    "html": false,
-    "scope": "tools"
-  },
   "this_menu_expired": {
     "label": "این منو منقضی شده است.",
     "fa": "این منو منقضی شده است.",
     "en": "This menu expired.",
-    "fields": [],
-    "maximum": 180,
-    "html": false,
-    "scope": "tools"
-  },
-  "choose_clothing_and_background": {
-    "label": "ابتدا لباس و پس‌زمینه را انتخاب کنید.",
-    "fa": "ابتدا لباس و پس‌زمینه را انتخاب کنید.",
-    "en": "Choose clothing and background first.",
     "fields": [],
     "maximum": 180,
     "html": false,
@@ -269,24 +212,6 @@
     "html": false,
     "scope": "tools"
   },
-  "this_photo_was_already_sent": {
-    "label": "این عکس قبلاً ارسال شده یا فایل موقت آن منقضی شده است.",
-    "fa": "این عکس قبلاً ارسال شده یا فایل موقت آن منقضی شده است.",
-    "en": "This photo was already sent or its temporary file expired.",
-    "fields": [],
-    "maximum": 3000,
-    "html": false,
-    "scope": "tools"
-  },
-  "delivery_already_started_conta": {
-    "label": "ارسال این عکس قبلاً آغاز شده است. اگر فایل نرسیده، با پ",
-    "fa": "ارسال این عکس قبلاً آغاز شده است. اگر فایل نرسیده، با پشتیبانی تماس بگیرید.",
-    "en": "Delivery already started. Contact support if the photo did not arrive.",
-    "fields": [],
-    "maximum": 3000,
-    "html": false,
-    "scope": "tools"
-  },
   "the_song_was_identified_but": {
     "label": "آهنگ شناسایی شد، اما منبع قابل دانلود برای نسخه کامل پی",
     "fa": "آهنگ شناسایی شد، اما منبع قابل دانلود برای نسخه کامل پیدا نشد؛ دانلودی در حال انجام نیست و لازم نیست منتظر فایل بمانید. صدای کلیپ شما به‌جای آهنگ ارسال نمی‌شود.",
@@ -334,24 +259,6 @@
     "html": false,
     "scope": "tools"
   },
-  "your_portrait_is_ready_check": {
-    "label": "📸 عکس شما آماده است. پیش از استفاده، جزئیات چهره را برر",
-    "fa": "📸 عکس شما آماده است. پیش از استفاده، جزئیات چهره را بررسی کنید.",
-    "en": "📸 Your portrait is ready. Check the facial details before using it.",
-    "fields": [],
-    "maximum": 3000,
-    "html": false,
-    "scope": "tools"
-  },
-  "photo_delivery_could_not_be": {
-    "label": "ارسال عکس تأیید نشد. با پشتیبانی تماس بگیرید؛ ساخت عکس ",
-    "fa": "ارسال عکس تأیید نشد. با پشتیبانی تماس بگیرید؛ ساخت عکس تکرار نشده است.",
-    "en": "Photo delivery could not be confirmed. Contact support; no new photo generation was started.",
-    "fields": [],
-    "maximum": 3000,
-    "html": false,
-    "scope": "tools"
-  },
   "the_song_was_identified_but_alt_alt": {
     "label": "آهنگ شناسایی شد، اما دانلود این منبع ممکن نشد. اگر منبع",
     "fa": "آهنگ شناسایی شد، اما دانلود این منبع ممکن نشد. اگر منبع دیگری نمایش داده شده، آن را انتخاب کنید.",
@@ -383,69 +290,6 @@
     "label": "پیگیری دانلود",
     "fa": "پیگیری دانلود",
     "en": "Check download",
-    "fields": [],
-    "maximum": 64,
-    "html": false,
-    "scope": "tools"
-  },
-  "clothing_natural": {
-    "label": "لباس فعلی خودم",
-    "fa": "لباس فعلی خودم",
-    "en": "Keep my clothing",
-    "fields": [],
-    "maximum": 64,
-    "html": false,
-    "scope": "tools"
-  },
-  "clothing_suit": {
-    "label": "کت‌وشلوار",
-    "fa": "کت‌وشلوار",
-    "en": "Suit",
-    "fields": [],
-    "maximum": 64,
-    "html": false,
-    "scope": "tools"
-  },
-  "clothing_diplomat": {
-    "label": "کت‌وشلوار و یقه دیپلمات",
-    "fa": "کت‌وشلوار و یقه دیپلمات",
-    "en": "Suit & mandarin collar",
-    "fields": [],
-    "maximum": 64,
-    "html": false,
-    "scope": "tools"
-  },
-  "clothing_shirt": {
-    "label": "پیراهن",
-    "fa": "پیراهن",
-    "en": "Shirt",
-    "fields": [],
-    "maximum": 64,
-    "html": false,
-    "scope": "tools"
-  },
-  "background_white": {
-    "label": "سفید",
-    "fa": "سفید",
-    "en": "White",
-    "fields": [],
-    "maximum": 64,
-    "html": false,
-    "scope": "tools"
-  },
-  "background_blue": {
-    "label": "آبی روشن",
-    "fa": "آبی روشن",
-    "en": "Light blue",
-    "fields": [],
-    "maximum": 64,
-    "html": false,
-    "scope": "tools"
-  },
-  "background_grey": {
-    "label": "خاکستری",
-    "fa": "خاکستری",
-    "en": "Grey",
     "fields": [],
     "maximum": 64,
     "html": false,
@@ -718,110 +562,6 @@
     "en": "MP3 · 320 kbps",
     "fields": [],
     "maximum": 64,
-    "html": false,
-    "scope": "tools"
-  },
-  "portrait_purchase": {
-    "label": "خرید تکی عکس",
-    "fa": "خرید تکی عکس",
-    "en": "Buy one portrait",
-    "fields": [],
-    "maximum": 64,
-    "html": false,
-    "scope": "tools"
-  },
-  "portrait_use_credit": {
-    "label": "استفاده از عکس خریداری‌شده",
-    "fa": "استفاده از عکس خریداری‌شده",
-    "en": "Use a purchased portrait",
-    "fields": [],
-    "maximum": 64,
-    "html": false,
-    "scope": "tools"
-  },
-  "portrait_balance": {
-    "label": "📸 عکس‌های خریداری‌شدهٔ قابل استفاده: {count}",
-    "fa": "📸 عکس‌های خریداری‌شدهٔ قابل استفاده: {count}\nبرای استفاده از سهمیهٔ پلن، عکس خود را بفرستید؛ یا یکی از گزینه‌های زیر را انتخاب کنید.",
-    "en": "📸 Purchased portraits available: {count}\nSend a photo to use your plan allowance, or choose an option below.",
-    "fields": [
-      "count"
-    ],
-    "maximum": 1500,
-    "html": false,
-    "scope": "tools"
-  },
-  "portrait_paid_upload": {
-    "label": "یک نوبت از خرید تکی شما پس از تأیید ساخت استفاده",
-    "fa": "یک نوبت از خرید تکی شما پس از تأیید ساخت استفاده می‌شود. حالا عکس خود را بفرستید.",
-    "en": "One purchased portrait will be used when you confirm generation. Send your photo now.",
-    "fields": [],
-    "maximum": 1500,
-    "html": false,
-    "scope": "tools"
-  },
-  "portrait_paid_consent": {
-    "label": "",
-    "fa": "\nاین ساخت از خرید تکی شما استفاده می‌کند و از سهمیهٔ پلن کم نمی‌شود. در صورت شکست قطعی، نوبت برمی‌گردد؛ وضعیت نامشخص نیازمند بررسی پشتیبانی است.",
-    "en": "\nThis uses one purchased portrait, not your plan allowance. A confirmed failure restores it; an uncertain outcome requires support review.",
-    "fields": [],
-    "maximum": 1500,
-    "html": false,
-    "scope": "tools"
-  },
-  "portrait_plan_consent": {
-    "label": "",
-    "fa": "\nاین ساخت از سهمیهٔ پلن شما استفاده می‌کند.",
-    "en": "\nThis uses your plan allowance.",
-    "fields": [],
-    "maximum": 1500,
-    "html": false,
-    "scope": "tools"
-  },
-  "portrait_purchase_details": {
-    "label": "📸 {label}",
-    "fa": "📸 {label}\n\nیک نوبت ساخت عکس پرسنلی، بدون خرید اشتراک و بدون تاریخ انقضا.\nمبلغ: {amount}\nپس از تأیید پرداخت، از بخش عکس پرسنلی «استفاده از عکس خریداری‌شده» را انتخاب کنید.",
-    "en": "📸 {label}\n\nOne portrait, without a subscription and without expiry.\nAmount: {amount}\nAfter approval, open Portrait photo and choose Use a purchased portrait.",
-    "fields": [
-      "label",
-      "amount"
-    ],
-    "maximum": 1500,
-    "html": true,
-    "scope": "tools"
-  },
-  "portrait_approved": {
-    "label": "✅ پرداخت تأیید شد و یک نوبت ساخت عکس پرسنلی به ح",
-    "fa": "✅ پرداخت تأیید شد و یک نوبت ساخت عکس پرسنلی به حساب شما اضافه شد. از دکمهٔ زیر ادامه دهید.",
-    "en": "✅ Payment approved. One portrait was added to your account. Continue below.",
-    "fields": [],
-    "maximum": 1500,
-    "html": false,
-    "scope": "tools"
-  },
-  "portrait_open": {
-    "label": "📸 ساخت عکس پرسنلی",
-    "fa": "📸 ساخت عکس پرسنلی",
-    "en": "📸 Create a portrait",
-    "fields": [],
-    "maximum": 64,
-    "html": false,
-    "scope": "tools"
-  },
-  "portrait_credit_confirm": {
-    "label": "با تأیید، مبلغ از اعتبار داخلی کم و یک نوبت ساخت",
-    "fa": "با تأیید، مبلغ از اعتبار داخلی کم و یک نوبت ساخت عکس اضافه می‌شود؛ اشتراک شما تغییر نمی‌کند.",
-    "en": "Confirming deducts the amount from your balance and adds one portrait. Your subscription stays unchanged.",
-    "fields": [],
-    "maximum": 1500,
-    "html": false,
-    "scope": "tools"
-  },
-  "error_portrait_credit_missing": {
-    "label": "عکس خریداری‌شدهٔ قابل استفاده ندارید. ابتدا خرید",
-    "fa": "عکس خریداری‌شدهٔ قابل استفاده ندارید. ابتدا خرید تکی را انجام دهید یا از سهمیهٔ پلن استفاده کنید.",
-    "en": "No purchased portrait is available. Buy one or use your plan allowance.",
-    "fields": [],
-    "maximum": 1500,
     "html": false,
     "scope": "tools"
   },
@@ -12267,46 +12007,6 @@
     "scope": "common",
     "maximum": 64
   },
-  "copy_9c7cbafe76f6d185": {
-    "label": "قیمت تکی عکس (تومان)",
-    "source": "قیمت تکی عکس (تومان)",
-    "fa": "قیمت تکی عکس (تومان)",
-    "en": "One portrait price (toman)",
-    "fields": [],
-    "html": false,
-    "scope": "common",
-    "maximum": 64
-  },
-  "copy_5bbf1658d2d89e4c": {
-    "label": "قیمت تکی عکس (USDT)",
-    "source": "قیمت تکی عکس (USDT)",
-    "fa": "قیمت تکی عکس (USDT)",
-    "en": "One portrait price (USDT)",
-    "fields": [],
-    "html": false,
-    "scope": "common",
-    "maximum": 64
-  },
-  "copy_f5376be1c24d807b": {
-    "label": "قیمت ساخت یک عکس بدون اشتراک؛ صفر یعنی غیرفعال",
-    "source": "قیمت ساخت یک عکس بدون اشتراک؛ صفر یعنی غیرفعال",
-    "fa": "قیمت ساخت یک عکس بدون اشتراک؛ صفر یعنی غیرفعال",
-    "en": "Price for one portrait without subscription; zero disables sale",
-    "fields": [],
-    "html": false,
-    "scope": "common",
-    "maximum": 64
-  },
-  "copy_5f8afa50b5231ae2": {
-    "label": "قیمت ساخت یک عکس برای زبان انگلیسی؛ صفر یعنی غیر",
-    "source": "قیمت ساخت یک عکس برای زبان انگلیسی؛ صفر یعنی غیرفعال",
-    "fa": "قیمت ساخت یک عکس برای زبان انگلیسی؛ صفر یعنی غیرفعال",
-    "en": "One portrait price for English users; zero disables sale",
-    "fields": [],
-    "html": false,
-    "scope": "common",
-    "maximum": 64
-  },
   "copy_e200a74c28003d28": {
     "label": "مبلغ را بفرستید؛ صفر یعنی غیرفعال. تومان عدد صحی",
     "source": "مبلغ را بفرستید؛ صفر یعنی غیرفعال. تومان عدد صحیح و USDT حداکثر چهار رقم اعشار است.",
@@ -12322,16 +12022,6 @@
     "source": "مبلغ معتبر نیست؛ یک مبلغ مثبت یا صفر بفرستید.",
     "fa": "مبلغ معتبر نیست؛ یک مبلغ مثبت یا صفر بفرستید.",
     "en": "Invalid price; send a positive amount or zero.",
-    "fields": [],
-    "html": false,
-    "scope": "common",
-    "maximum": 64
-  },
-  "copy_083595dc487df186": {
-    "label": "🎵📸 متن‌های آهنگ و عکس",
-    "source": "🎵📸 متن‌های آهنگ و عکس",
-    "fa": "🎵📸 متن‌های آهنگ و عکس",
-    "en": "🎵📸 Music and portrait messages",
     "fields": [],
     "html": false,
     "scope": "common",
@@ -12434,16 +12124,6 @@
     "source_key": "home.music",
     "fa": "🎵 تشخیص آهنگ",
     "en": "🎵 Identify music",
-    "fields": [],
-    "html": false,
-    "scope": "common",
-    "maximum": 64
-  },
-  "i18n_home_portrait": {
-    "label": "📸 عکس پرسنلی",
-    "source_key": "home.portrait",
-    "fa": "📸 عکس پرسنلی",
-    "en": "📸 Portrait photo",
     "fields": [],
     "html": false,
     "scope": "common",

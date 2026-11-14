@@ -42,7 +42,7 @@ class Payment(Base, TimestampMixin):
             name="ck_payments_amount_positive",
         ),
         CheckConstraint(
-            "(plan_id IS NOT NULL AND duration_days > 0) OR (plan_id IS NULL AND duration_days = 0 AND offer_code = 'portrait-once')",
+            "duration_days > 0",
             name="ck_payments_duration_days_positive",
         ),
         Index(
@@ -79,13 +79,13 @@ class Payment(Base, TimestampMixin):
         nullable=False,
     )
 
-    plan_id: Mapped[int | None] = mapped_column(
+    plan_id: Mapped[int] = mapped_column(
         ForeignKey(
             "plans.id",
             ondelete="RESTRICT",
         ),
         index=True,
-        nullable=True,
+        nullable=False,
     )
 
     amount: Mapped[Decimal] = mapped_column(

@@ -28,7 +28,6 @@ def test_home_keyboard_supports_language_and_admin_entry():
         "language:open",
         "convert:open",
         "tool:open:music",
-        "tool:open:portrait",
         "home:tutorial",
         "home:faq",
         "admin:open",

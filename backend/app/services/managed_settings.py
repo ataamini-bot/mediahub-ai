@@ -14,7 +14,6 @@ SettingKind = Literal[
     "boolean",
     "integer",
     "timezone",
-    "amount",
     "string_map",
     "style_map",
     "home_layout",
@@ -56,7 +55,6 @@ BUTTON_KEYS = frozenset(
         "support",
         "convert",
     "music",
-    "portrait",
         "tutorial",
         "faq",
         "admin",
@@ -72,7 +70,6 @@ HOME_MENU_BUTTON_KEYS = (
     "language",
     "convert",
     "music",
-    "portrait",
     "tutorial",
     "faq",
     "admin",
@@ -212,28 +209,11 @@ for _language in ("fa", "en"):
         allowed_keys=frozenset(TOOL_TEXTS))
 
 
-for _currency in ("irt", "usdt"):
-    _key = f"portrait.price_{_currency}"
-    MANAGED_SETTINGS[_key] = ManagedSetting(key=_key, category="payments", kind="amount", default="0",
-        label_fa="قیمت تک عکس (" + ("تومان" if _currency == "irt" else "USDT") + ")",
-        description_fa="قیمت یک عکس بدون اشتراک؛ صفر یعنی غیرفعال")
-
-
 def validate_managed_setting(key: str, value: Any) -> Any:
     definition = MANAGED_SETTINGS.get(key)
     if definition is None:
         return value
 
-    if definition.kind == "amount":
-        from decimal import Decimal, InvalidOperation
-        try:
-            amount = Decimal(str(value))
-            unit = Decimal("1") if key.endswith("_irt") else Decimal("0.0001")
-            if not amount.is_finite() or not 0 <= amount <= 1_000_000_000_000 or amount != amount.quantize(unit):
-                raise InvalidOperation
-            return format(amount.quantize(unit), "f")
-        except (InvalidOperation, ValueError):
-            raise SettingValidationError("Invalid price") from None
     if definition.kind == "boolean":
         if not isinstance(value, bool):
             raise SettingValidationError("Setting value must be boolean")

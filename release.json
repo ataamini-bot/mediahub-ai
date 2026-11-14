@@ -1,7 +1,7 @@
 {
   "version": "v1.0.0-rc.1",
   "schema": "d39e0f102132",
-  "application_rollback_safe": false,
+  "application_rollback_safe": true,
   "platforms": [
     "linux/amd64"
   ],

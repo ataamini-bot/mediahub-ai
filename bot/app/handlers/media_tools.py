@@ -1,4 +1,4 @@
-"""Private, consent-first music recognition and portrait workflows."""
+"""Private, consent-first music recognition workflow."""
 import asyncio
 import html
 import logging
@@ -10,7 +10,7 @@ from uuid import UUID, uuid4
 from aiogram import BaseMiddleware, F, Router
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import CallbackQuery, FSInputFile, InlineKeyboardButton, InlineKeyboardMarkup, Message
+from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
 from app.handlers.conversion import _attachment, _download_telegram_file, _download_runtime_function, cleanup_staged_state
 from app.middleware.interface import ui_language
@@ -23,11 +23,8 @@ router = Router(name="media_tools")
 router.message.filter(F.chat.type == "private")
 router.callback_query.filter(F.message.chat.type == "private")
 ROOT = Path(os.environ.get("DOWNLOAD_DIR", "/app/downloads")) / "tools"
-LIMITS = {"music": 25 * 1024**2, "portrait": 10 * 1024**2}
+LIMITS = {"music": 25 * 1024**2}
 FORMATS = ("mp3", "m4a", "wav", "aac", "flac", "ogg", "opus")
-CLOTHES = {"natural": ("لباس فعلی خودم", "Keep my clothing"), "suit": ("کت‌وشلوار", "Suit"),
-           "diplomat": ("کت‌وشلوار و یقه دیپلمات", "Suit & mandarin collar"), "shirt": ("پیراهن", "Shirt")}
-BACKGROUNDS = {"white": ("سفید", "White"), "blue": ("آبی روشن", "Light blue"), "grey": ("خاکستری", "Grey")}
 _uploads_in_progress = set()
 _song_downloads_in_progress = set()
 logger = logging.getLogger(__name__)
@@ -45,13 +42,8 @@ router.callback_query.middleware(ToolTextContext())
 
 class ToolStates(StatesGroup):
     upload = State()
-    options = State()
     confirmation = State()
     working = State()
-
-
-def label(mapping, value):
-    return text(("clothing_" if mapping is CLOTHES else "background_") + value)
 
 
 def keyboard(rows):
@@ -102,6 +94,9 @@ async def access(message, telegram_id):
 
 async def send_tool_prompt(message, state, kind, telegram_id):
     await runtime_configuration(ui_language.get())
+    if kind != "music":
+        await message.answer(friendly_error("tool_disabled"))
+        return
     await cleanup_staged_state(state)
     await state.clear()
     try:
@@ -116,47 +111,17 @@ async def send_tool_prompt(message, state, kind, telegram_id):
         return
     await state.set_state(ToolStates.upload)
     await state.update_data(tool_kind=kind, tool_owner=telegram_id)
-    if kind == "music":
-        prompt = text('b_identify_a_song_and')
-    else:
-        prompt = text('b_portrait_photo_b_send')
-    await message.answer(prompt, parse_mode="HTML", reply_markup=keyboard([cancel_row()]))
-    if kind == "portrait":
-        try:
-            from app.services.backend import get_payment_configuration
-            purchase = await _payment_request("GET", f"/media-tools/portrait/balance?telegram_id={telegram_id}")
-            try:
-                config = await get_payment_configuration(select_destination=False, language=ui_language.get())
-            except BackendAPIError:
-                config = {}
-            rows = []
-            if purchase["available"]:
-                rows.append([(text("portrait_use_credit"), "tool:paid-portrait")])
-            if config.get("portrait_offer"):
-                rows.append([(text("portrait_purchase"), "payment:offer:portrait-once")])
-            if rows:
-                await message.answer(text("portrait_balance", count=purchase["available"]), reply_markup=keyboard(rows))
-        except BackendAPIError:
-            pass
+    await message.answer(text('b_identify_a_song_and'), parse_mode="HTML", reply_markup=keyboard([cancel_row()]))
 
 
-@router.callback_query(F.data == "tool:paid-portrait")
-async def use_paid_portrait(callback: CallbackQuery, state: FSMContext):
-    await callback.answer()
-    await send_tool_prompt(callback.message, state, "portrait", callback.from_user.id)
-    if (await state.get_data()).get("tool_kind") == "portrait":
-        await state.update_data(tool_use_paid_credit=True)
-        await callback.message.answer(text("portrait_paid_upload"))
-
-
-@router.callback_query(F.data.in_({"tool:open:music", "tool:open:portrait"}))
+@router.callback_query(F.data == "tool:open:music")
 async def open_tool(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
     await register_telegram_user(callback)
     await send_tool_prompt(callback.message, state, callback.data.rsplit(":", 1)[1], callback.from_user.id)
 
 
-@router.message(ToolStates.upload, F.photo | F.document | F.audio | F.voice | F.video | F.video_note | F.animation)
+@router.message(ToolStates.upload, F.document | F.audio | F.voice | F.video | F.video_note | F.animation)
 async def upload(message: Message, state: FSMContext):
     if not message.from_user:
         return
@@ -175,7 +140,7 @@ async def upload(message: Message, state: FSMContext):
 async def receive_music_link(message: Message, state: FSMContext):
     data = await state.get_data()
     if data.get("tool_kind") != "music" or not message.from_user:
-        await message.answer(text('please_send_a_photo'))
+        await message.answer(text('send_one_video_post_link'))
         return
     urls = re.findall(r"https?://[^\s<>\[\]()]+", message.text or "")
     urls += [item.url for item in (message.entities or []) if getattr(item, "url", None)]
@@ -195,11 +160,8 @@ async def stage_upload(message, state):
     kind = data.get("tool_kind")
     if kind not in LIMITS or not message.from_user:
         return
-    if kind == "portrait":
-        item = message.photo[-1] if message.photo else message.document
-    else:
-        attached = _attachment(message)
-        item = attached[0] if attached else None
+    attached = _attachment(message)
+    item = attached[0] if attached else None
     if item is None:
         await message.answer(text('this_file_type_is_not'))
         return
@@ -225,12 +187,7 @@ async def stage_upload(message, state):
     if (await state.get_data()).get("tool_request_id") != request_id:
         cleanup_tool_state({"tool_request_id": request_id, "tool_owner": message.from_user.id})
         return
-    if kind == "music":
-        await confirmation(message, state, request_id)
-    else:
-        await state.set_state(ToolStates.options)
-        rows = [[(label(CLOTHES, key), f"tool:clothes:{request_id}:{key}")] for key in CLOTHES]
-        await message.answer(text('choose_the_clothing'), reply_markup=keyboard(rows + [cancel_row(request_id)]))
+    await confirmation(message, state, request_id)
 
 
 async def valid_state(callback, state, request_id):
@@ -241,45 +198,10 @@ async def valid_state(callback, state, request_id):
     return data
 
 
-@router.callback_query(F.data.startswith("tool:clothes:"))
-async def choose_clothes(callback: CallbackQuery, state: FSMContext):
-    parts = callback.data.split(":")
-    if len(parts) != 4 or parts[3] not in CLOTHES:
-        return
-    request_id, clothing = parts[2:]
-    data = await valid_state(callback, state, request_id)
-    if not data or data["tool_kind"] != "portrait":
-        return
-    await state.update_data(tool_clothing=clothing)
-    await callback.answer()
-    rows = [[(label(BACKGROUNDS, key), f"tool:bg:{request_id}:{key}")] for key in BACKGROUNDS]
-    await callback.message.edit_text(text('choose_the_background_color'),
-        reply_markup=keyboard(rows + [cancel_row(request_id)]))
-
-
-@router.callback_query(F.data.startswith("tool:bg:"))
-async def choose_background(callback: CallbackQuery, state: FSMContext):
-    parts = callback.data.split(":")
-    if len(parts) != 4 or parts[3] not in BACKGROUNDS:
-        return
-    request_id, background = parts[2:]
-    data = await valid_state(callback, state, request_id)
-    if not data or data.get("tool_clothing") not in CLOTHES:
-        return
-    await state.update_data(tool_background=background)
-    await callback.answer()
-    await confirmation(callback.message, state, request_id)
-
-
 async def confirmation(message, state, request_id):
     data = await state.get_data()
     await state.set_state(ToolStates.confirmation)
-    if data["tool_kind"] == "music":
-        prompt = text('confirm_to_send_a_sample')
-    else:
-        clothes, bg = label(CLOTHES, data["tool_clothing"]), label(BACKGROUNDS, data["tool_background"])
-        prompt = text('clothing_clothes_background_ba', clothes=clothes, background=bg)
-        prompt += '\n\n' + text('portrait_paid_consent' if data.get('tool_use_paid_credit') else 'portrait_plan_consent')
+    prompt = text('confirm_to_send_a_sample')
     await message.answer(prompt, reply_markup=keyboard([
         [(text('confirm_and_start'), f"tool:start:{request_id}")], cancel_row(request_id)]))
 
@@ -299,20 +221,19 @@ async def start_tool(callback: CallbackQuery, state: FSMContext):
     if data.get("tool_request_id") != request_id or data.get("tool_owner") != callback.from_user.id:
         await callback.answer(text('this_menu_expired'), show_alert=True)
         return
-    if data.get("tool_kind") == "portrait" and (data.get("tool_clothing") not in CLOTHES or data.get("tool_background") not in BACKGROUNDS):
-        await callback.answer(text('choose_clothing_and_background'), show_alert=True)
-        return
     await callback.answer()
+    if data.get("tool_kind") != "music":
+        cleanup_tool_state(data)
+        await state.clear()
+        await callback.message.answer(friendly_error("tool_disabled"))
+        return
     if not await access(callback.message, callback.from_user.id):
         return
     # Mark the handoff before HTTP so a lost response cannot cause cleanup to
     # delete a file that a Worker already accepted.
     await state.update_data(tool_queued=True)
     await state.set_state(ToolStates.working)
-    payload = {"request_id": request_id, "telegram_id": callback.from_user.id, "kind": data["tool_kind"],
-               "clothing": data.get("tool_clothing", "natural"), "background": data.get("tool_background", "white")}
-    if data.get("tool_use_paid_credit"):
-        payload["use_paid_credit"] = True
+    payload = {"request_id": request_id, "telegram_id": callback.from_user.id, "kind": "music"}
     if data["tool_kind"] == "music":
         payload["auto_mp3"] = True
         if data.get("tool_source_url"):
@@ -365,28 +286,8 @@ async def show_result(message, telegram_id, request_id, row):
         prompt = text('request_cancelled') if status == "cancelled" else friendly_error(row.get("error_code") or "input_expired")
         await message.answer(prompt)
         return
-    if row["kind"] == "portrait":
-        path = tool_folder(telegram_id, request_id) / "result.jpg"
-        if row.get("files_removed") or not path.is_file() or path.is_symlink():
-            await message.answer(text('this_photo_was_already_sent'))
-            return
-        claim = await _payment_request("POST", f"/media-tools/{request_id}/claim-delivery", payload={"telegram_id": telegram_id})
-        if not claim.get("claimed"):
-            await message.answer(text('delivery_already_started_conta'))
-            return
-        # Send as a document to preserve full resolution. An uncertain send is
-        # never replayed by the poller, nor does it start another paid edit.
-        try:
-            await message.answer_document(FSInputFile(path, filename="portrait.jpg"),
-                caption=text('your_portrait_is_ready_check'))
-        except Exception:
-            await message.answer(text('photo_delivery_could_not_be'))
-            return
-        path.unlink(missing_ok=True)
-        try:
-            await _payment_request("POST", f"/media-tools/{request_id}/release", payload={"telegram_id": telegram_id})
-        except BackendAPIError:
-            pass
+    if row["kind"] != "music":
+        await message.answer(friendly_error("tool_disabled"))
         return
     result = row.get("result") or {}
     heading = text("music_identity", title=html.escape(result.get("title", "")), artist=html.escape(result.get("artist", "")))

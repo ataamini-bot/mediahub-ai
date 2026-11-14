@@ -481,7 +481,7 @@ class PlanManagementService:
         try:
             return validate_plan_tool_limits(value)
         except ValueError as exc:
-            raise PlanValidationError("Tool limits require music/portrait, a limit from -1 to 10000, and daily/weekly period") from exc
+            raise PlanValidationError("Tool limits require music, a limit from -1 to 10000, and daily/weekly period") from exc
 
     def _record_audit(
         self,

@@ -164,7 +164,7 @@ class ApplicationSettingsService:
                 if not is_sensitive or not isinstance(value, str) or len(value) > 512 or any(c.isspace() or ord(c) < 32 for c in value):
                     raise SettingValidationError("Provider keys must be encrypted strings")
             else:
-                if is_sensitive or not isinstance(value, dict) or set(value) - {"enabled", "per_user_daily", "global_daily", "model"}:
+                if is_sensitive or not isinstance(value, dict) or set(value) - {"enabled", "per_user_daily", "global_daily"}:
                     raise SettingValidationError("Invalid media tool configuration")
                 value = ToolConfiguration.model_validate({"kind": parts[1], **value}).model_dump(exclude={"kind", "token"})
 

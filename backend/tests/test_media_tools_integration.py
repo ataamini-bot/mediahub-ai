@@ -31,7 +31,7 @@ async def records(tmp_path, monkeypatch):
         users = [User(telegram_id=8_000_000_000_000 + uuid4().int % 100_000_000, first_name="Tools test") for _ in range(3)]
         db.add_all(users)
         await db.flush()
-        for kind in ("music", "portrait"):
+        for kind in ("music",):
             await configure_tool(db, {"kind": kind, "enabled": True, "token": "test-private-token",
                 "per_user_daily": 2, "global_daily": 10}, users[0])
         await db.commit()
@@ -89,7 +89,7 @@ async def test_user_limit_counts_failed_attempts_and_separates_tools(records):
             await db.execute(update(MediaToolRequest).where(MediaToolRequest.id == result[0].id).values(status="failed"))
             await db.commit()
     assert await accept(records.payload()) == "tool_daily_limit"
-    assert isinstance(await accept(records.payload("portrait")), tuple)
+    assert isinstance(await accept(records.payload(user=2)), tuple)
 
 
 @pytest.mark.asyncio
@@ -99,14 +99,14 @@ async def test_disabled_and_blocked_users_do_not_create_attempts(records):
         await db.execute(update(User).where(User.id == records.users[2].id).values(status=UserStatus.BLOCKED))
         await db.commit()
     assert await accept(records.payload()) == "tool_disabled"
-    assert await accept(records.payload("portrait", user=2)) == "access_denied"
+    assert await accept(records.payload(user=2)) == "access_denied"
 
 
 @pytest.mark.asyncio
 async def test_owner_is_checked_and_duplicate_payload_cannot_change_kind(records):
     value = records.payload()
     await accept(value)
-    assert await accept(value.model_copy(update={"kind": "portrait"})) == "request_conflict"
+    assert await accept(value.model_copy(update={"auto_mp3": True})) == "request_conflict"
     async with AsyncSessionLocal() as db:
         with pytest.raises(MediaToolError, match="not_found"):
             await owned(db, value.request_id, records.users[2].telegram_id)
@@ -145,7 +145,7 @@ async def test_restore_cancels_paid_work_instead_of_replaying(records, monkeypat
 
 @pytest.mark.asyncio
 async def test_stale_work_becomes_uncertain_and_temporary_files_expire(records):
-    value = records.payload("portrait")
+    value = records.payload()
     row, _ = await accept(value)
     old = datetime.now(timezone.utc) - timedelta(hours=1)
     async with AsyncSessionLocal() as db:
@@ -160,13 +160,12 @@ async def test_stale_work_becomes_uncertain_and_temporary_files_expire(records):
 
 
 @pytest.mark.asyncio
-async def test_api_requires_internal_key_checks_owner_and_claims_delivery_once(records):
+async def test_api_requires_internal_key_checks_owner_and_cleans_input(records):
     app = FastAPI()
     app.include_router(router)
-    value = records.payload("portrait")
+    value = records.payload()
     await accept(value)
     path = folder(value.telegram_id, value.request_id)
-    (path / "result.jpg").write_bytes(b"photo")
     async with AsyncSessionLocal() as db:
         await db.execute(update(MediaToolRequest).where(MediaToolRequest.id == value.request_id).values(status="completed"))
         await db.commit()
@@ -175,10 +174,6 @@ async def test_api_requires_internal_key_checks_owner_and_claims_delivery_once(r
         assert (await client.get(endpoint, params={"telegram_id": value.telegram_id})).status_code in (401, 403)
         headers = {"X-Internal-API-Key": settings.bot_backend_api_key}
         assert (await client.get(endpoint, params={"telegram_id": records.users[2].telegram_id}, headers=headers)).status_code == 404
-        async def claim():
-            return (await client.post(endpoint + "/claim-delivery", json={"telegram_id": value.telegram_id}, headers=headers)).json()
-        results = await asyncio.gather(claim(), claim())
-        assert [r["claimed"] for r in results].count(True) == 1
         response = await client.post(endpoint + "/release", json={"telegram_id": value.telegram_id}, headers=headers)
         assert response.status_code == 200 and not path.exists()
 
@@ -326,3 +321,62 @@ async def test_broker_ack_loss_recovers_pending_but_never_processing_work(record
         await db.commit()
     await asyncio.to_thread(service.dispatch_pending_tools)
     assert calls == [value.request_id]
+
+
+@pytest.mark.asyncio
+async def test_removed_portrait_api_and_legacy_queue_never_call_provider(records, monkeypatch):
+    from app.workers.tasks import media_tools as worker
+    from app.db.worker_session import WorkerSessionLocal
+    from pydantic import ValidationError
+    with pytest.raises(ValidationError):
+        ToolSubmit(telegram_id=records.users[1].telegram_id,request_id=uuid4(),kind='portrait')
+    value=records.payload()
+    await accept(value)
+    async with AsyncSessionLocal() as db:
+        row=await db.get(MediaToolRequest,value.request_id);row.kind='portrait';await db.commit()
+        with pytest.raises(ValueError):
+            await configure_tool(db,{'kind':'portrait','enabled':True,'token':'unused'},records.users[0])
+    monkeypatch.setattr(worker,'recognize_music',lambda *a:pytest.fail('Retired request contacted a provider'))
+    await asyncio.to_thread(worker.run_tool.run,str(value.request_id))
+    async with AsyncSessionLocal() as db:
+        row=await db.get(MediaToolRequest,value.request_id)
+        assert row.status=='cancelled' and row.error_code=='tool_disabled'
+    assert not folder(value.telegram_id,value.request_id).exists()
+
+
+@pytest.mark.asyncio
+async def test_music_plan_weekly_limit_and_live_plan_edits(records):
+    from app.models.plan import Plan
+    from app.models.subscription import Subscription
+    from app.services.download_access import quota_window_start_utc
+    user=records.users[1]
+    async with AsyncSessionLocal() as db:
+        plan=Plan(name='Music test',slug='music_'+uuid4().hex,price=100,duration_days=30,
+                  max_file_size_mb=1900,max_concurrent_downloads=1,is_active=True,is_system=False,
+                  tool_limits={'music':{'limit':1,'period':'weekly'}})
+        db.add(plan);await db.flush()
+        sub=Subscription(user_id=user.id,plan_id=plan.id,started_at=datetime.now(timezone.utc)-timedelta(days=1),
+                         expires_at=datetime.now(timezone.utc)+timedelta(days=29),daily_download_limit=10)
+        db.add(sub);await db.commit();plan_id=plan.id
+    try:
+        first=await accept(records.payload());assert isinstance(first,tuple)
+        async with AsyncSessionLocal() as db:
+            row=await db.get(MediaToolRequest,first[0].id);row.status='failed';await db.commit()
+        assert await accept(records.payload())=='tool_weekly_limit'
+        async with AsyncSessionLocal() as db:
+            row=await db.get(MediaToolRequest,first[0].id)
+            row.created_at=quota_window_start_utc('weekly',timezone_name='Asia/Tehran')-timedelta(seconds=1)
+            await db.commit()
+        second=await accept(records.payload());assert isinstance(second,tuple)
+        async with AsyncSessionLocal() as db:
+            row=await db.get(MediaToolRequest,second[0].id);row.status='failed'
+            plan=await db.get(Plan,plan_id);plan.tool_limits={'music':{'limit':-1,'period':'weekly'}};await db.commit()
+        assert isinstance(await accept(records.payload()),tuple)
+        async with AsyncSessionLocal() as db:
+            await db.execute(update(MediaToolRequest).where(MediaToolRequest.user_id==user.id).values(status='failed'))
+            plan=await db.get(Plan,plan_id);plan.tool_limits={'music':{'limit':0,'period':'daily'}};await db.commit()
+        assert await accept(records.payload())=='tool_plan_disabled'
+    finally:
+        async with AsyncSessionLocal() as db:
+            await db.execute(delete(Subscription).where(Subscription.plan_id==plan_id))
+            await db.execute(delete(Plan).where(Plan.id==plan_id));await db.commit()

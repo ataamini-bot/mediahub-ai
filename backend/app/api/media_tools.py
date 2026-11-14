@@ -20,10 +20,7 @@ router = APIRouter(prefix="/media-tools", tags=["media-tools"], dependencies=[De
 class ToolSubmit(BaseModel):
     telegram_id: int = Field(gt=0, le=2**63-1)
     request_id: UUID
-    kind: Literal["music", "portrait"]
-    clothing: Literal["natural", "suit", "diplomat", "shirt"] = "natural"
-    background: Literal["white", "blue", "grey"] = "white"
-    use_paid_credit: bool = False
+    kind: Literal["music"]
     auto_mp3: bool = False
     source_url: str | None = Field(default=None, max_length=2048)
 
@@ -43,14 +40,10 @@ def failure(exc):
 
 
 @router.get("/configuration/{kind}")
-async def configuration(kind: Literal["music", "portrait"], db: AsyncSession = Depends(get_db)):
+async def configuration(kind: Literal["music"], db: AsyncSession = Depends(get_db)):
     return public_config(await read_config(db, kind))
 
 
-@router.get("/portrait/balance")
-async def portrait_balance(telegram_id: int = Query(gt=0), db: AsyncSession = Depends(get_db)):
-    from app.services.portrait_purchases import balance
-    return {"available": await balance(db, telegram_id)}
 
 
 @router.post("")
@@ -90,8 +83,6 @@ async def cancel(request_id: UUID, data: ToolOwner, db: AsyncSession = Depends(g
         raise failure(exc) from exc
     previous = row.status
     row.status = "cancelled"
-    from app.services.portrait_purchases import refund_failed_credit
-    await db.run_sync(lambda session: refund_failed_credit(session, row))
     await db.commit()
     # An in-flight provider may already be charged. Let that Worker finish
     # and delete its files, without delivering a cancelled result.
@@ -115,17 +106,6 @@ async def release(request_id: UUID, data: ToolOwner, db: AsyncSession = Depends(
     return {"released": True}
 
 
-@router.post("/{request_id}/claim-delivery")
-async def claim_delivery(request_id: UUID, data: ToolOwner, db: AsyncSession = Depends(get_db)):
-    try:
-        row = await owned(db, request_id, data.telegram_id, lock=True)
-    except MediaToolError as exc:
-        raise failure(exc) from exc
-    if row.kind != "portrait" or row.status != "completed" or row.files_removed_at or row.delivery_state:
-        return {"claimed": False}
-    row.delivery_state = "sending"
-    await db.commit()
-    return {"claimed": True}
 
 
 @router.post("/{request_id}/download")
