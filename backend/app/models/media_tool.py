@@ -30,4 +30,5 @@ class MediaToolRequest(Base):
     files_removed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     download_state: Mapped[str | None] = mapped_column(String(16))
     delivery_state: Mapped[str | None] = mapped_column(String(16))
+    downloads: Mapped[dict] = mapped_column(JSON, default=dict)
     download_job_id: Mapped[int | None] = mapped_column(Integer)

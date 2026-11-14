@@ -144,3 +144,16 @@ def test_foreign_or_expired_confirmation_does_not_submit(monkeypatch):
         await tools.start_tool(callback(f"tool:start:{request_id}"), context)
         post.assert_not_awaited()
     asyncio.run(exercise())
+
+
+def test_original_cancel_button_cancels_current_queued_request(monkeypatch):
+    async def exercise():
+        context = state()
+        request_id = uuid4().hex
+        await context.update_data(tool_request_id=request_id, tool_owner=42, tool_queued=True)
+        post = AsyncMock(return_value={"status": "cancelled"})
+        monkeypatch.setattr(tools, "_payment_request", post)
+        await tools.cancel_tool(callback("tool:cancel:"), context)
+        post.assert_awaited_once_with("POST", f"/media-tools/{request_id}/cancel", payload={"telegram_id": 42})
+        assert await context.get_state() is None
+    asyncio.run(exercise())

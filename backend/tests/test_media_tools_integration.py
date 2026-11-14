@@ -221,7 +221,11 @@ async def test_song_download_uses_full_source_and_repeated_click_creates_one_job
         second = await client.post(f"/media-tools/{value.request_id}/download", json=body)
         assert first.status_code == second.status_code == 200
         assert first.json()["id"] == second.json()["id"]
-    assert calls == [{"source_url": source, "telegram_id": value.telegram_id, "media_type": "audio", "output_format": "mp3"}]
+        another = await client.post(f"/media-tools/{value.request_id}/download", json={**body, "output_format": "flac"})
+        assert another.status_code == 200 and another.json()["output_format"] == "flac"
+        assert another.json()["id"] != first.json()["id"]
+    assert calls == [{"source_url": source, "telegram_id": value.telegram_id, "media_type": "audio", "output_format": fmt}
+                     for fmt in ("mp3", "flac")]
 
 
 @pytest.mark.asyncio

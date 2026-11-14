@@ -22,7 +22,7 @@ async def owned(db, request_id, telegram_id, *, lock=False):
     query = select(MediaToolRequest).join(User, User.id == MediaToolRequest.user_id).where(
         MediaToolRequest.id == request_id, User.telegram_id == telegram_id, User.status == UserStatus.ACTIVE)
     if lock:
-        query = query.with_for_update(of=MediaToolRequest)
+        query = query.with_for_update(of=MediaToolRequest).execution_options(populate_existing=True)
     row = await db.scalar(query)
     if row is None:
         raise MediaToolError("not_found", 404)

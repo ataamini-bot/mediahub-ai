@@ -28,6 +28,7 @@ def upgrade():
         sa.Column("files_removed_at", sa.DateTime(timezone=True)),
         sa.Column("download_state", sa.String(16)),
         sa.Column("delivery_state", sa.String(16)),
+        sa.Column("downloads", sa.JSON(), nullable=False),
         sa.Column("download_job_id", sa.Integer()),
         sa.CheckConstraint("kind IN ('music','portrait')", name="ck_media_tool_kind"),
         sa.CheckConstraint("status IN ('pending','processing','completed','failed','cancelled','uncertain','expired')", name="ck_media_tool_status"))

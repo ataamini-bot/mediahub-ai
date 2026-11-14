@@ -193,8 +193,13 @@ async def stage_upload(message, state):
         if not 0 < (path / "input").stat().st_size <= LIMITS[kind]:
             raise ValueError("File limit exceeded")
     except Exception:
-        cleanup_tool_state(await state.get_data())
+        cleanup_tool_state({"tool_request_id": request_id, "tool_owner": message.from_user.id})
         await message.answer(text("دریافت فایل کامل نشد؛ دوباره ارسال کنید.", "The upload was not completed. Send it again."))
+        return
+    # The user can leave this form while Telegram is still transferring the
+    # file. Never overwrite a newer form or delete its upload on completion.
+    if (await state.get_data()).get("tool_request_id") != request_id:
+        cleanup_tool_state({"tool_request_id": request_id, "tool_owner": message.from_user.id})
         return
     if kind == "music":
         await confirmation(message, state, request_id)
@@ -433,6 +438,7 @@ async def download_track(callback: CallbackQuery):
 async def cancel_tool(callback: CallbackQuery, state: FSMContext):
     request_id = callback.data.rsplit(":", 1)[1]
     data = await state.get_data()
+    request_id = request_id or str(data.get("tool_request_id") or "")
     await callback.answer()
     if request_id:
         try:

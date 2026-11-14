@@ -128,18 +128,21 @@ async def download_song(request_id: UUID, data: SongDownload, db: AsyncSession =
         raise failure(exc) from exc
     if row.kind != "music" or row.status != "completed":
         raise HTTPException(409, {"code": "music_not_ready"})
-    if row.download_job_id:
-        job = await db.get(DownloadJob, row.download_job_id)
+    selection_key = f"{data.candidate}:{data.output_format}"
+    selection = (row.downloads or {}).get(selection_key) or {}
+    if selection.get("job_id"):
+        job = await db.get(DownloadJob, selection["job_id"])
         if not job:
             raise HTTPException(409, {"code": "not_found"})
         return DownloadResponse.model_validate(job)
-    if row.download_state == "starting":
+    if selection.get("state") == "starting":
         raise HTTPException(409, {"code": "download_start_uncertain"})
     candidates = (row.result or {}).get("candidates") or []
     if data.candidate >= len(candidates):
         raise HTTPException(422, {"code": "invalid_candidate"})
     url = candidates[data.candidate]["url"]
     row.download_state = "starting"
+    row.downloads = {**(row.downloads or {}), selection_key: {"state": "starting"}}
     await db.commit()
     try:
         # Only a source from the server's full-song candidates can reach the
@@ -150,12 +153,15 @@ async def download_song(request_id: UUID, data: SongDownload, db: AsyncSession =
         await db.rollback()
         row = await owned(db, request_id, data.telegram_id, lock=True)
         row.download_state = "rejected"
+        row.downloads = {**(row.downloads or {}), selection_key: {"state": "rejected"}}
         await db.commit()
         if isinstance(exc, DownloadAccessError):
             raise HTTPException(exc.status_code, exc.detail()) from exc
         raise HTTPException(422, {"code": "unsupported_format"}) from exc
     # An unknown crash between create_job and this commit is deliberately not
     # retried. It cannot create another charged/quota-consuming download.
+    row = await owned(db, request_id, data.telegram_id, lock=True)
     row.download_job_id, row.download_state = job.id, "created"
+    row.downloads = {**(row.downloads or {}), selection_key: {"state": "created", "job_id": job.id}}
     await db.commit()
     return DownloadResponse.model_validate(job)
