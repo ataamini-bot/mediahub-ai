@@ -59,7 +59,7 @@ def test_confirmation_discloses_provider_and_normal_clothing(monkeypatch):
         finally:
             ui_language.reset(token)
         body = message.answer.await_args.args[0]
-        assert "OpenAI" in body and "Keep my clothing" in body and "Light blue" in body
+        assert "OpenAI" not in body and "Keep my clothing" in body and "Light blue" in body
         assert "external provider" in body and "official documents" in body
         callbacks = [b.callback_data for r in message.answer.await_args.kwargs["reply_markup"].inline_keyboard for b in r]
         assert all(len(v.encode()) <= 64 for v in callbacks)
@@ -156,4 +156,138 @@ def test_original_cancel_button_cancels_current_queued_request(monkeypatch):
         await tools.cancel_tool(callback("tool:cancel:"), context)
         post.assert_awaited_once_with("POST", f"/media-tools/{request_id}/cancel", payload={"telegram_id": 42})
         assert await context.get_state() is None
+    asyncio.run(exercise())
+
+
+def song_result(*, automatic=True):
+    return {"status": "completed", "kind": "music", "auto_mp3": automatic, "result": {
+        "title": "Original Song", "artist": "Example Artist", "duration": 180,
+        "automatic_candidate": 0, "candidates": [{"title": "Example Artist Original Song",
+            "channel": "Example Artist", "duration": 180, "url": "https://www.youtube.com/watch?v=AbcDefGhI12"}]}}
+
+
+def test_music_link_is_staged_without_downloading_or_calling_provider(monkeypatch):
+    async def exercise():
+        context = state()
+        await context.update_data(tool_kind="music", tool_owner=42)
+        message = SimpleNamespace(from_user=SimpleNamespace(id=42),
+            text="https://www.instagram.com/reel/Example/", entities=[], answer=AsyncMock())
+        post = AsyncMock()
+        monkeypatch.setattr(tools, "_payment_request", post)
+        await tools.receive_music_link(message, context)
+        data = await context.get_data()
+        assert data["tool_source_url"] == message.text and not data["tool_queued"]
+        assert await context.get_state() == tools.ToolStates.confirmation.state
+        assert "AudD" not in message.answer.await_args.args[0]
+        assert "سرویس بیرونی" in message.answer.await_args.args[0]
+        post.assert_not_awaited()
+        monkeypatch.setattr(tools, "access", AsyncMock(return_value=True))
+        monkeypatch.setattr(tools, "wait_result", AsyncMock())
+        await tools.start_tool(callback(f"tool:start:{data['tool_request_id']}"), context)
+        payload = post.await_args.kwargs["payload"]
+        assert payload["source_url"] == message.text and payload["auto_mp3"] is True
+    asyncio.run(exercise())
+
+
+def test_music_link_can_come_from_telegram_text_link_entity(monkeypatch):
+    async def exercise():
+        context = state()
+        await context.update_data(tool_kind="music", tool_owner=42)
+        message = SimpleNamespace(from_user=SimpleNamespace(id=42), text="این ویدئو",
+            entities=[SimpleNamespace(url="https://youtu.be/AbcDefGhI12")], answer=AsyncMock())
+        await tools.receive_music_link(message, context)
+        assert (await context.get_data())["tool_source_url"] == "https://youtu.be/AbcDefGhI12"
+    asyncio.run(exercise())
+
+
+def test_upload_replaces_a_previously_staged_link(monkeypatch, tmp_path):
+    async def exercise():
+        context = state()
+        await context.update_data(tool_kind="music", tool_owner=42, tool_source_url="https://youtu.be/AbcDefGhI12")
+        monkeypatch.setattr(tools, "ROOT", tmp_path)
+        item = SimpleNamespace(file_size=5, file_id="telegram-file")
+        monkeypatch.setattr(tools, "_attachment", lambda _: (item, "song.mp3", 5))
+        async def download(bot, file_id, target, **kwargs):
+            target.write_bytes(b"audio")
+        monkeypatch.setattr(tools, "_download_telegram_file", download)
+        message = SimpleNamespace(from_user=SimpleNamespace(id=42), bot=object(), answer=AsyncMock())
+        await tools.stage_upload(message, context)
+        data = await context.get_data()
+        assert data["tool_source_url"] is None
+        assert (tools.tool_folder(42, data["tool_request_id"]) / "input").read_bytes() == b"audio"
+    asyncio.run(exercise())
+
+
+def test_strict_match_downloads_mp3_and_delivers_without_extra_click(monkeypatch):
+    async def exercise():
+        request_id = uuid4().hex
+        message = callback("").message
+        post = AsyncMock(side_effect=[{"id": 7}, {"claimed": True}])
+        wait = AsyncMock(return_value={"id": 7, "status": "completed"})
+        send = AsyncMock()
+        monkeypatch.setattr(tools, "_payment_request", post)
+        monkeypatch.setattr(tools, "access", AsyncMock(return_value=True))
+        monkeypatch.setattr(tools, "_download_runtime_function", {"wait_for_download": wait, "send_downloaded_file": send}.__getitem__)
+        await tools.show_result(message, 42, request_id, song_result())
+        assert post.await_args_list[0].kwargs["payload"] == {
+            "telegram_id": 42, "candidate": 0, "output_format": "mp3", "automatic": True}
+        assert "320" in wait.await_args.args[2]
+        assert post.await_args_list[1].args[1].endswith("/claim-song-delivery")
+        send.assert_awaited_once()
+        assert send.await_args.kwargs["media_info"]["title"] == "Example Artist - Original Song"
+        assert not tools._song_downloads_in_progress
+    asyncio.run(exercise())
+
+
+@pytest.mark.parametrize("automatic_candidate,consent", [(None, True), (0, False)])
+def test_ambiguous_or_old_requests_require_clearly_labelled_download_button(monkeypatch, automatic_candidate, consent):
+    async def exercise():
+        row = song_result(automatic=consent)
+        row["result"]["automatic_candidate"] = automatic_candidate
+        message = callback("").message
+        post = AsyncMock()
+        monkeypatch.setattr(tools, "_payment_request", post)
+        token = ui_language.set("en")
+        try:
+            await tools.show_result(message, 42, uuid4().hex, row)
+        finally:
+            ui_language.reset(token)
+        assert "No download starts until you choose" in message.answer.await_args.args[0]
+        buttons = [b for r in message.answer.await_args.kwargs["reply_markup"].inline_keyboard for b in r]
+        assert "MP3 320" in buttons[0].text and buttons[0].callback_data.endswith(":0:mp3")
+        assert all(len(b.callback_data.encode()) <= 64 for b in buttons)
+        post.assert_not_awaited()
+    asyncio.run(exercise())
+
+
+@pytest.mark.parametrize("failure", [RuntimeError("HTTP 403 https://private.example/?token=secret"),
+                                      RuntimeError("FFmpeg conversion failed: secret"), asyncio.TimeoutError()])
+def test_download_failure_does_not_leave_user_waiting_or_expose_upstream_data(monkeypatch, failure):
+    async def exercise():
+        request_id = uuid4().hex
+        message = callback("").message
+        post = AsyncMock(return_value={"id": 7})
+        wait, send = AsyncMock(side_effect=failure), AsyncMock()
+        monkeypatch.setattr(tools, "_payment_request", post)
+        monkeypatch.setattr(tools, "access", AsyncMock(return_value=True))
+        monkeypatch.setattr(tools, "_download_runtime_function", {"wait_for_download": wait, "send_downloaded_file": send}.__getitem__)
+        await tools.run_track_download(message, 42, request_id, 0, "mp3", row=song_result())
+        assert message.answer.await_count == 2
+        assert "secret" not in message.answer.await_args.args[0]
+        send.assert_not_awaited()
+        assert post.await_count == 1 and not tools._song_downloads_in_progress
+    asyncio.run(exercise())
+
+
+def test_repeated_or_uncertain_delivery_never_sends_audio_twice(monkeypatch):
+    async def exercise():
+        message = callback("").message
+        post = AsyncMock(side_effect=[{"id": 7}, {"claimed": False, "reason": "delivery_started"}])
+        wait, send = AsyncMock(return_value={"id": 7, "status": "completed"}), AsyncMock()
+        monkeypatch.setattr(tools, "_payment_request", post)
+        monkeypatch.setattr(tools, "access", AsyncMock(return_value=True))
+        monkeypatch.setattr(tools, "_download_runtime_function", {"wait_for_download": wait, "send_downloaded_file": send}.__getitem__)
+        await tools.run_track_download(message, 42, uuid4().hex, 0, "mp3", row=song_result())
+        send.assert_not_awaited()
+        assert message.answer.await_args.args[0] == tools.friendly_error("delivery_started")
     asyncio.run(exercise())

@@ -16,6 +16,7 @@ from app.models.bot_experience import (
 )
 from app.models.cover_request import CoverRequest
 from app.models.media_tool import MediaToolRequest
+from app.models.portrait_credit import PortraitCredit
 from app.models.download_job import DownloadJob, DownloadJobStatus
 from app.models.payment import Payment, PaymentStatus
 from app.models.payment_order import PaymentOrder

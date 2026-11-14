@@ -112,7 +112,31 @@ def test_full_track_candidates_exclude_clips_covers_wrong_artists_and_unknown_du
         item("http://evil"), item("FFFFFFFFFFF", duration=600)]
     assert providers.song_candidates(track, entries) == [{"title": entries[0]["title"], "channel": "",
         "duration": 180, "url": "https://www.youtube.com/watch?v=AbcDefGhI12"}]
-    assert providers.song_candidates({**track, "duration": None}, entries) == []
+    unknown = providers.song_candidates({**track, "duration": None}, entries)
+    assert unknown and unknown[0]["url"].endswith("AbcDefGhI12")
+    assert providers.automatic_song_candidate({**track, "duration": None}, unknown) is None
+
+
+def test_automatic_music_selection_requires_one_strict_match():
+    track = {"title": "Original Song", "artist": "Example Artist", "duration": 180}
+    good = {"title": "Original Song (Official Audio)", "channel": "Example Artist - Topic", "duration": 182}
+    assert providers.automatic_song_candidate(track, [good]) == 0
+    assert providers.automatic_song_candidate(track, [good, dict(good)]) is None
+    assert providers.automatic_song_candidate(track, [{**good, "duration": 198}]) is None
+    assert providers.automatic_song_candidate(track, [{**good, "channel": "Other Artist"}]) is None
+    assert providers.automatic_song_candidate({**track, "duration": None}, [good]) is None
+
+
+def test_missing_reference_duration_keeps_manual_sources_but_rejects_previews():
+    track = {"title": "Original Song", "artist": "Example Artist", "duration": None}
+    entries = [{"id": "AbcDefGhI12", "title": "Example Artist Original Song", "duration": 180},
+               {"id": "AAAAAAAAAAA", "title": "Example Artist Original Song teaser", "duration": 80},
+               {"id": "BBBBBBBBBBB", "title": "Example Artist Original Song", "duration": 30}]
+    assert [c["url"] for c in providers.song_candidates(track, entries)] == ["https://www.youtube.com/watch?v=AbcDefGhI12"]
+
+
+def test_arabic_and_persian_letters_match_in_music_metadata():
+    assert providers.words("علي كريمي") == providers.words("علی کریمی")
 
 
 def test_sample_is_bounded_pcm_and_has_no_video(tmp_path):

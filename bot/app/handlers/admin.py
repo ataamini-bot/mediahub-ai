@@ -297,7 +297,26 @@ def _admin_plan_text(plan: dict) -> str:
     description_en = html.escape(str(plan.get("description_en") or "—"))
     return (
         f"{_tr('📦 <b>مشخصات پلن</b>\n\nنام فارسی: <b>')}{html.escape(str(plan['name']))}{_tr('</b>\nنام انگلیسی: <b>')}{html.escape(str(plan.get('name_en') or plan['name']))}{_tr('</b>\nنوع: ')}{plan_type}{_tr('\nوضعیت: <b>')}{status}{_tr('</b>\nمدت: <code>')}{duration}{_tr('</code>\nمبلغ ریالی: <b>')}{price}{_tr('</b>\nمبلغ بین\u200cالمللی: <b>')}{price_usdt}{_tr('</b>\n\n📊 ' + limit_label + ': <code>')}{_plan_daily_limit_text(plan.get('daily_download_limit'))}{_tr('</code>\n📦 حداکثر حجم: <code>')}{file_size}{_tr('</code>\n🎞 حداکثر کیفیت: <code>')}{quality}{_tr('</code>\n⚙️ دانلود هم\u200cزمان: <code>')}{int(plan.get('max_concurrent_downloads', 1))}{_tr('</code>\n🚀 اولویت پردازش: <code>')}{priority}{_tr('</code>\n📣 عضویت اجباری: <code>')}{forced_join}{_tr('</code>\n↕️ ترتیب نمایش: <code>')}{int(plan.get('sort_order', 0))}{_tr('</code>\n\n📝 توضیح فارسی: ')}{description}{_tr('\n🌐 توضیح انگلیسی: ')}{description_en}"
-    )
+    ) + "\n\n" + _plan_tool_limits_text(plan.get("tool_limits") or {})
+
+
+def _plan_tool_limits_text(limits):
+    english = ui_language.get() == "en"
+    lines = []
+    for kind, fa, en in (("music", "تشخیص آهنگ", "Music recognition"), ("portrait", "عکس پرسنلی", "Portrait photos")):
+        value = limits.get(kind)
+        if value is None:
+            rendered = "Server daily default" if english else "پیش‌فرض روزانه سرور"
+        elif value["limit"] == 0:
+            rendered = "Disabled" if english else "غیرفعال"
+        elif value["limit"] == -1:
+            rendered = "Unlimited (server total still applies)" if english else "نامحدود (با رعایت سقف کل سرور)"
+        else:
+            period = (("per week" if value.get("period") == "weekly" else "per day") if english else
+                      ("در هفته" if value.get("period") == "weekly" else "در روز"))
+            rendered = f"{value['limit']} {period}"
+        lines.append(f"{en if english else fa}: {rendered}")
+    return "\n".join(lines)
 
 
 def _plan_create_summary(data: dict) -> str:
@@ -335,6 +354,9 @@ def _plan_update_summary(plan: dict, changes: dict) -> str:
     ]
 
     for key, value in changes.items():
+        if key == "tool_limits":
+            lines.append(html.escape(_plan_tool_limits_text({**(plan.get('tool_limits') or {}), **value})))
+            continue
         if isinstance(value, bool):
             rendered = _tr("بله") if value else _tr("خیر")
         elif value is None:
@@ -2077,7 +2099,7 @@ async def confirm_create_plan(
 
 @router.callback_query(
     F.data.regexp(
-        r"^admin:plan:edit:(name|name_en|description|description_en|duration|price|usdt|daily|size|quality|concurrency|order):\d+$"
+        r"^admin:plan:edit:(name|name_en|description|description_en|duration|price|usdt|daily|size|quality|concurrency|order|music|portrait):\d+$"
     )
 )
 async def start_edit_plan_field(
@@ -2128,6 +2150,16 @@ async def start_edit_plan_field(
                 "size": _tr("حداکثر حجم جدید را به MB وارد کنید (۱ تا ۱۹۰۰):"),
                 "order": _tr("ترتیب نمایش را وارد کنید؛ عدد کوچک‌تر بالاتر نمایش داده می‌شود:"),
             }
+            if field in {"music", "portrait"}:
+                prompts[field] = (
+                    "Enter the attempt limit: 0 disables this tool, -1 is unlimited, and 1–10000 sets a cap. "
+                    "Send default to use the server daily default. Change Daily/Weekly beside the tool button. "
+                    "Failed or cancelled attempts count; a provider may already have charged. The server total cap still applies."
+                    if ui_language.get() == "en" else
+                    "سقف تعداد تلاش را وارد کنید: ۰ غیرفعال، منفی ۱ نامحدود، عدد ۱ تا ۱۰۰۰۰ محدود. "
+                    "برای استفاده از پیش‌فرض روزانه سرور، default بفرستید. دوره روزانه/هفتگی از دکمه کنار نام قابلیت تغییر می‌کند. "
+                    "تلاش ناموفق یا لغوشده هم حساب می‌شود؛ ممکن است سرویس هزینه را گرفته باشد. سقف کل سرور همچنان برقرار است."
+                )
             await callback.message.edit_text(prompts[field], reply_markup=None)
             await callback.message.answer(
                 _tr("مقدار جدید را ارسال کنید:"),
@@ -2151,7 +2183,16 @@ async def receive_plan_edit_value(message: Message, state: FSMContext) -> None:
     changes: dict = {}
     error: str | None = None
 
-    if field == "name":
+    if field in {"music", "portrait"}:
+        normalized = raw_value.translate(str.maketrans("۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩", "01234567890123456789"))
+        if normalized.lower() == "default":
+            changes["tool_limits"] = {field: None}
+        elif re.fullmatch(r"-?\d+", normalized) and -1 <= int(normalized) <= 10000:
+            previous = ((data.get("plan") or {}).get("tool_limits") or {}).get(field) or {}
+            changes["tool_limits"] = {field: {"limit": int(normalized), "period": previous.get("period", "daily")}}
+        else:
+            error = "Enter -1 to 10000, or default." if ui_language.get() == "en" else "عدد منفی ۱ تا ۱۰۰۰۰ یا default وارد کنید."
+    elif field == "name":
         normalized_name = " ".join(raw_value.split())
         if 2 <= len(normalized_name) <= 100:
             changes["name"] = normalized_name
@@ -2264,6 +2305,29 @@ async def select_plan_edit_choice(
         reply_markup=build_plan_confirmation_keyboard(action="update"),
     )
     await callback.answer()
+
+
+@router.callback_query(F.data.regexp(r"^admin:plan:toolperiod:(music|portrait):\d+$"))
+async def toggle_plan_tool_period(callback: CallbackQuery, state: FSMContext):
+    if not isinstance(callback.message, Message):
+        return
+    kind, plan_id = callback.data.split(":")[-2:]
+    try:
+        plan = await get_admin_plan(actor_telegram_id=callback.from_user.id, plan_id=int(plan_id))
+        current = (plan.get("tool_limits") or {}).get(kind)
+        if current is None:
+            await callback.answer("Set an explicit limit first." if ui_language.get() == "en" else "ابتدا سقف این قابلیت را مشخص کنید.", show_alert=True)
+            return
+        value = {**current, "period": "daily" if current.get("period") == "weekly" else "weekly"}
+        changes = {"tool_limits": {kind: value}}
+        await state.clear()
+        await state.update_data(workflow="plan_update", plan=plan, plan_id=int(plan_id), plan_changes=changes)
+        await state.set_state(AdminManagementStates.confirming_plan_update)
+        await callback.message.edit_text(_plan_update_summary(plan, changes), parse_mode="HTML",
+                                        reply_markup=build_plan_confirmation_keyboard(action="update"))
+        await callback.answer()
+    except BackendAPIError as exc:
+        await callback.answer(_backend_error_text(exc), show_alert=True)
 
 
 @router.callback_query(

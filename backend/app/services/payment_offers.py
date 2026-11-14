@@ -26,7 +26,7 @@ class PaymentConfigurationError(RuntimeError):
 class PaymentOffer:
     code: str
     label: str
-    plan_id: int
+    plan_id: int | None
     duration_days: int
     price: Decimal
     daily_download_limit: int | None
@@ -38,6 +38,7 @@ class PaymentOffer:
     description: str | None
     description_en: str | None
     download_limit_period: str = "daily"
+    purpose: str = "subscription"
 
     @classmethod
     def from_plan(cls, plan: Plan, *, currency: str = "IRT") -> "PaymentOffer":
@@ -143,6 +144,9 @@ async def get_payment_offer(
         Plan.price_usdt if normalized_currency == "USDT" else Plan.price
     )
     normalized_code = str(code or "").strip().lower()
+    if normalized_code == "portrait-once":
+        from app.services.portrait_purchases import portrait_offer
+        return await portrait_offer(session, currency=currency)
     result = await session.execute(
         select(Plan).where(
             Plan.slug == normalized_code,
@@ -171,7 +175,18 @@ async def get_payment_configuration(
     normalized_language = "en" if language == "en" else "fa"
     currency = "USDT" if normalized_language == "en" else "IRT"
     await ensure_public_operation(session, "payments")
-    offers = await get_payment_offers(session, language=normalized_language)
+    from app.services.portrait_purchases import portrait_offer
+    from app.schemas.payment import PaymentOfferResponse
+    try:
+        single = await portrait_offer(session, currency=currency)
+    except LookupError:
+        single = None
+    try:
+        offers = await get_payment_offers(session, language=normalized_language)
+    except PaymentConfigurationError:
+        if single is None:
+            raise
+        offers = ()
 
     destination = None
     destinations: list[dict] = []
@@ -204,6 +219,10 @@ async def get_payment_configuration(
             raise PaymentConfigurationError(str(exc)) from exc
 
     return {
+        "portrait_offer": PaymentOfferResponse(code=single.code, label=single.label, purpose="portrait",
+            duration_days=0, price=single.price, currency=currency, **single.limits_snapshot(),
+            description=single.localized_description(normalized_language),
+            description_fa=single.description, description_en=single.description_en).model_dump() if single else None,
         "offers": [
             {
                 "code": offer.code,

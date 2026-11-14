@@ -240,14 +240,14 @@ def build_payment_offers_keyboard(
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def build_payment_offer_detail_keyboard(language: str = "fa", *, has_coupon: bool = False) -> InlineKeyboardMarkup:
+def build_payment_offer_detail_keyboard(language: str = "fa", *, has_coupon: bool = False, portrait: bool = False) -> InlineKeyboardMarkup:
     is_fa = language != "en"
     return InlineKeyboardMarkup(
-        inline_keyboard=[
+        inline_keyboard=([
             [InlineKeyboardButton(
                 text=("❌ حذف کد تخفیف" if is_fa else "❌ Remove discount code") if has_coupon else
                      ("🎟 کد تخفیف دارم" if is_fa else "🎟 I have a discount code"),
-                callback_data="payment:coupon:remove" if has_coupon else "payment:coupon:enter")],
+                callback_data="payment:coupon:remove" if has_coupon else "payment:coupon:enter")]] if not portrait else []) + [
             [InlineKeyboardButton(text="💰 پرداخت با اعتبار داخلی" if is_fa else "💰 Pay with internal credit",
                                   callback_data="credit:pay:start")],
             [
@@ -259,8 +259,8 @@ def build_payment_offer_detail_keyboard(language: str = "fa", *, has_coupon: boo
             ],
             [
                 InlineKeyboardButton(
-                    text=_tr("🔙 بازگشت به پلن‌ها") if is_fa else "🔙 Back to plans",
-                    callback_data="payment:open",
+                    text=("📸 عکس پرسنلی" if is_fa else "📸 Portrait photo") if portrait else (_tr("🔙 بازگشت به پلن‌ها") if is_fa else "🔙 Back to plans"),
+                    callback_data="tool:open:portrait" if portrait else "payment:open",
                 )
             ],
         ]

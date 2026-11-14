@@ -163,7 +163,7 @@ class CreditService:
         await self.db.flush()
         # The same transaction commits the debit, payment, subscription and notifications.
         await PaymentService(self.db)._activate(payment, user, admin_telegram_id=None, commit=False)
-        await self.append(account, entry_id=order.id, delta=-amount, kind="purchase", reason="Subscription purchase",
+        await self.append(account, entry_id=order.id, delta=-amount, kind="purchase", reason="Portrait purchase" if payment.offer_code == "portrait-once" else "Subscription purchase",
             actor=user.telegram_id, payload_hash=digest({"order": str(order.id)}), payment_id=payment.id)
         order.status = "submitted"
         await self.db.commit()

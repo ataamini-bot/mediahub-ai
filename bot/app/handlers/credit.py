@@ -316,7 +316,7 @@ async def preview_purchase(message, state, actor, order):
     enough = Decimal(account["balance"]) >= Decimal(order["offer"]["price"])
     await state.clear()
     await state.set_state(CreditStates.purchase)
-    await state.update_data(order_id=str(order["id"]))
+    await state.update_data(order_id=str(order["id"]), purchase_purpose=order["offer"].get("purpose", "subscription"))
     if enough:
         rows.append([(tr("✅ تأیید خرید با اعتبار", "✅ Confirm credit purchase"), "credit:pay:confirm")])
     else:
@@ -330,6 +330,10 @@ async def preview_purchase(message, state, actor, order):
             f"{tr('موجودی', 'Balance')}: {money(account['balance'], currency)}\n")
     text += tr("با تأیید، کل مبلغ کسر و اشتراک فعال یا طبق دوره‌های فعلی تمدید/زمان‌بندی می‌شود.",
                "Confirming deducts the full amount and activates, renews or schedules your subscription based on existing periods.") if enough else error_text(BackendAPIError(status_code=409, detail={"code": "credit_insufficient"}))
+    if offer.get("purpose") == "portrait":
+        from app.tool_texts import tool_text
+        text = (f"{html.escape(offer['label'])}\n{money(offer['price'], currency)}\n" +
+                tool_text("portrait_credit_confirm") if enough else error_text(BackendAPIError(status_code=409, detail={"code": "credit_insufficient"})))
     text += discount_text(offer.get("coupon"), language)
     await message.answer(text, parse_mode="HTML", reply_markup=markup)
 
@@ -352,9 +356,16 @@ async def start_purchase(callback: CallbackQuery, state: FSMContext):
 @router.callback_query(CreditStates.purchase, F.data == "credit:pay:confirm")
 async def pay(callback: CallbackQuery, state: FSMContext):
     try:
-        order_id = (await state.get_data())["order_id"]
+        data = await state.get_data()
+        order_id = data["order_id"]
         result = await _payment_request("POST", f"/credit/orders/{order_id}/pay", payload={"telegram_id": callback.from_user.id})
         await state.clear()
+        if data.get("purchase_purpose") == "portrait":
+            from app.tool_texts import tool_text
+            await callback.message.answer(tool_text("portrait_approved"), reply_markup=keyboard([
+                [(tool_text("portrait_open"), "tool:open:portrait")]]))
+            await callback.answer()
+            return
         await callback.message.answer(tr("✅ خرید با اعتبار ثبت شد. وضعیت و زمان شروع اشتراک را از «اشتراک من» ببینید.",
             "✅ Credit purchase completed. View your subscription and its start date in My subscription.") +
             f"\n{tr('موجودی فعلی', 'Current balance')}: {money(result['account']['balance'], result['account']['currency'])}",

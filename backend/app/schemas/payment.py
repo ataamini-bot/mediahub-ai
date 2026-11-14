@@ -15,7 +15,8 @@ class PaymentOfferResponse(BaseModel):
     coupon: dict[str, Any] = Field(default_factory=dict)
     code: str
     label: str
-    duration_days: int = Field(gt=0)
+    purpose: Literal["subscription", "portrait"] = "subscription"
+    duration_days: int = Field(ge=0)
     price: Decimal
     currency: Literal["IRT", "USDT"] = "IRT"
     daily_download_limit: int | None
@@ -52,6 +53,7 @@ class PaymentReceiptRulesResponse(BaseModel):
 
 
 class PaymentConfigurationResponse(BaseModel):
+    portrait_offer: PaymentOfferResponse | None = None
     offers: list[PaymentOfferResponse]
     destination: PaymentDestinationResponse | None
     destinations: list[PaymentDestinationResponse] = Field(default_factory=list)
@@ -139,7 +141,7 @@ class PaymentResponse(BaseModel):
     id: int
     order_id: UUID | None = None
     user_id: int
-    plan_id: int
+    plan_id: int | None
     amount: Decimal
     offer_code: str
     duration_months: Literal[1, 3, 6, 12] | None

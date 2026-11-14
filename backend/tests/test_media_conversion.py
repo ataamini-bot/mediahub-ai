@@ -94,6 +94,14 @@ def test_ffmpeg_conversion_supports_all_exposed_targets(tmp_path, monkeypatch):
         )
         assert output.suffix == f".{output_format}"
         assert output.is_file() and output.stat().st_size > 0
+        if output_format == "mp3":
+            # Check encoded bytes, not just command flags. The 8 kHz input
+            # otherwise causes MP3 encoders to silently lower the bitrate.
+            probe = download_worker._probe_media_file(output)
+            stream = next(s for s in probe["streams"] if s["codec_type"] == "audio")
+            assert stream["codec_name"] == "mp3"
+            assert int(stream["bit_rate"]) == 320000
+            assert int(stream["sample_rate"]) == 44100
         output.unlink()
 
 

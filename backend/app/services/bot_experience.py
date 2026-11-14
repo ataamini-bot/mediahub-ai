@@ -286,6 +286,8 @@ class BotExperienceService:
     async def configuration(self, language: str) -> dict[str, Any]:
         normalized = language if language in SUPPORTED_LANGUAGES else "fa"
         settings = ApplicationSettingsService(self.session)
+        from app.tool_texts import TOOL_TEXTS
+        tool_texts = await settings.get_value(f"bot.tool_texts.{normalized}", {}) or {}
         content = _merge_string_map(
             DEFAULT_CONTENT[normalized],
             await settings.get_value(f"bot.content.{normalized}"),
@@ -316,6 +318,7 @@ class BotExperienceService:
         )
         return {
             "language": normalized,
+            "tool_texts": tool_texts,
             "content": content,
             "buttons": buttons,
             "button_styles": button_styles,

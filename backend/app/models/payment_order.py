@@ -17,7 +17,7 @@ class PaymentOrder(Base, TimestampMixin):
 
     id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
-    plan_id: Mapped[int] = mapped_column(ForeignKey("plans.id", ondelete="RESTRICT"))
+    plan_id: Mapped[int | None] = mapped_column(ForeignKey("plans.id", ondelete="RESTRICT"))
     payment_card_id: Mapped[int | None] = mapped_column(ForeignKey("payment_cards.id", ondelete="SET NULL"))
     status: Mapped[str] = mapped_column(String(16), default="open", server_default="open")
     currency: Mapped[str] = mapped_column(String(4))

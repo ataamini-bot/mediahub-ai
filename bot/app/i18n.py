@@ -68,6 +68,8 @@ def translate(language: str | None, key: str, **values: Any) -> str:
     if template is None:
         template = MESSAGES[DEFAULT_LANGUAGE].get(key, key)
 
+    from app.tool_texts import authored_copy
+    template = authored_copy(None, normalized, template, key="i18n_" + key.replace(".", "_"))
     return template.format(**values)
 
 

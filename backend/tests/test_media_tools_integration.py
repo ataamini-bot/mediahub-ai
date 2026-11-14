@@ -15,7 +15,7 @@ from app.core.config import settings
 from app.db.session import AsyncSessionLocal, engine
 from app.models.app_setting import ApplicationSetting
 from app.models.media_tool import MediaToolRequest
-from app.models.download_job import DownloadJob
+from app.models.download_job import DownloadJob, DownloadJobStatus
 from app.models.user import User, UserStatus
 from app.services.application_settings import ApplicationSettingsService, SettingValidationError
 from app.services.media_tool_config import configure_tool, read_config, public_config
@@ -78,7 +78,7 @@ async def test_global_limit_is_atomic_for_two_users(records):
         await db.commit()
     results = await asyncio.gather(accept(records.payload(user=1)), accept(records.payload(user=2)))
     assert sum(isinstance(r, tuple) for r in results) == 1
-    assert "tool_daily_limit" in results
+    assert "tool_global_limit" in results
 
 
 @pytest.mark.asyncio
@@ -217,6 +217,8 @@ async def test_song_download_uses_full_source_and_repeated_click_creates_one_job
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test",
             headers={"X-Internal-API-Key": settings.bot_backend_api_key}) as client:
         body = {"telegram_id": value.telegram_id, "candidate": 0, "output_format": "mp3"}
+        automatic = await client.post(f"/media-tools/{value.request_id}/download", json={**body, "automatic": True})
+        assert automatic.status_code == 409 and automatic.json()["detail"]["code"] == "music_selection_required"
         first = await client.post(f"/media-tools/{value.request_id}/download", json=body)
         second = await client.post(f"/media-tools/{value.request_id}/download", json=body)
         assert first.status_code == second.status_code == 200
@@ -224,8 +226,88 @@ async def test_song_download_uses_full_source_and_repeated_click_creates_one_job
         another = await client.post(f"/media-tools/{value.request_id}/download", json={**body, "output_format": "flac"})
         assert another.status_code == 200 and another.json()["output_format"] == "flac"
         assert another.json()["id"] != first.json()["id"]
+        async with AsyncSessionLocal() as db:
+            await db.execute(update(DownloadJob).where(DownloadJob.id.in_([first.json()["id"], another.json()["id"]])).values(
+                status=DownloadJobStatus.COMPLETED, file_path="/app/downloads/test-audio.mp3", file_size=100))
+            await db.commit()
+        endpoint = f"/media-tools/{value.request_id}/claim-song-delivery"
+        async def claim():
+            return (await client.post(endpoint, json=body)).json()
+        claims = await asyncio.gather(claim(), claim())
+        assert [r["claimed"] for r in claims].count(True) == 1
+        assert (await client.post(endpoint, json=body)).json()["reason"] == "delivery_started"
+        assert (await client.post(endpoint, json={**body, "output_format": "flac"})).json()["claimed"]
+        assert (await client.post(endpoint, json={**body, "telegram_id": records.users[2].telegram_id})).status_code == 404
     assert calls == [{"source_url": source, "telegram_id": value.telegram_id, "media_type": "audio", "output_format": fmt}
                      for fmt in ("mp3", "flac")]
+
+
+@pytest.mark.asyncio
+async def test_link_admission_needs_no_upload_and_rejects_unsafe_urls_before_provider(records):
+    value = records.payload().model_copy(update={"source_url": "https://www.instagram.com/reel/Example/", "auto_mp3": True})
+    (folder(value.telegram_id, value.request_id) / "input").unlink()
+    row, created = await accept(value)
+    assert created and row.options == {"source_url": value.source_url, "auto_mp3": True}
+    assert (await accept(value))[1] is False
+    bad = value.model_copy(update={"request_id": uuid4(), "source_url": "http://127.0.0.1/private"})
+    assert await accept(bad) == "invalid_music_link"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("cancel_during_fetch", [False, True])
+async def test_link_sample_recognizes_once_and_cancellation_stops_before_billing(records, monkeypatch, cancel_during_fetch):
+    from app.workers.tasks import media_tools as worker
+    from app.services import media_tool_links
+    value = records.payload().model_copy(update={"source_url": "https://youtu.be/AbcDefGhI12", "auto_mp3": True})
+    (folder(value.telegram_id, value.request_id) / "input").unlink()
+    await accept(value)
+    calls = []
+    def fetch(url, target):
+        assert url == value.source_url
+        target.write_bytes(b"sample-from-public-link")
+        if cancel_during_fetch:
+            with worker.WorkerSessionLocal() as db:
+                db.execute(update(MediaToolRequest).where(MediaToolRequest.id == value.request_id).values(status="cancelled"))
+                db.commit()
+        return target
+    def recognize(source, token):
+        assert source.read_bytes() == b"sample-from-public-link"
+        calls.append(1)
+        return {"title": "Original Song", "artist": "Example Artist", "duration": 180}
+    monkeypatch.setattr(media_tool_links, "fetch_music_link", fetch)
+    monkeypatch.setattr(worker, "recognize_music", recognize)
+    monkeypatch.setattr(worker, "find_full_tracks", lambda track: [{"title": "Example Artist Original Song", "channel": "Example Artist",
+        "duration": 180, "url": "https://www.youtube.com/watch?v=AAAAAAAAAAA"}])
+    await asyncio.to_thread(worker.run_tool.run, str(value.request_id))
+    await asyncio.to_thread(worker.run_tool.run, str(value.request_id))
+    async with AsyncSessionLocal() as db:
+        row = await db.get(MediaToolRequest, value.request_id)
+        assert row.status == ("cancelled" if cancel_during_fetch else "completed")
+        if not cancel_during_fetch:
+            assert row.result["automatic_candidate"] == 0
+            assert row.result["candidates"][0]["url"] != value.source_url
+    assert calls == ([] if cancel_during_fetch else [1])
+    assert not folder(value.telegram_id, value.request_id).exists()
+
+
+@pytest.mark.asyncio
+async def test_failed_link_never_calls_paid_recognition_and_cleans_partial_files(records, monkeypatch):
+    from app.workers.tasks import media_tools as worker
+    from app.services import media_tool_links
+    from app.services.media_tool_providers import ToolError
+    value = records.payload().model_copy(update={"source_url": "https://youtu.be/AbcDefGhI12"})
+    (folder(value.telegram_id, value.request_id) / "input").unlink()
+    await accept(value)
+    def fail(url, target):
+        (target.parent / "link-source.webm.part").write_bytes(b"partial")
+        raise ToolError("link_timeout")
+    monkeypatch.setattr(media_tool_links, "fetch_music_link", fail)
+    monkeypatch.setattr(worker, "recognize_music", lambda *a: pytest.fail("billed recognition after failed link"))
+    await asyncio.to_thread(worker.run_tool.run, str(value.request_id))
+    async with AsyncSessionLocal() as db:
+        row = await db.get(MediaToolRequest, value.request_id)
+        assert row.status == "failed" and row.error_code == "link_timeout"
+    assert not folder(value.telegram_id, value.request_id).exists()
 
 
 @pytest.mark.asyncio

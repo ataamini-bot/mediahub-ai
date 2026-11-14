@@ -139,7 +139,9 @@ async def edit_runtime_setting(
         )
     else:
         await state.set_state(AdminSettingStates.waiting_for_value)
-        if definition.kind == "integer":
+        if definition.kind == "amount":
+            instruction = _tr("مبلغ را بفرستید؛ صفر یعنی غیرفعال. تومان عدد صحیح و USDT حداکثر چهار رقم اعشار است.")
+        elif definition.kind == "integer":
             instruction = (
                 f"{_tr('یک عدد بین ')}{definition.minimum}{_tr(' تا ')}{definition.maximum}{_tr(' مگابایت بفرستید.')}"
             )
@@ -202,7 +204,19 @@ async def receive_setting_value(message: Message, state: FSMContext) -> None:
         return
 
     raw_value = message.text.strip()
-    if definition.kind == "integer":
+    if definition.kind == "amount":
+        from decimal import Decimal, InvalidOperation
+        raw = raw_value.translate(str.maketrans("۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩٫", "01234567890123456789.")).replace(",", "").replace("٬", "")
+        try:
+            number = Decimal(raw)
+            unit = Decimal("1") if key.endswith("_irt") else Decimal("0.0001")
+            if not number.is_finite() or not 0 <= number <= 1_000_000_000_000 or number != number.quantize(unit):
+                raise InvalidOperation
+            value = format(number.quantize(unit), "f")
+        except InvalidOperation:
+            await message.answer(_tr("مبلغ معتبر نیست؛ یک مبلغ مثبت یا صفر بفرستید."))
+            return
+    elif definition.kind == "integer":
         translated = raw_value.translate(
             str.maketrans("۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩", "01234567890123456789")
         )

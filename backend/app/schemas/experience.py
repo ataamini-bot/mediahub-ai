@@ -23,6 +23,7 @@ ChannelLanguage = Literal["all", "fa", "en"]
 
 class BotConfigurationResponse(BaseModel):
     language: Literal["fa", "en"]
+    tool_texts: dict[str, str] = Field(default_factory=dict)
     content: dict[str, str]
     buttons: dict[str, str]
     button_styles: dict[str, ButtonStyle] = Field(default_factory=dict)

@@ -30,6 +30,9 @@ def remove_files(telegram_id, request_id, *, keep_result=False):
     path = folder(telegram_id, request_id)
     # Never follow user symlinks or recurse into unexpected subdirectories.
     if path.is_dir():
+        for temporary in path.glob("link-source.*"):
+            if temporary.is_file() or temporary.is_symlink():
+                temporary.unlink(missing_ok=True)
         for name in ("input", "sample.wav", "photo.png", "result.jpg", "result.tmp"):
             if keep_result and name == "result.jpg":
                 continue

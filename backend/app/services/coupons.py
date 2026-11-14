@@ -68,6 +68,8 @@ class CouponService:
             raise CouponError("coupon_user_limit")
 
     async def eligible(self, code, currency, user_id, offer):
+        if getattr(offer, "purpose", "subscription") != "subscription":
+            raise CouponError("coupon_plan_scope")
         # This row lock serializes reservations across different customers.
         coupon = await self.db.scalar(select(Coupon).where(Coupon.code == code, Coupon.currency == currency)
             .with_for_update().execution_options(populate_existing=True))

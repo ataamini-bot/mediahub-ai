@@ -1,5 +1,5 @@
 {
-  "⏰ این درخواست منقضی شده است. لطفاً لینک را دوباره ارسال کنید.": "⏰ This request has expired. Please send the link again.",
+  "⏰ این درخواست منقضی شده است. لطفاً لینک را دوباره ارسال کنید.": "⏰ This request expired. Please send the link again.",
   "⏰ این درخواست منقضی شده است.": "⏰ This request has expired.",
   "پلن فعلی": "current plan",
   "رایگان": "Free",
@@ -82,7 +82,6 @@
   " آماده دانلود است</b>\n\n📌 <b>عنوان:</b> ": " is ready to download</b>\n\n📌 <b>Title:</b> ",
   "\n\n🎯 <b>کیفیت موردنظر را انتخاب کنید:</b>\n📦 حجم‌ها تقریبی هستند.": "\n\n🎯 <b>Select a quality:</b>\n📦 Sizes are approximate.",
   "❌ <b>دریافت اطلاعات رسانه ناموفق بود</b>\n\n⚠️ خطا:\n<code>": "❌ <b>Could not load media information</b>\n\n⚠️ Error:\n<code>",
-  "⏰ این درخواست منقضی شده است. لطفاً لینک را دوباره ارسال کنید.": "⏰ This request expired. Please send the link again.",
   "❌ لینک دانلود پیدا نشد.": "❌ Download link not found.",
   "❌ کیفیت نامعتبر است.": "❌ Invalid quality.",
   "حجم این کیفیت بیش از حد مجاز است.": "This quality exceeds the file size limit.",
@@ -1143,5 +1142,15 @@
   "رسید را در گفت‌وگوی خصوصی ربات، از پنل مدیریت ← پرداخت‌ها بررسی کنید.": "Review this receipt in the private bot chat: Admin panel → Payments.",
   "فقط پرداخت تأییدشده گزارش می‌شود.": "Only approved payments can be reported.",
   "✅ گزارش تأیید به تاپیک Payment ارسال شد.": "✅ The approval report was sent to the Payment topic.",
-  "ارسال گزارش انجام نشد؛ تنظیمات تاپیک Payment را بررسی کنید.": "The report could not be sent. Check the Payment topic settings."
+  "ارسال گزارش انجام نشد؛ تنظیمات تاپیک Payment را بررسی کنید.": "The report could not be sent. Check the Payment topic settings.",
+  "قیمت تکی عکس (تومان)": "One portrait price (toman)",
+  "قیمت تکی عکس (USDT)": "One portrait price (USDT)",
+  "قیمت ساخت یک عکس بدون اشتراک؛ صفر یعنی غیرفعال": "Price for one portrait without subscription; zero disables sale",
+  "قیمت ساخت یک عکس برای زبان انگلیسی؛ صفر یعنی غیرفعال": "One portrait price for English users; zero disables sale",
+  "مبلغ را بفرستید؛ صفر یعنی غیرفعال. تومان عدد صحیح و USDT حداکثر چهار رقم اعشار است.": "Send the price; zero disables sale. Whole toman or USDT with up to four decimal places.",
+  "مبلغ معتبر نیست؛ یک مبلغ مثبت یا صفر بفرستید.": "Invalid price; send a positive amount or zero.",
+  "🎵📸 متن‌های آهنگ و عکس": "🎵📸 Music and portrait messages",
+  "🔎 جستجو در همه متن‌ها": "🔎 Search all message texts",
+  "بخشی از متن پیام را برای جستجو بفرستید.": "Send part of a message to find its editable text.",
+  "نتیجه جستجو؛ برای محدودکردن نتایج عبارت دقیق‌تری بفرستید:": "Search results; send a more specific phrase to narrow the results."
 }

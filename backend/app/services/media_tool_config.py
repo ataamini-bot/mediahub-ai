@@ -20,6 +20,19 @@ class ToolConfiguration(BaseModel):
     model: Literal["gpt-image-2.6-flare", "gpt-image-2.6-sunburst", "gpt-image-2"] = "gpt-image-2.6-flare"
 
 
+class PlanToolLimit(BaseModel):
+    model_config = {"extra": "forbid", "strict": True}
+    limit: int = Field(ge=-1, le=10000)
+    period: Literal["daily", "weekly"] = "daily"
+
+
+def validate_plan_tool_limits(value):
+    if not isinstance(value, dict) or not set(value) <= set(KINDS):
+        raise ValueError("Unknown media tool limit")
+    return {kind: PlanToolLimit.model_validate(limit).model_dump() if limit is not None else None
+            for kind, limit in value.items()}
+
+
 async def read_config(db, kind):
     service = ApplicationSettingsService(db)
     config = {**DEFAULTS, **(await service.get_value(f"tools.{kind}.config", {}) or {})}

@@ -33,7 +33,7 @@ def present(row):
     return {"id": str(row.id), "kind": row.kind, "status": row.status, "result": row.result,
             "error_code": row.error_code, "files_removed": row.files_removed_at is not None,
             "download_job_id": row.download_job_id, "download_state": row.download_state,
-            "delivery_state": row.delivery_state}
+            "delivery_state": row.delivery_state, "auto_mp3": bool((row.options or {}).get("auto_mp3"))}
 
 
 async def submit(db, data):
@@ -46,6 +46,20 @@ async def submit(db, data):
         raise MediaToolError("access_denied", 403)
     existing = await db.get(MediaToolRequest, data.request_id)
     options = {"clothing": data.clothing, "background": data.background} if data.kind == "portrait" else {}
+    if data.use_paid_credit:
+        if data.kind != "portrait":
+            raise MediaToolError("request_conflict", 422)
+        options["use_paid_credit"] = True
+    if data.kind == "music" and data.auto_mp3:
+        options["auto_mp3"] = True
+    if data.source_url is not None:
+        from app.services.media_tool_links import normalize_music_link
+        if data.kind != "music":
+            raise MediaToolError("invalid_music_link", 422)
+        try:
+            options["source_url"] = normalize_music_link(data.source_url)
+        except ValueError:
+            raise MediaToolError("invalid_music_link", 422) from None
     if existing:
         if existing.user_id != user.id or existing.kind != data.kind or existing.options != options:
             raise MediaToolError("request_conflict")
@@ -53,27 +67,69 @@ async def submit(db, data):
     config = await read_config(db, data.kind)
     if not config["enabled"] or not config["token"]:
         raise MediaToolError("tool_disabled", 503)
-    from app.services.download_access import quota_day_start_utc
-    midnight = quota_day_start_utc(timezone_name=await get_managed_setting(db, "quota.timezone"))
-    totals = await db.execute(select(func.count(), func.count().filter(MediaToolRequest.user_id == user.id)).where(
+    from app.services.download_access import quota_day_start_utc, quota_window_start_utc
+    timezone_name = await get_managed_setting(db, "quota.timezone")
+    midnight = quota_day_start_utc(timezone_name=timezone_name)
+    totals = await db.execute(select(func.count()).where(
         MediaToolRequest.kind == data.kind, MediaToolRequest.created_at >= midnight))
-    total, personal = totals.one()
-    if total >= config["global_daily"] or personal >= config["per_user_daily"]:
-        raise MediaToolError("tool_daily_limit", 429)
+    if totals.scalar_one() >= config["global_daily"]:
+        raise MediaToolError("tool_global_limit", 429)
+    credit = None
+    if data.use_paid_credit:
+        from app.models.portrait_credit import PortraitCredit
+        credit = await db.scalar(select(PortraitCredit).where(PortraitCredit.user_id == user.id,
+            PortraitCredit.request_id.is_(None)).order_by(PortraitCredit.created_at).limit(1).with_for_update())
+        if credit is None:
+            raise MediaToolError("portrait_credit_missing", 409)
+    else:
+        limit, period = await plan_tool_limit(db, user.telegram_id, data.kind, config)
+        if limit == 0:
+            raise MediaToolError("tool_plan_disabled", 403)
+        window = quota_window_start_utc(period, timezone_name=timezone_name)
+        personal = await db.scalar(select(func.count()).where(MediaToolRequest.kind == data.kind,
+            MediaToolRequest.user_id == user.id, MediaToolRequest.created_at >= window,
+            ~MediaToolRequest.options["use_paid_credit"].as_boolean().is_(True)))
+        if limit != -1 and personal >= limit:
+            if period == "weekly":
+                raise MediaToolError("tool_weekly_limit", 429)
+            raise MediaToolError("tool_daily_limit", 429)
     if await db.scalar(select(MediaToolRequest.id).where(MediaToolRequest.user_id == user.id,
             MediaToolRequest.status.in_(("pending", "processing"))).limit(1)):
         raise MediaToolError("tool_busy")
-    try:
-        input_file(data.telegram_id, data.request_id, data.kind)
-    except ValueError:
-        raise MediaToolError("input_expired", 422) from None
+    if "source_url" not in options:
+        try:
+            input_file(data.telegram_id, data.request_id, data.kind)
+        except ValueError:
+            raise MediaToolError("input_expired", 422) from None
     row = MediaToolRequest(id=data.request_id, user_id=user.id, kind=data.kind, options=options, status="pending")
     db.add(row)
+    await db.flush()
+    if credit is not None:
+        credit.request_id = row.id
     await db.commit()
     return row, True
 
 
+async def plan_tool_limit(db, telegram_id, kind, config):
+    from app.models.plan import Plan
+    from app.services.download_access import DownloadAccessService, DownloadAccessError
+    try:
+        entitlement = await DownloadAccessService(db).get_entitlement(telegram_id)
+    except DownloadAccessError:
+        raise MediaToolError("tool_plan_unavailable", 503) from None
+    plan = await db.get(Plan, entitlement.plan_id) if entitlement.plan_id else None
+    configured = (plan.tool_limits or {}).get(kind) if plan else None
+    if configured is None:
+        return config["per_user_daily"], "daily"
+    return configured["limit"], configured.get("period", "daily")
+
+
 async def reconcile_restored_tools(db):
+    from app.models.portrait_credit import PortraitCredit
+    unstarted = select(MediaToolRequest.id).where(
+        MediaToolRequest.status == "pending", MediaToolRequest.started_at.is_(None))
+    await db.execute(update(PortraitCredit).where(
+        PortraitCredit.request_id.in_(unstarted)).values(request_id=None))
     # Restored inputs are intentionally absent from backups. In particular a
     # previously processing paid request must never be billed again.
     result = await db.execute(update(MediaToolRequest).where(MediaToolRequest.status.in_(
@@ -120,6 +176,8 @@ def sweep_tools(db, *, now=None):
             row.status = "uncertain" if row.started_at else "failed"
             row.error_code = "provider_uncertain" if row.started_at else "queue_expired"
             row.completed_at = now
+            from app.services.portrait_purchases import refund_failed_credit
+            refund_failed_credit(db, row)
         if row.status in {"pending", "processing"}:
             active.add(folder(telegram_id, row.id).name)
             continue

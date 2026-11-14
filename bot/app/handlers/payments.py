@@ -133,7 +133,7 @@ def _find_offer(configuration: dict, code: str) -> dict | None:
     return next(
         (
             offer
-            for offer in configuration.get("offers", [])
+            for offer in [*configuration.get("offers", []), *([configuration["portrait_offer"]] if configuration.get("portrait_offer") else [])]
             if offer.get("code") == code
         ),
         None,
@@ -259,6 +259,10 @@ def _build_admin_caption(result: dict, offer: dict) -> str:
             f"{_tr('\n🌐 شبکه: <code>')}{html.escape(str(destination.get('network_code') or '—'))}{_tr('</code>\n📬 مقصد: <code>')}{html.escape(str(destination.get('address') or '—'))}</code>\n🔗 TxID: <code>{html.escape(str(payment.get('txid') or '—'))}</code>"
         )
 
+    if payment.get("offer_code") == "portrait-once":
+        return (f"📸 <b>{html.escape(offer['label'])}</b>\n"
+                f"Payment ID: <code>{payment['id']}</code>\nTelegram ID: <code>{user['telegram_id']}</code>\n"
+                f"{amount_text}{destination_text}\n" + (_tr("در انتظار بررسی")))
     return (
         f"{_tr('🧾 <b>رسید جدید خرید اشتراک</b>\n\n🆔 شناسه پرداخت: <code>')}{payment['id']}{_tr('</code>\n👤 نام: ')}{html.escape(full_name)}{_tr('\n🔗 نام کاربری: ')}{html.escape(username_text)}\n📱 Telegram ID: <code>{user['telegram_id']}{_tr('</code>\n\n💎 بسته: <b>')}{html.escape(offer['label'])}{_tr('</b>\n💰 مبلغ: <b>')}{amount_text}</b>{destination_text}{_tr('\n📅 مدت: <code>')}{payment['duration_days']}{_tr(' روز</code>\n📎 پیوست: <code>')}{payment.get('receipt_file_type') or _tr('بدون اسکرین\u200cشات')}{_tr('</code>\n\n⏳ وضعیت: <b>در انتظار بررسی</b>')}"
     ) + discount_text(payment.get("discount_snapshot"))
@@ -304,7 +308,7 @@ def _approval_report(payment: dict) -> str:
         f"Telegram ID: <code>{int(payment['user_telegram_id'])}</code>",
         f"{_tr('💎 پلن:')} <b>{html.escape(str(payment.get('plan_name_snapshot') or '—'))}</b>",
         f"{_tr('💰 مبلغ:')} <b>{amount}</b>",
-        f"{_tr('📅 مدت (روز):')} {int(payment.get('duration_days') or 0)}",
+        ("📸 1 portrait / یک عکس" if payment.get("offer_code") == "portrait-once" else f"{_tr('📅 مدت (روز):')} {int(payment.get('duration_days') or 0)}"),
         f"{_tr('👮 تأییدکننده:')} <code>{reviewer}</code>",
         f"{_tr('🕒 زمان تأیید:')} {_format_datetime(payment.get('reviewed_at'), ui_language.get())}",
     ]) + discount_text(payment.get("discount_snapshot"))
@@ -338,6 +342,10 @@ def _transaction_explorer_url(payment: dict) -> str | None:
 
 
 def _offer_details_text(offer: dict, language: str) -> str:
+    if offer.get("purpose") == "portrait":
+        from app.tool_texts import tool_text
+        return tool_text("portrait_purchase_details", label=html.escape(offer["label"]),
+            amount=format_usdt(offer["price"]) if language == "en" else format_toman(offer["price"]))
     is_fa = language != "en"
     duration = (
         f"{int(offer.get('duration_days') or 0)}{_tr(' روز')}"
@@ -491,6 +499,19 @@ from app.localization import recipient_language
 
 @recipient_language
 async def _notify_user_approved(message: Message, result: dict) -> None:
+    if result["payment"].get("offer_code") == "portrait-once":
+        from app.tool_texts import tool_text
+        from app.handlers.media_tools import keyboard
+        from app.runtime_config import runtime_configuration
+        language = normalize_language(result["user"].get("effective_language"))
+        token = ui_language.set(language)
+        try:
+            await runtime_configuration(language)
+            await message.bot.send_message(chat_id=result["user"]["telegram_id"], text=tool_text("portrait_approved"),
+                reply_markup=keyboard([[(tool_text("portrait_open"), "tool:open:portrait")]]))
+        finally:
+            ui_language.reset(token)
+        return
     user = result["user"]
     payment = result["payment"]
     subscription = result.get("subscription") or {}
@@ -939,7 +960,7 @@ async def select_payment_offer(
         await callback.message.edit_text(
             _offer_details_text(offer, language),
             parse_mode="HTML",
-            reply_markup=build_payment_offer_detail_keyboard(language),
+            reply_markup=build_payment_offer_detail_keyboard(language, portrait=offer.get("purpose") == "portrait"),
         )
         await callback.answer()
     except BackendAPIError as exc:
@@ -1312,6 +1333,8 @@ async def approve_payment_callback(
         status_line = (
             f"{_tr('✅ وضعیت: <b>تأیید شد</b>\n👮 مدیر: <code>')}{callback.from_user.id}{_tr('</code>\n📅 اعتبار تا: <code>')}{_format_datetime(subscription.get('expires_at'))}</code>"
         )
+        if result["payment"].get("offer_code") == "portrait-once":
+            status_line = "✅ One portrait credited / یک نوبت ساخت عکس اضافه شد"
         await state.clear()
 
         if not result.get("already_reviewed"):

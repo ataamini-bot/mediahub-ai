@@ -438,6 +438,9 @@ class PaymentService:
 
     async def _activate(self, payment, user, *, admin_telegram_id, commit):
         """Shared subscription engine; caller has authorized and locked the payment/user."""
+        if payment.offer_code == "portrait-once" and payment.plan_id is None:
+            from app.services.portrait_purchases import activate_portrait
+            return await activate_portrait(self.session, payment, user, admin_telegram_id=admin_telegram_id, commit=commit)
         plan_result = await self.session.execute(
             select(Plan).where(Plan.id == payment.plan_id)
         )

@@ -1,6 +1,7 @@
 """Provider calls never return preview audio as a full song or retry a paid call."""
 import base64
 import json
+import logging
 import math
 import re
 import subprocess
@@ -10,6 +11,8 @@ from pathlib import Path
 
 import httpx
 from PIL import Image, ImageOps
+
+logger = logging.getLogger(__name__)
 
 
 class ToolError(RuntimeError):
@@ -90,20 +93,28 @@ def recognize_music(source, token):
 
 
 def words(value):
-    return set(re.findall(r"[^\W_]+", unicodedata.normalize("NFKC", str(value)).casefold()))
+    value = unicodedata.normalize("NFKC", str(value)).casefold().translate(str.maketrans("يك", "یک"))
+    return set(re.findall(r"[^\W_]+", value))
+
+
+def track_duration(value):
+    try:
+        duration = float(value)
+    except (TypeError, ValueError):
+        return None
+    return duration if math.isfinite(duration) and 30 <= duration <= 3600 else None
 
 
 def song_candidates(track, entries):
-    """Conservative candidate selection, followed by explicit human confirmation.
+    """Independent sources; missing reference duration requires user selection.
 
-    No preview URLs, uploaded samples, arbitrary hosts, or automatic first-hit downloads.
+    No preview URLs, uploaded samples or arbitrary hosts.
     """
-    expected = track.get("duration")
-    if not expected or not math.isfinite(expected) or not 30 <= expected <= 3600:
-        return []
+    expected = track_duration(track.get("duration"))
     wanted = words(track["title"])
     artist = words(track["artist"]) - {"the", "a", "an", "and", "feat", "ft", "official", "music"}
-    variants = {"cover", "remix", "live", "karaoke", "slowed", "sped", "nightcore", "instrumental", "reaction"}
+    variants = {"cover", "remix", "live", "karaoke", "slowed", "sped", "nightcore", "instrumental", "reaction",
+                "preview", "teaser", "snippet", "shorts", "trailer", "loop"}
     matches, seen = [], set()
     for item in entries or []:
         if not isinstance(item, dict):
@@ -125,12 +136,37 @@ def song_candidates(track, entries):
         # A source without duration cannot be distinguished from a teaser.
         if not 30 <= duration <= 3600:
             continue
-        if not math.isfinite(duration) or abs(duration - expected) > max(15, expected * .10) or duration < expected * .9:
+        if not math.isfinite(duration):
+            continue
+        if expected and (abs(duration - expected) > max(15, expected * .10) or duration < expected * .9):
+            continue
+        if not expected and duration < 60:
             continue
         seen.add(video_id)
         matches.append({"title": title[:200], "channel": str(item.get("channel") or item.get("uploader") or "")[:150],
                         "duration": int(duration), "url": f"https://www.youtube.com/watch?v={video_id}"})
     return matches[:3]
+
+
+def automatic_song_candidate(track, candidates):
+    """Auto-download only one unambiguous, strict title/artist/duration match.
+
+    Search order is never enough. Missing reference duration, loose matches or
+    multiple equally plausible sources leave a clearly labelled user choice.
+    """
+    expected = track_duration(track.get("duration"))
+    if not expected:
+        return None
+    wanted, artist = words(track.get("title", "")), words(track.get("artist", ""))
+    matches = []
+    for index, candidate in enumerate(candidates):
+        duration = track_duration(candidate.get("duration"))
+        title = words(candidate.get("title", ""))
+        context = title | words(candidate.get("channel", ""))
+        if (wanted and artist and wanted <= title and artist <= context and duration
+                and abs(duration - expected) <= max(5, expected * .03)):
+            matches.append(index)
+    return matches[0] if len(matches) == 1 else None
 
 
 class QuietLogger:
@@ -150,8 +186,9 @@ def find_full_tracks(track):
         with YoutubeDL(options) as downloader:
             found = downloader.extract_info("ytsearch6:" + query, download=False)
         return song_candidates(track, (found or {}).get("entries") or [])
-    except Exception:
+    except Exception as exc:
         # Keep the identification even when YouTube is unavailable on this server.
+        logger.warning("Music source search failed: error=%s", type(exc).__name__)
         return []
 
 

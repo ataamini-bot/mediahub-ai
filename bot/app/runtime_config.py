@@ -5,6 +5,7 @@ from typing import Any
 
 from app.i18n import HOME_BUTTON_ACTIONS, normalize_language, translate
 from app.services.backend import get_bot_configuration
+from app.tool_texts import TOOL_TEXTS
 
 
 CACHE_TTL_SECONDS = 30
@@ -75,6 +76,7 @@ def fallback_configuration(language: str) -> dict[str, Any]:
     return {
         "language": normalized,
         "content": dict(FALLBACK_CONTENT[normalized]),
+        "tool_texts": {key: value[normalized] for key, value in TOOL_TEXTS.items()},
         "buttons": {
             "buy": translate(normalized, "home.buy"),
             "subscription": translate(normalized, "home.subscription"),
@@ -127,6 +129,7 @@ async def runtime_configuration(
         if not isinstance(result, dict):
             raise TypeError("Bot configuration response is not an object")
         fallback = fallback_configuration(normalized)
+        result["tool_texts"] = {**fallback["tool_texts"], **(result.get("tool_texts") or {})}
         content = result.get("content")
         buttons = result.get("buttons")
         result["content"] = {
@@ -169,6 +172,11 @@ async def all_runtime_configurations() -> tuple[dict[str, Any], dict[str, Any]]:
         runtime_configuration("en"),
     )
     return fa, en
+
+
+def cached_configuration(language):
+    cached = _cache.get(language)
+    return cached[1] if cached else {}
 
 
 def clear_runtime_configuration_cache() -> None:

@@ -2,6 +2,9 @@ from app.localization import tr as _tr, localized_collection as _localized_colle
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
 
+from app.tool_texts import TOOL_TEXTS
+TOOL_TEXT_LABELS = {key: value["label"] for key, value in TOOL_TEXTS.items()}
+
 CONTENT_LABELS = {
     "welcome_title": "عنوان خوش‌آمدگویی",
     "welcome_instruction": "راهنمای کوتاه صفحه شروع",
@@ -137,6 +140,8 @@ def build_home_layout_keyboard(language: str, layout: dict) -> InlineKeyboardMar
 def build_copy_section_keyboard(language: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
+            [InlineKeyboardButton(text=_tr("🎵📸 متن‌های آهنگ و عکس"), callback_data=f"admin:copy:section:{language}:tools")],
+            [InlineKeyboardButton(text=_tr("🔎 جستجو در همه متن‌ها"), callback_data=f"admin:copy:search:{language}")],
             [
                 InlineKeyboardButton(
                     text=_tr("📝 متن محتواها"),
@@ -166,8 +171,11 @@ def build_copy_section_keyboard(language: str) -> InlineKeyboardMarkup:
     )
 
 
-def build_copy_items_keyboard(language: str, section: str) -> InlineKeyboardMarkup:
-    labels = CONTENT_LABELS if section == "content" else BUTTON_LABELS
+def build_copy_items_keyboard(language: str, section: str, keys=None) -> InlineKeyboardMarkup:
+    labels = TOOL_TEXT_LABELS if section == "tools" else CONTENT_LABELS if section == "content" else BUTTON_LABELS
+    if section == "tools":
+        labels = {key: label for key, label in labels.items() if key in keys} if keys is not None else {
+            key: label for key, label in labels.items() if TOOL_TEXTS[key].get("scope") != "common"}
     rows = [
         [
             InlineKeyboardButton(

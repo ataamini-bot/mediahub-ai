@@ -23,6 +23,9 @@ class ToolSubmit(BaseModel):
     kind: Literal["music", "portrait"]
     clothing: Literal["natural", "suit", "diplomat", "shirt"] = "natural"
     background: Literal["white", "blue", "grey"] = "white"
+    use_paid_credit: bool = False
+    auto_mp3: bool = False
+    source_url: str | None = Field(default=None, max_length=2048)
 
 
 class ToolOwner(BaseModel):
@@ -32,6 +35,7 @@ class ToolOwner(BaseModel):
 class SongDownload(ToolOwner):
     candidate: int = Field(ge=0, le=2)
     output_format: Literal["mp3", "m4a", "wav", "aac", "flac", "ogg", "opus"]
+    automatic: bool = False
 
 
 def failure(exc):
@@ -41,6 +45,12 @@ def failure(exc):
 @router.get("/configuration/{kind}")
 async def configuration(kind: Literal["music", "portrait"], db: AsyncSession = Depends(get_db)):
     return public_config(await read_config(db, kind))
+
+
+@router.get("/portrait/balance")
+async def portrait_balance(telegram_id: int = Query(gt=0), db: AsyncSession = Depends(get_db)):
+    from app.services.portrait_purchases import balance
+    return {"available": await balance(db, telegram_id)}
 
 
 @router.post("")
@@ -80,6 +90,8 @@ async def cancel(request_id: UUID, data: ToolOwner, db: AsyncSession = Depends(g
         raise failure(exc) from exc
     previous = row.status
     row.status = "cancelled"
+    from app.services.portrait_purchases import refund_failed_credit
+    await db.run_sync(lambda session: refund_failed_credit(session, row))
     await db.commit()
     # An in-flight provider may already be charged. Let that Worker finish
     # and delete its files, without delivering a cancelled result.
@@ -128,6 +140,9 @@ async def download_song(request_id: UUID, data: SongDownload, db: AsyncSession =
         raise failure(exc) from exc
     if row.kind != "music" or row.status != "completed":
         raise HTTPException(409, {"code": "music_not_ready"})
+    if data.automatic and (not (row.options or {}).get("auto_mp3") or data.output_format != "mp3"
+            or (row.result or {}).get("automatic_candidate") != data.candidate):
+        raise HTTPException(409, {"code": "music_selection_required"})
     selection_key = f"{data.candidate}:{data.output_format}"
     selection = (row.downloads or {}).get(selection_key) or {}
     if selection.get("job_id"):
@@ -165,3 +180,30 @@ async def download_song(request_id: UUID, data: SongDownload, db: AsyncSession =
     row.downloads = {**(row.downloads or {}), selection_key: {"state": "created", "job_id": job.id}}
     await db.commit()
     return DownloadResponse.model_validate(job)
+
+
+@router.post("/{request_id}/claim-song-delivery")
+async def claim_song_delivery(request_id: UUID, data: SongDownload, db: AsyncSession = Depends(get_db)):
+    from app.models.download_job import DownloadJob, DownloadJobStatus
+    try:
+        row = await owned(db, request_id, data.telegram_id, lock=True)
+    except MediaToolError as exc:
+        raise failure(exc) from exc
+    if row.kind != "music" or row.status != "completed":
+        return {"claimed": False, "reason": "music_not_ready"}
+    key = f"{data.candidate}:{data.output_format}"
+    selection = (row.downloads or {}).get(key) or {}
+    job = await db.get(DownloadJob, selection["job_id"]) if selection.get("job_id") else None
+    if not job or job.user_id != row.user_id or job.status != DownloadJobStatus.COMPLETED:
+        return {"claimed": False, "reason": "music_not_ready"}
+    if job.delivered_at:
+        return {"claimed": False, "reason": "already_delivered"}
+    if selection.get("delivery_state"):
+        return {"claimed": False, "reason": "delivery_started"}
+    if job.files_removed_at or not job.file_path:
+        return {"claimed": False, "reason": "input_expired"}
+    # Persist before Telegram receives bytes. Concurrent pollers, repeat clicks
+    # and bot restarts must not deliver the same source/format twice.
+    row.downloads = {**(row.downloads or {}), key: {**selection, "delivery_state": "sending"}}
+    await db.commit()
+    return {"claimed": True}
