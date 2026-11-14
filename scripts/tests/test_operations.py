@@ -10,6 +10,29 @@ from ops_common import OperationError, read_env, read_json, save_json, write_env
 from telegram_setup import ensure_topics
 
 
+def test_media_tool_setup_keeps_keys_private_and_sets_explicit_limits(tmp_path, monkeypatch, capsys):
+    console = mediahub.Console(tmp_path)
+    calls = []
+    current = {kind: {"enabled": False, "configured": False, "per_user_daily": 2,
+        "global_daily": 30, "model": "gpt-image-2.6-flare"} for kind in ("music", "portrait")}
+    def local(payload):
+        calls.append(payload)
+        return current if payload["action"] == "media_tools_status" else {"available": True}
+    answers = iter(["2", "yes", "private-test-key", "1", "5", "gpt-image-2.6-flare"])
+    prompts = []
+    def ask(*args, **kwargs):
+        prompts.append((args, kwargs))
+        return next(answers)
+    monkeypatch.setattr(console, "local", local)
+    monkeypatch.setattr(mediahub, "ask", ask)
+    console.tools()
+    assert calls[1]["configuration"]["global_daily"] == 5
+    assert calls[1]["configuration"]["per_user_daily"] == 1
+    assert calls[1]["configuration"]["token"] == "private-test-key"
+    assert prompts[2][1]["secret"] is True
+    assert "private-test-key" not in capsys.readouterr().out
+
+
 class FakeTelegram:
     def __init__(self, fail=None, forum=True, rights=True):
         self.fail, self.forum, self.rights = fail, forum, rights

@@ -1,6 +1,6 @@
 {
   "version": "v1.0.0-rc.1",
-  "schema": "b17c8d9e0f10",
+  "schema": "c28d9e0f1021",
   "application_rollback_safe": true,
   "platforms": ["linux/amd64"],
   "ubuntu": ["22.04", "24.04", "26.04"]

@@ -184,7 +184,7 @@ def test_saving_home_layout_refreshes_persistent_keyboard(ui, monkeypatch):
             "columns": 2,
             "order": [
                 "buy", "subscription", "support", "language",
-                "convert", "tutorial", "faq", "admin",
+                "convert", "music", "portrait", "tutorial", "faq", "admin",
             ],
         },
     }
@@ -214,7 +214,7 @@ def test_saving_home_layout_refreshes_persistent_keyboard(ui, monkeypatch):
         }
         markup = ui.answer.await_args.kwargs["reply_markup"]
         assert isinstance(markup, ReplyKeyboardMarkup)
-        assert [len(menu_row) for menu_row in markup.keyboard] == [3, 3, 2]
+        assert [len(menu_row) for menu_row in markup.keyboard] == [3, 3, 3, 1]
         assert "ترتیب و چیدمان" in ui.edit.await_args.args[0]
         assert await ui.state.get_state() is None
 
@@ -232,7 +232,7 @@ def test_moving_home_layout_button_swaps_only_requested_neighbors(ui, monkeypatc
             "columns": 2,
             "order": [
                 "buy", "subscription", "support", "language",
-                "convert", "tutorial", "faq", "admin",
+                "convert", "music", "portrait", "tutorial", "faq", "admin",
             ],
         },
     }
@@ -254,7 +254,7 @@ def test_moving_home_layout_button_swaps_only_requested_neighbors(ui, monkeypatc
         await ui.dispatch(callback="admin:layout:move:fa:support:up")
         assert save.await_args.kwargs["value"]["order"] == [
             "buy", "support", "subscription", "language",
-            "convert", "tutorial", "faq", "admin",
+            "convert", "music", "portrait", "tutorial", "faq", "admin",
         ]
         assert ui.answer.await_args.kwargs["reply_markup"] is None
 

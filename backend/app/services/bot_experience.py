@@ -144,6 +144,8 @@ DEFAULT_BUTTONS: dict[str, dict[str, str]] = {
         "language": "🌐 تغییر زبان | Language",
         "support": "🛟 پشتیبانی",
         "convert": "🔄 تبدیل فایل",
+        "music": "🎵 تشخیص آهنگ",
+        "portrait": "📸 عکس پرسنلی",
         "tutorial": "📘 آموزش استفاده",
         "faq": "❓ سوالات متداول",
         "admin": "⚙️ پنل مدیریت",
@@ -156,6 +158,8 @@ DEFAULT_BUTTONS: dict[str, dict[str, str]] = {
         "language": "🌐 Language | تغییر زبان",
         "support": "🛟 Support",
         "convert": "🔄 Convert media",
+        "music": "🎵 Identify music",
+        "portrait": "📸 Portrait photo",
         "tutorial": "📘 How to use",
         "faq": "❓ FAQ",
         "admin": "⚙️ Admin panel",
@@ -266,6 +270,10 @@ def _merge_home_layout(value: Any) -> dict[str, Any]:
     candidate_order = value.get("order")
     if isinstance(candidate_order, list):
         normalized = [key for key in candidate_order if key in HOME_MENU_BUTTON_KEYS]
+        if "convert" in normalized:
+            for new_key in ("portrait", "music"):
+                if new_key not in normalized:
+                    normalized.insert(normalized.index("convert") + 1, new_key)
         if len(normalized) == len(HOME_MENU_BUTTON_KEYS) and len(set(normalized)) == len(normalized):
             order = normalized
     return {"columns": columns, "order": order}

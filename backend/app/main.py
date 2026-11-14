@@ -17,6 +17,7 @@ from app.api.backups import router as backups_router
 from app.api.broadcasts import router as broadcasts_router
 from app.api.credit import router as credit_router
 from app.api.coupons import router as coupons_router
+from app.api.media_tools import router as media_tools_router
 from app.services.system_monitor import (
     notify_backend_started,
     notify_backend_stopping,
@@ -63,6 +64,7 @@ app.include_router(backups_router)
 app.include_router(broadcasts_router)
 app.include_router(credit_router)
 app.include_router(coupons_router)
+app.include_router(media_tools_router)
 
 
 @app.get("/")

@@ -18,6 +18,7 @@ passlib[bcrypt]
 python-multipart
 
 httpx
+Pillow>=11,<13
 aiofiles
 XlsxWriter==3.2.9
 

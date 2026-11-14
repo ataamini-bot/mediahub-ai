@@ -40,7 +40,15 @@ require_idle() {
   local count
   count="$(active_jobs)"
   printf 'ACTIVE_OR_PAUSED_DOWNLOAD_JOBS=%s\n' "$count"
-  [[ "$count" =~ ^[0-9]+$ && "$count" -eq 0 ]]
+  [[ "$count" =~ ^[0-9]+$ && "$count" -eq 0 ]] || return 1
+  docker compose exec -T postgres sh -c 'exec psql -X -q -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB"' <<'SQL'
+DO $$DECLARE busy integer; BEGIN
+  IF to_regclass('public.media_tool_requests') IS NOT NULL THEN
+    EXECUTE 'SELECT count(*) FROM media_tool_requests WHERE status IN (''pending'',''processing'')' INTO busy;
+    IF busy > 0 THEN RAISE EXCEPTION 'ACTIVE_MEDIA_TOOL_REQUESTS=%; finish or cancel these requests first', busy; END IF;
+  END IF;
+END$$;
+SQL
 }
 require_idle
 services=(backend bot worker monitor)
@@ -134,7 +142,8 @@ from sqlalchemy import text
 from app.db.session import engine
 async def check():
     async with engine.connect() as conn:
-        assert await conn.scalar(text("SELECT version_num FROM alembic_version")) == "b17c8d9e0f10"
+        assert await conn.scalar(text("SELECT version_num FROM alembic_version")) == "c28d9e0f1021"
+        await conn.execute(text("SELECT id, kind, status FROM media_tool_requests LIMIT 0"))
         await conn.execute(text("SELECT user_id, created_at, delivered_at FROM cover_requests LIMIT 0"))
         await conn.execute(text("SELECT id, source_url, files_removed_at FROM download_jobs LIMIT 0"))
         await conn.execute(text("SELECT code, currency, version FROM coupons LIMIT 0"))

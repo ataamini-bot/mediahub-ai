@@ -104,6 +104,14 @@ class Console:
             "sh", sql, capture=True)
         if count != "0":
             raise OperationError(f"ACTIVE_OR_PAUSED_DOWNLOAD_JOBS={count}; finish or cancel these requests first.")
+        sql = """DO $$DECLARE busy integer; BEGIN
+          IF to_regclass('public.media_tool_requests') IS NOT NULL THEN
+            EXECUTE 'SELECT count(*) FROM media_tool_requests WHERE status IN (''pending'',''processing'')' INTO busy;
+            IF busy > 0 THEN RAISE EXCEPTION 'ACTIVE_MEDIA_TOOL_REQUESTS=%; finish or cancel these requests first', busy; END IF;
+          END IF;
+        END$$;"""
+        self.compose("exec", "-T", "postgres", "sh", "-c",
+            'exec psql -X -q -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB"', data=sql)
 
     def health(self):
         for attempt in range(60):
@@ -482,19 +490,40 @@ class Console:
         self.compose("down")  # Never --volumes: database removal is not an uninstall default.
         print("UNINSTALL=OK DATA=PRESERVED")
 
+    def tools(self):
+        print("\nOptional media tools: AudD music recognition / OpenAI portrait editing.")
+        print("These providers bill your own account. No paid test request is sent by setup.")
+        print("Music downloads use a separate public full-length source confirmed by the user.")
+        current = self.local({"action": "media_tools_status"})
+        kind = {"1": "music", "2": "portrait"}[ask("1. Music recognition  2. Portrait photos", pattern=r"[12]")]
+        previous = current[kind]
+        enabled = ask("Enable this tool? yes/no", default="yes" if previous["enabled"] else "no", pattern=r"yes|no") == "yes"
+        configuration = {"kind": kind, "enabled": enabled,
+            "per_user_daily": previous["per_user_daily"], "global_daily": previous["global_daily"], "model": previous["model"]}
+        if enabled:
+            if not previous["configured"] or ask("Replace saved provider key? yes/no", default="no", pattern=r"yes|no") == "yes":
+                configuration["token"] = ask("AudD API token" if kind == "music" else "OpenAI API key", secret=True, pattern=r"[^\s]{10,512}")
+            configuration["per_user_daily"] = int(ask("Daily attempts per user (1-100, bot quota timezone)", str(previous["per_user_daily"]), pattern=r"[1-9][0-9]?|100"))
+            configuration["global_daily"] = int(ask("Daily attempts for the whole bot (1-10000)", str(previous["global_daily"]), pattern=r"[1-9][0-9]{0,3}|10000"))
+            if kind == "portrait":
+                configuration["model"] = ask("Image model", previous["model"], pattern=r"gpt-image-2(?:\.6-(?:flare|sunburst))?")
+        self.local({"action": "media_tools_configure", "configuration": configuration})
+        print("MEDIA_TOOLS=CONFIGURED. The bot reads this setting without a restart.")
+
     def menu(self):
         options = {"1": ("Install MediaHub", self.install), "2": ("Update to a stable release", self.update),
                    "3": ("Create and export backup", self.export), "4": ("Import backup and restore", self.import_backup),
                    "5": ("Telegram group, topics, and required channels", self.telegram),
                    "6": ("Check system health", lambda: run(["bash", "scripts/check_launch.sh"], cwd=self.root)),
                    "7": ("Roll back application", self.rollback), "8": ("Configure update source", self.source),
-                   "9": ("Uninstall containers (keep data)", self.uninstall)}
+                   "9": ("Uninstall containers (keep data)", self.uninstall),
+                   "10": ("Music recognition and portrait photos", self.tools)}
         while True:
             print("\nMediaHub AI - Server Management")
             for key, (label, _) in options.items():
                 print(f"{key}. {label}")
             print("0. Exit")
-            key = ask("Select an option", pattern=r"[0-9]")
+            key = ask("Select an option", pattern=r"[0-9]|10")
             if key == "0":
                 return
             try:
@@ -531,7 +560,7 @@ def validate_source(value):
 
 def main():
     parser = argparse.ArgumentParser(description="MediaHub server operations")
-    parser.add_argument("action", nargs="?", default="menu", choices=["menu", "install", "update", "telegram", "backup", "export", "import", "rollback", "source", "uninstall", "register"])
+    parser.add_argument("action", nargs="?", default="menu", choices=["menu", "install", "update", "telegram", "backup", "export", "import", "rollback", "source", "uninstall", "register", "tools"])
     parser.add_argument("version", nargs="?")
     args = parser.parse_args()
     if os.geteuid() != 0:

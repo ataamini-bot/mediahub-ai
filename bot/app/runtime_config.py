@@ -24,6 +24,8 @@ HOME_MENU_BUTTON_KEYS = (
     "support",
     "language",
     "convert",
+    "music",
+    "portrait",
     "tutorial",
     "faq",
     "admin",
@@ -79,6 +81,8 @@ def fallback_configuration(language: str) -> dict[str, Any]:
             "language": translate(normalized, "home.language"),
             "support": "🛟 پشتیبانی" if normalized == "fa" else "🛟 Support",
             "convert": translate(normalized, "home.convert"),
+            "music": translate(normalized, "home.music"),
+            "portrait": translate(normalized, "home.portrait"),
             "tutorial": "📘 آموزش استفاده" if normalized == "fa" else "📘 How to use",
             "faq": "❓ سوالات متداول" if normalized == "fa" else "❓ FAQ",
             "admin": translate(normalized, "home.admin"),
@@ -223,6 +227,10 @@ def runtime_home_layout(configuration: dict) -> dict[str, Any]:
         for key in candidate_order:
             if key in HOME_MENU_BUTTON_KEYS and key not in cleaned:
                 cleaned.append(key)
+        if "convert" in cleaned:
+            for new_key in ("portrait", "music"):
+                if new_key not in cleaned:
+                    cleaned.insert(cleaned.index("convert") + 1, new_key)
         # A partial/corrupt setting must never hide a primary action. Append
         # missing keys in the default order while keeping every valid move.
         cleaned.extend(key for key in HOME_MENU_BUTTON_KEYS if key not in cleaned)
@@ -248,6 +256,8 @@ def action_for_runtime_text(
         "language": "language",
         "support": "support",
         "convert": "convert",
+        "music": "music",
+        "portrait": "portrait",
         "tutorial": "tutorial",
         "faq": "faq",
         "admin": "admin",

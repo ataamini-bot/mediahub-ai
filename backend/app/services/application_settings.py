@@ -155,6 +155,19 @@ class ApplicationSettingsService:
         normalized_key = self.normalize_key(key)
         normalized_category = self.normalize_category(category)
 
+        if normalized_key.startswith("tools."):
+            from app.services.media_tool_config import KINDS, ToolConfiguration
+            parts = normalized_key.split(".")
+            if len(parts) != 3 or parts[1] not in KINDS or parts[2] not in {"token", "config"} or normalized_category != "tools":
+                raise SettingValidationError("Unknown media tool setting")
+            if parts[2] == "token":
+                if not is_sensitive or not isinstance(value, str) or len(value) > 512 or any(c.isspace() or ord(c) < 32 for c in value):
+                    raise SettingValidationError("Provider keys must be encrypted strings")
+            else:
+                if is_sensitive or not isinstance(value, dict) or set(value) - {"enabled", "per_user_daily", "global_daily", "model"}:
+                    raise SettingValidationError("Invalid media tool configuration")
+                value = ToolConfiguration.model_validate({"kind": parts[1], **value}).model_dump(exclude={"kind", "token"})
+
         # Import lazily to avoid a module cycle: managed settings use this
         # service for reads, while writes receive stricter type validation.
         from app.services.managed_settings import (

@@ -20,6 +20,8 @@ BUTTON_LABELS = {
     "language": "تغییر زبان",
     "support": "پشتیبانی",
     "convert": "تبدیل فایل",
+    "music": "تشخیص آهنگ",
+    "portrait": "عکس پرسنلی",
     "tutorial": "آموزش استفاده",
     "faq": "سوالات متداول",
     "admin": "پنل مدیریت",

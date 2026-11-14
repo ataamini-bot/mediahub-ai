@@ -437,6 +437,8 @@ def cleanup_staged_upload(data: dict | None) -> None:
 
     if not isinstance(data, dict):
         return
+    from app.handlers.media_tools import cleanup_tool_state
+    cleanup_tool_state(data)
     name = str(data.get("input_name") or "")
     if (
         not name
