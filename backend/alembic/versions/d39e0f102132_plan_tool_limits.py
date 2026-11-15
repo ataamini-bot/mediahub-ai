@@ -17,8 +17,11 @@ def upgrade():
     for language in ("fa", "en"):
         op.get_bind().execute(sa.text("""INSERT INTO application_settings
             (key, category, value_json, is_sensitive, description, version)
-            VALUES (:key, 'bot_content', '{}'::json, FALSE, :key, 1)
-            ON CONFLICT (key) DO NOTHING"""), {"key": f"bot.tool_texts.{language}"})
+            VALUES (:key, 'bot_content', '{}'::json, FALSE, :description, 1)
+            ON CONFLICT (key) DO NOTHING"""), {
+                "key": f"bot.tool_texts.{language}",
+                "description": f"Editable bot message text ({language})",
+            })
     # Retain operational history, but revoke pending work and provider credentials.
     op.execute("DELETE FROM application_settings WHERE key LIKE 'tools.portrait.%'")
     op.execute("UPDATE media_tool_requests SET status='cancelled', error_code='tool_disabled' WHERE kind='portrait' AND status IN ('pending','processing')")
