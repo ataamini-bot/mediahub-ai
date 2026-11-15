@@ -491,18 +491,22 @@ class Console:
         print("UNINSTALL=OK DATA=PRESERVED")
 
     def tools(self):
-        print("\nOptional music recognition: AudD.")
-        print("These providers bill your own account. No paid test request is sent by setup.")
+        print("\nOptional music recognition: ShazamIO (no API key) or AudD (paid).")
+        print("ShazamIO is unofficial; availability and rate limits are not guaranteed.")
+        print("No recognition request is sent by setup. There is no automatic paid fallback.")
         print("Music downloads use a separate public full-length source confirmed by the user.")
         current = self.local({"action": "media_tools_status"})
         kind = "music"
         previous = current[kind]
         enabled = ask("Enable this tool? yes/no", default="yes" if previous["enabled"] else "no", pattern=r"yes|no") == "yes"
         configuration = {"kind": kind, "enabled": enabled,
+            "provider": previous.get("provider", "shazamio"),
             "per_user_daily": previous["per_user_daily"], "global_daily": previous["global_daily"]}
         if enabled:
-            if not previous["configured"] or ask("Replace saved provider key? yes/no", default="no", pattern=r"yes|no") == "yes":
-                configuration["token"] = ask("AudD API token", secret=True, pattern=r"[^\s]{10,512}")
+            configuration["provider"] = ask("Recognition provider: shazamio/audd", default=configuration["provider"], pattern=r"shazamio|audd")
+            if configuration["provider"] == "audd":
+                if not previous.get("token_configured", previous["configured"]) or ask("Replace saved AudD key? yes/no", default="no", pattern=r"yes|no") == "yes":
+                    configuration["token"] = ask("AudD API token", secret=True, pattern=r"[^\s]{10,512}")
             configuration["per_user_daily"] = int(ask("Daily attempts per user (1-100, bot quota timezone)", str(previous["per_user_daily"]), pattern=r"[1-9][0-9]?|100"))
             configuration["global_daily"] = int(ask("Daily attempts for the whole bot (1-10000)", str(previous["global_daily"]), pattern=r"[1-9][0-9]{0,3}|10000"))
         self.local({"action": "media_tools_configure", "configuration": configuration})

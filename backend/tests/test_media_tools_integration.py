@@ -32,7 +32,7 @@ async def records(tmp_path, monkeypatch):
         db.add_all(users)
         await db.flush()
         for kind in ("music",):
-            await configure_tool(db, {"kind": kind, "enabled": True, "token": "test-private-token",
+            await configure_tool(db, {"kind": kind, "enabled": True, "provider": "audd", "token": "test-private-token",
                 "per_user_daily": 2, "global_daily": 10}, users[0])
         await db.commit()
     def payload(kind="music", user=1):
@@ -119,7 +119,7 @@ async def test_worker_redelivery_does_not_repeat_provider(records, monkeypatch):
     value = records.payload()
     await accept(value)
     calls = []
-    def recognize(*args):
+    def recognize(*args, **kwargs):
         calls.append(1)
         raise ToolError("provider_uncertain")
     monkeypatch.setattr(worker, "recognize_music", recognize)
@@ -139,7 +139,7 @@ async def test_restore_cancels_paid_work_instead_of_replaying(records, monkeypat
     async with AsyncSessionLocal() as db:
         assert await reconcile_restored_tools(db) == 1
         await db.commit()
-    monkeypatch.setattr(worker, "recognize_music", lambda *a: pytest.fail("restored work replayed"))
+    monkeypatch.setattr(worker, "recognize_music", lambda *a, **k: pytest.fail("restored work replayed"))
     await asyncio.to_thread(worker.run_tool.run, str(value.request_id))
 
 
@@ -188,6 +188,33 @@ async def test_tokens_encrypted_and_omitted_from_public_configuration(records):
         with pytest.raises(SettingValidationError):
             await ApplicationSettingsService(db).set_value(key="tools.music.token", category="tools", value="secret",
                 is_sensitive=False, actor_user_id=records.users[0].id, actor_telegram_id=records.users[0].telegram_id)
+
+
+@pytest.mark.asyncio
+async def test_shazam_accepts_and_processes_without_audd_key(records, monkeypatch):
+    from app.workers.tasks import media_tools as worker
+    async with AsyncSessionLocal() as db:
+        await db.execute(delete(ApplicationSetting).where(ApplicationSetting.key == "tools.music.token"))
+        config = await configure_tool(db, {"kind": "music", "enabled": True, "provider": "shazamio"}, records.users[0])
+        await db.commit()
+        assert config["available"] and not config["token_configured"]
+    value = records.payload()
+    await accept(value)
+    calls = []
+    def recognize(source, token, *, provider):
+        assert provider == "shazamio" and token == ""
+        calls.append(1)
+        return {"title": "Song", "artist": "Artist", "duration": None}
+    monkeypatch.setattr(worker, "recognize_music", recognize)
+    monkeypatch.setattr(worker, "find_full_tracks", lambda track: [])
+    await asyncio.to_thread(worker.run_tool.run, str(value.request_id))
+    await asyncio.to_thread(worker.run_tool.run, str(value.request_id))
+    async with AsyncSessionLocal() as db:
+        row = await db.get(MediaToolRequest, value.request_id)
+        assert row.status == "completed" and row.files_removed_at is not None
+        with pytest.raises(ValueError, match="provider key"):
+            await configure_tool(db, {"kind": "music", "enabled": True, "provider": "audd"}, records.users[0])
+    assert calls == [1]
 
 
 @pytest.mark.asyncio
@@ -265,8 +292,9 @@ async def test_link_sample_recognizes_once_and_cancellation_stops_before_billing
                 db.execute(update(MediaToolRequest).where(MediaToolRequest.id == value.request_id).values(status="cancelled"))
                 db.commit()
         return target
-    def recognize(source, token):
+    def recognize(source, token, *, provider):
         assert source.read_bytes() == b"sample-from-public-link"
+        assert provider == "audd"
         calls.append(1)
         return {"title": "Original Song", "artist": "Example Artist", "duration": 180}
     monkeypatch.setattr(media_tool_links, "fetch_music_link", fetch)
@@ -297,7 +325,7 @@ async def test_failed_link_never_calls_paid_recognition_and_cleans_partial_files
         (target.parent / "link-source.webm.part").write_bytes(b"partial")
         raise ToolError("link_timeout")
     monkeypatch.setattr(media_tool_links, "fetch_music_link", fail)
-    monkeypatch.setattr(worker, "recognize_music", lambda *a: pytest.fail("billed recognition after failed link"))
+    monkeypatch.setattr(worker, "recognize_music", lambda *a, **k: pytest.fail("billed recognition after failed link"))
     await asyncio.to_thread(worker.run_tool.run, str(value.request_id))
     async with AsyncSessionLocal() as db:
         row = await db.get(MediaToolRequest, value.request_id)
@@ -336,7 +364,7 @@ async def test_removed_portrait_api_and_legacy_queue_never_call_provider(records
         row=await db.get(MediaToolRequest,value.request_id);row.kind='portrait';await db.commit()
         with pytest.raises(ValueError):
             await configure_tool(db,{'kind':'portrait','enabled':True,'token':'unused'},records.users[0])
-    monkeypatch.setattr(worker,'recognize_music',lambda *a:pytest.fail('Retired request contacted a provider'))
+    monkeypatch.setattr(worker,'recognize_music',lambda *a,**k:pytest.fail('Retired request contacted a provider'))
     await asyncio.to_thread(worker.run_tool.run,str(value.request_id))
     async with AsyncSessionLocal() as db:
         row=await db.get(MediaToolRequest,value.request_id)

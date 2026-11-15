@@ -18,7 +18,7 @@ def test_media_tool_setup_keeps_keys_private_and_sets_explicit_limits(tmp_path, 
     def local(payload):
         calls.append(payload)
         return current if payload["action"] == "media_tools_status" else {"available": True}
-    answers = iter(["yes", "private-test-key", "1", "5"])
+    answers = iter(["yes", "audd", "private-test-key", "1", "5"])
     prompts = []
     def ask(*args, **kwargs):
         prompts.append((args, kwargs))
@@ -29,8 +29,29 @@ def test_media_tool_setup_keeps_keys_private_and_sets_explicit_limits(tmp_path, 
     assert calls[1]["configuration"]["global_daily"] == 5
     assert calls[1]["configuration"]["per_user_daily"] == 1
     assert calls[1]["configuration"]["token"] == "private-test-key"
-    assert prompts[1][1]["secret"] is True
+    assert calls[1]["configuration"]["provider"] == "audd"
+    assert prompts[2][1]["secret"] is True
     assert "private-test-key" not in capsys.readouterr().out
+
+
+def test_shazam_setup_does_not_ask_for_a_key_or_call_provider(tmp_path, monkeypatch):
+    console = mediahub.Console(tmp_path)
+    calls, prompts = [], []
+    def local(payload):
+        calls.append(payload)
+        return {"music": {"enabled": False, "configured": True, "token_configured": False,
+                "provider": "shazamio", "per_user_daily": 2, "global_daily": 30}}
+    answers = iter(["yes", "shazamio", "2", "30"])
+    def ask(prompt, *args, **kwargs):
+        prompts.append((prompt, kwargs))
+        return next(answers)
+    monkeypatch.setattr(console, "local", local)
+    monkeypatch.setattr(mediahub, "ask", ask)
+    console.tools()
+    assert [call["action"] for call in calls] == ["media_tools_status", "media_tools_configure"]
+    assert calls[1]["configuration"] == {"kind": "music", "enabled": True, "provider": "shazamio",
+        "per_user_daily": 2, "global_daily": 30}
+    assert all(not options.get("secret") for _, options in prompts)
 
 
 class FakeTelegram:

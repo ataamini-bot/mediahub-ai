@@ -10,8 +10,8 @@
   },
   "confirm_to_send_a_sample": {
     "label": "با تأیید شما، نمونه‌ای از ۱۲ ثانیه اول فایل یا لینک برا",
-    "fa": "با تأیید شما، نمونه‌ای از ۱۲ ثانیه اول فایل یا لینک برای شناسایی به سرویس بیرونی تشخیص آهنگ ارسال می‌شود. این تلاش از سهمیه تشخیص آهنگ پلن شما مصرف می‌کند. در صورت پیدا شدن یک منبع با تطبیق کافی، دانلود و ارسال MP3 ۳۲۰ خودکار شروع می‌شود و یک دانلود از سهمیه عادی مصرف می‌کند. در غیر این صورت ابتدا منبع را انتخاب می‌کنید.",
-    "en": "Confirm to send a sample of the first 12 seconds of the file or link to an external music recognition service. This uses one recognition attempt from your plan. A single sufficiently matching full-track source will download and send automatically as MP3 320 kbps, using one normal download. Otherwise you choose the source first.",
+    "fa": "با تأیید شما، ۱۲ ثانیه اول فایل یا لینک برای شناسایی آهنگ پردازش می‌شود و اطلاعات لازم به سرویس بیرونی تشخیص آهنگ ارسال می‌شود. این تلاش از سهمیه تشخیص آهنگ پلن شما مصرف می‌کند. در صورت پیدا شدن یک منبع با تطبیق کافی، دانلود و ارسال MP3 ۳۲۰ خودکار شروع می‌شود و یک دانلود از سهمیه عادی مصرف می‌کند. در غیر این صورت ابتدا منبع را انتخاب می‌کنید.",
+    "en": "Confirm to process the first 12 seconds of the file or link and send the required recognition data to an external music recognition service. This uses one recognition attempt from your plan. A single sufficiently matching full-track source will download and send automatically as MP3 320 kbps, using one normal download. Otherwise you choose the source first.",
     "fields": [],
     "maximum": 3000,
     "html": false,
@@ -415,7 +415,7 @@
   "error_provider_uncertain": {
     "label": "ارتباط با سرویس قطع شد و نتیجه مشخص نیست. برای جلوگیری ",
     "fa": "ارتباط با سرویس قطع شد و نتیجه مشخص نیست. برای جلوگیری از مصرف دوباره، درخواست خودکار تکرار نمی‌شود.",
-    "en": "The provider connection was interrupted. The result is unknown, so the paid request will not be repeated automatically.",
+    "en": "The provider connection was interrupted. The result is unknown, so the request will not be repeated automatically.",
     "fields": [],
     "maximum": 3000,
     "html": false,

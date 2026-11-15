@@ -58,7 +58,17 @@ def recognition_sample(source, target):
         raise ToolError("invalid_audio") from None
 
 
-def recognize_music(source, token):
+def recognize_music(source, token="", *, provider="shazamio"):
+    # Never switch to a paid service after a free provider fails.
+    if provider == "shazamio":
+        from app.services.media_tool_shazam import recognize_shazam
+        return recognize_shazam(source)
+    if provider == "audd" and token:
+        return recognize_audd(source, token)
+    raise ToolError("provider_auth")
+
+
+def recognize_audd(source, token):
     sample = source.parent / "sample.wav"
     recognition_sample(source, sample)
     try:

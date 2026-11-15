@@ -7,12 +7,14 @@ from app.models.app_setting import ApplicationSetting
 from app.services.application_settings import ApplicationSettingsService
 
 KINDS = ("music",)
-DEFAULTS = {"enabled": False, "per_user_daily": 2, "global_daily": 30}
+PROVIDERS = ("shazamio", "audd")
+DEFAULTS = {"enabled": False, "provider": "shazamio", "per_user_daily": 2, "global_daily": 30}
 
 
 class ToolConfiguration(BaseModel):
     kind: Literal["music"]
     enabled: bool
+    provider: Literal["shazamio", "audd"] = "shazamio"
     per_user_daily: int = Field(default=2, ge=1, le=100)
     global_daily: int = Field(default=30, ge=1, le=10000)
     token: SecretStr | None = None
@@ -47,9 +49,15 @@ def read_worker_config(db, kind):
             "token": values.get(f"tools.{kind}.token") or ""}
 
 
+def provider_configured(config):
+    provider = config.get("provider", DEFAULTS["provider"])
+    return provider == "shazamio" or (provider == "audd" and bool(config.get("token")))
+
+
 def public_config(config):
-    return {**{k: config[k] for k in DEFAULTS}, "configured": bool(config.get("token")),
-            "available": bool(config.get("enabled") and config.get("token"))}
+    return {**{k: config.get(k, value) for k, value in DEFAULTS.items()},
+            "configured": provider_configured(config), "token_configured": bool(config.get("token")),
+            "available": bool(config.get("enabled") and provider_configured(config))}
 
 
 async def configure_tool(db, payload, user):
@@ -62,7 +70,7 @@ async def configure_tool(db, payload, user):
         await service.set_value(key=f"tools.{data.kind}.token", category="tools", value=token,
             is_sensitive=True, actor_user_id=user.id, actor_telegram_id=user.telegram_id)
     previous = await read_config(db, data.kind)
-    if data.enabled and not previous.get("token"):
+    if data.enabled and data.provider == "audd" and not previous.get("token"):
         raise ValueError("A provider key is required before enabling this tool")
     await service.set_value(key=f"tools.{data.kind}.config", category="tools",
         value=data.model_dump(exclude={"kind", "token"}), is_sensitive=False,

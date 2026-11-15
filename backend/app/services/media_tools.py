@@ -8,7 +8,7 @@ from sqlalchemy import func, or_, select, text, update
 from app.models.media_tool import MediaToolRequest
 from app.models.user import User, UserStatus
 from app.services.managed_settings import ensure_public_operation, get_managed_setting
-from app.services.media_tool_config import read_config
+from app.services.media_tool_config import read_config, provider_configured
 from app.services.media_tool_files import folder, input_file, remove_files, root
 
 
@@ -63,7 +63,7 @@ async def submit(db, data):
             raise MediaToolError("request_conflict")
         return existing, False
     config = await read_config(db, data.kind)
-    if not config["enabled"] or not config["token"]:
+    if not config["enabled"] or not provider_configured(config):
         raise MediaToolError("tool_disabled", 503)
     from app.services.download_access import quota_day_start_utc, quota_window_start_utc
     timezone_name = await get_managed_setting(db, "quota.timezone")

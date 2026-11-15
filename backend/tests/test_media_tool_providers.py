@@ -50,7 +50,7 @@ def test_recognition_discards_preview_urls_and_only_returns_identity(monkeypatch
     monkeypatch.setattr(providers, "provider_json", lambda *a, **k: {"status": "success", "result": {
         "artist": "Example Artist", "title": "Original Song", "apple_music": {"durationInMillis": 180000,
         "previews": [{"url": "https://example.org/preview.m4a"}]}}})
-    track = providers.recognize_music(source, "secret")
+    track = providers.recognize_music(source, "secret", provider="audd")
     assert track == {"artist": "Example Artist", "title": "Original Song", "album": "", "duration": 180}
     assert not (tmp_path / "sample.wav").exists()
 

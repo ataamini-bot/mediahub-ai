@@ -9,7 +9,7 @@ from sqlalchemy import select
 from app.db.worker_session import WorkerSessionLocal
 from app.models.media_tool import MediaToolRequest
 from app.models.user import User, UserStatus
-from app.services.media_tool_config import read_worker_config
+from app.services.media_tool_config import read_worker_config, provider_configured
 from app.services.media_tool_files import folder, input_file, remove_files
 from app.services.media_tool_providers import ToolError, automatic_song_candidate, find_full_tracks, recognize_music
 from app.workers.celery_app import celery_app
@@ -35,7 +35,7 @@ def run_tool(request_id):
                 remove_files(user.telegram_id, row.id)
             return
         config = read_worker_config(db, row.kind)
-        if not user or user.status != UserStatus.ACTIVE or not config["enabled"] or not config["token"]:
+        if not user or user.status != UserStatus.ACTIVE or not config["enabled"] or not provider_configured(config):
             row.status, row.error_code = "cancelled", "tool_disabled"
             db.commit()
             if user:
@@ -60,7 +60,7 @@ def run_tool(request_id):
                 if db.scalar(select(MediaToolRequest.status).where(MediaToolRequest.id == request_id)) != "processing":
                     return
             started = time.monotonic()
-            result = recognize_music(source, config["token"])
+            result = recognize_music(source, config["token"], provider=config["provider"])
             logger.warning("Music recognition complete: request=%s, elapsed_s=%.2f, duration_known=%s",
                            request_id, time.monotonic() - started, bool(result.get("duration")))
             # Recognition metadata never supplies a downloadable preview.

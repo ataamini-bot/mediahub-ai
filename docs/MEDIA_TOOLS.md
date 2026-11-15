@@ -14,15 +14,30 @@ sudo python3 scripts/mediahub.py tools
 ```
 
 The same form is option **10. Music recognition** in `sudo mediahub`.
-Enable music recognition, enter its provider key privately, and set daily attempt limits.
-No external paid request is made during setup. Settings take effect without restarting.
+Enable music recognition, choose `shazamio` (the default) or `audd`, and set daily attempt
+limits. ShazamIO does not need an API key; only AudD asks for one privately. No recognition
+request is made during setup. Settings take effect without restarting.
 
 | Tool | Provider | Key | Default limits |
 |---|---|---|---|
-| Music recognition | [AudD](https://dashboard.audd.io/) | AudD API token | 2 attempts/user/day, 30 across the bot/day |
+| Music recognition (default) | [ShazamIO 0.9.0](https://github.com/shazamio/ShazamIO) | None | 2 attempts/user/day, 30 across the bot/day |
+| Music recognition (manual alternative) | [AudD](https://dashboard.audd.io/) | AudD API token | Same shared counters |
 
-Provider charges belong to the operator's account. Configure provider billing limits as
-well as bot limits. These are **attempt** limits, not money limits or charges to users'
+Existing installations with no explicit provider selection switch to ShazamIO on update.
+Their enabled state and quotas remain unchanged, and a saved AudD key remains encrypted
+but is not used unless the operator explicitly selects `audd`. An error or no match from
+ShazamIO **never** falls back to AudD. No new database migration is needed for provider
+selection; it is stored in the existing music configuration.
+
+ShazamIO uses an unofficial interface. It has no purchased API token, but service
+availability, accuracy and unlimited usage are not promised. The adapter makes one
+recognition request, does not rotate profiles/proxies, does not retry rate limits or
+follow redirects, bounds the response size, and times out recognition after 45 seconds.
+It sends a fingerprint computed locally from the 12-second sample, rather than the audio
+file itself. Input and sample files are removed by the existing cleanup flow.
+
+AudD charges belong to the operator's account; configure its billing limits as well as
+bot limits if enabling it. These are **attempt** limits, not money limits or charges to users'
 internal balances. Counters reset at midnight in the bot's configured quota timezone
 (Asia/Tehran by default). Failed, cancelled and uncertain attempts
 count; the provider may already have processed them.
@@ -37,11 +52,12 @@ messages, GitHub, or logs.
 1. Open **Identify music**, then send a public Instagram, YouTube, TikTok, X or Threads
    video/post link, or upload a voice message, audio file or video clip up to 25 MiB.
    Music should be audible in the first 12 seconds. Humming recognition is not promised.
-2. User confirms sharing a 12-second mono sample with AudD and downloading a sufficiently
+2. User confirms processing the first 12 seconds and sharing the required recognition
+   data with the selected external service, and downloading a sufficiently
    matching full track automatically. Links use the existing site's extractor profile,
    including the YouTube PO-token provider. Only the first media item and first 12 seconds
    are requested. The fetch is limited to 120 seconds and 25 MiB; private/inaccessible links
-   fail visibly before AudD is called. Uploaded files remain supported in the same form.
+   fail visibly before recognition is called. Uploaded files remain supported in the same form.
 3. The bot shows the identified artist/title and up to three matching public YouTube
    sources, filtered by title, artist, duration and unwanted cover/remix variants.
 4. One unambiguous strict title/artist/duration match starts an **MP3 320 kbps** download.
@@ -49,6 +65,8 @@ messages, GitHub, or logs.
    source. Missing reference duration no longer hides all candidates, but those sources
    require review and never start automatically. **Other formats** offers M4A, WAV, AAC,
    FLAC, OGG and OPUS. Older requests without auto-download consent remain manual.
+   ShazamIO results do not reliably include full-song duration, so they use explicit source
+   selection via **Download MP3 320**. Preview or sample duration is never used as song duration.
 5. The ordinary downloader fetches **that independent full-track source**. Normal download
    quotas and file-size limits apply; the stored link is included in admin activity exports.
 
@@ -60,7 +78,7 @@ song title. Download/encoding failures are shown explicitly; a polling timeout p
 Concurrent/repeated result checks reuse the source/format job and claim Telegram delivery
 once in the database. Uncertain Telegram delivery is not automatically repeated.
 
-AudD identifies music; it does not supply a licensed master audio file. Apple Music preview
+These providers identify music; they do not supply a licensed master audio file. Apple Music preview
 URLs and the submitted clip are **never** substituted for the full track. If recognition,
 duration metadata or a matching accessible source is unavailable, the bot says so. Title
 and duration matching cannot guarantee an official recording; review the displayed source.
@@ -77,7 +95,7 @@ calls have bounded execution time and no automatic retry. Work interrupted after
 becomes uncertain; after 15 minutes the janitor closes it and removes its working files.
 Use **Check result** after a bot restart. Cancellation suppresses delivery; it cannot undo
 a request the provider has already received. Cancellation during link fetching is checked
-before recognition. A link fetch failure does not call AudD, but still counts as a bot tool
+before recognition. A link fetch failure does not call either provider, but still counts as a bot tool
 attempt. Source links remain in the private database request, while temporary sample bytes
 are removed. Link worker timeouts also terminate their FFmpeg subprocess group.
 
@@ -88,11 +106,12 @@ Update, rollback and uninstall refuse to interrupt pending or processing tool re
 ## Acceptance before enabling for customers
 
 Automated tests use synthetic fixtures and stubbed providers; they incur no API charges.
-The operator should perform a real music test after setting the key: verify that the
+The operator should perform a real music test after choosing the provider: verify that the
 full track differs from the submitted sample, required formats work and temporary files
 are removed. Recognition accuracy and source availability still require live acceptance.
 
-API reference: [AudD standard recognition](https://docs.audd.io/).
+References: [ShazamIO](https://github.com/shazamio/ShazamIO),
+[AudD standard recognition](https://docs.audd.io/).
 
 For a failed music test, safe stage diagnostics (no keys or source URLs) are available with:
 
@@ -102,9 +121,10 @@ sudo docker compose logs --since=30m worker bot |
   tail -30
 ```
 
-These tools use AudD for recognition. ShazamIO is an unofficial third-party client, not
-a configured provider in this release. No provider changes or paid test calls happen
-during this update.
+Automated tests exercise the pinned ShazamIO fingerprint generator with synthetic audio
+and intercepted HTTP responses. They do not prove access from the production server.
+After updating, test one uploaded clip/voice and one supported public link there. No real
+recognition request or paid test call is made by the installer or CI.
 
 
 ## Plan quotas and editable messages
