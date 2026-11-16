@@ -69,9 +69,13 @@ def download_link_sample(url, target):
 
     url = normalize_music_link(url)
     options = _get_media_info_options(url)
+    # A combined Instagram rendition supplies the small visual preview without
+    # another fetch. Recognition still receives only the first 12 seconds.
+    format_selector = ("best[height<=480]/best/bestaudio" if urlsplit(url).hostname in
+                       {"instagram.com", "www.instagram.com", "m.instagram.com"} else "bestaudio/best")
     options.update(
         skip_download=False, noplaylist=True, playlist_items="1", playlistend=1,
-        format="bestaudio/best", outtmpl=str(target.parent / "link-source.%(ext)s"),
+        format=format_selector, outtmpl=str(target.parent / "link-source.%(ext)s"),
         download_ranges=download_range_func(None, [(0, 12)]),
         external_downloader="ffmpeg", external_downloader_args={
             "ffmpeg_i": ["-protocol_whitelist", "http,https,tcp,tls,crypto", "-rw_timeout", "15000000"],

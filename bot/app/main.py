@@ -3036,20 +3036,32 @@ async def send_downloaded_file(
                 if ui_language.get() == "en" else "\n\nاگر ویدئو پخش نشد، «نسخهٔ سازگار» را بزنید."
             )
         upload_started = time.monotonic()
-        await message.answer_document(
-            document=FSInputFile(str(path), filename=filename),
-            disable_content_type_detection=True,
-            caption=caption,
-            parse_mode="HTML",
-            reply_markup=build_completed_download_keyboard(job_id,
+        markup = build_completed_download_keyboard(job_id,
                 media_type=str(job.get("media_type") or "video"),
                 compatible=compatible,
-                source_media_type="image" if job.get("media_type") == "image" else _source_media_type(media_info)),
-        )
+                source_media_type="image" if job.get("media_type") == "image" else _source_media_type(media_info))
+        music = (media_info or {}).get("music")
+        if music:
+            from app.music_presentation import music_file_presentation
+            caption, markup = music_file_presentation(music, job_id)
+        if music and path.suffix.lower() in {".mp3", ".m4a"}:
+            await message.answer_audio(
+                audio=FSInputFile(str(path), filename=filename), title=music["title"][:128],
+                performer=music["artist"][:128], duration=int((media_info or {}).get("duration") or 0),
+                caption=caption, parse_mode="HTML", reply_markup=markup)
+        else:
+            await message.answer_document(
+                document=FSInputFile(str(path), filename=filename), disable_content_type_detection=True,
+                caption=caption, parse_mode="HTML", reply_markup=markup)
         print(f"Telegram media sent: job={job_id}, bytes={file_size}, elapsed_s={time.monotonic()-upload_started:.2f}")
         # Remove the bytes immediately after Telegram accepts the file, even
         # when delivery accounting is temporarily unreachable.
         unlink_output()
+        if music:
+            try:
+                await status_message.delete()
+            except Exception:
+                pass
         for attempt in range(3):
             try:
                 await mark_download_delivered(job_id)

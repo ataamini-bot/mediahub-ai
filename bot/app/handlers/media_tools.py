@@ -10,7 +10,7 @@ from uuid import UUID, uuid4
 from aiogram import BaseMiddleware, F, Router
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
+from aiogram.types import CallbackQuery, FSInputFile, InlineKeyboardButton, InlineKeyboardMarkup, Message, ReplyParameters
 
 from app.handlers.conversion import _attachment, _download_telegram_file, _download_runtime_function, cleanup_staged_state
 from app.middleware.interface import ui_language
@@ -18,6 +18,7 @@ from app.keyboards.download import build_active_download_keyboard
 from app.runtime_config import runtime_configuration
 from app.tool_texts import TOOL_TEXTS, tool_text as text
 from app.services.backend import BackendAPIError, _payment_request, get_download_entitlement, register_telegram_user
+from app.music_presentation import recovery_keyboard, update_music_card
 
 router = Router(name="media_tools")
 router.message.filter(F.chat.type == "private")
@@ -201,6 +202,7 @@ async def valid_state(callback, state, request_id):
 async def confirmation(message, state, request_id):
     data = await state.get_data()
     await state.set_state(ToolStates.confirmation)
+    await state.update_data(tool_input_message_id=getattr(message, "message_id", None))
     prompt = text('confirm_to_send_a_sample')
     await message.answer(prompt, reply_markup=keyboard([
         [(text('confirm_and_start'), f"tool:start:{request_id}")], cancel_row(request_id)]))
@@ -249,16 +251,55 @@ async def start_tool(callback: CallbackQuery, state: FSMContext):
         return
     await callback.message.edit_text(text('request_accepted_processing'),
         reply_markup=status_keyboard(request_id))
-    await wait_result(callback.message, callback.from_user.id, request_id)
+    await wait_result(callback.message, callback.from_user.id, request_id,
+                      reply_to=data.get("tool_input_message_id"))
 
 
-async def wait_result(message, telegram_id, request_id):
+async def maybe_show_preview(message, telegram_id, request_id, row, *, reply_to=None):
+    if not (row.get("result") or {}).get("preview") or row.get("delivery_state"):
+        return message
+    claimed = False
+    path = tool_folder(telegram_id, request_id) / "preview.mp4"
+    try:
+        claim = await _payment_request("POST", f"/media-tools/{request_id}/claim-preview",
+                                       payload={"telegram_id": telegram_id})
+        claimed = bool(claim.get("claimed"))
+        if not claimed:
+            return message
+        if path.is_symlink() or not path.is_file() or not 0 < path.stat().st_size < 5 * 1024**2:
+            return message
+        preview = claim["preview"]
+        sent = await message.answer_video(video=FSInputFile(path, filename="MediaHub-preview.mp4"),
+            caption=html.escape(text("music_preview_processing")), parse_mode="HTML", supports_streaming=True,
+            duration=preview["duration"], width=preview["width"], height=preview["height"],
+            reply_markup=status_keyboard(request_id), request_timeout=30,
+            reply_parameters=ReplyParameters(message_id=reply_to, allow_sending_without_reply=True) if reply_to else None)
+        try:
+            await message.delete()
+        except Exception:
+            pass
+        return sent
+    except Exception as exc:
+        logger.warning("Music preview unavailable: request=%s, error=%s", request_id, type(exc).__name__)
+        return message
+    finally:
+        if claimed:
+            path.unlink(missing_ok=True)
+            try:
+                await _payment_request("POST", f"/media-tools/{request_id}/release-preview",
+                                       payload={"telegram_id": telegram_id})
+            except BackendAPIError:
+                pass
+
+
+async def wait_result(message, telegram_id, request_id, *, reply_to=None):
     for _ in range(100):
         await asyncio.sleep(3)
         try:
             row = await _payment_request("GET", f"/media-tools/{request_id}?telegram_id={telegram_id}")
         except BackendAPIError:
             continue
+        message = await maybe_show_preview(message, telegram_id, request_id, row, reply_to=reply_to)
         if row["status"] not in {"pending", "processing"}:
             await show_result(message, telegram_id, request_id, row)
             return
@@ -272,7 +313,8 @@ async def check_result(callback: CallbackQuery):
     try:
         UUID(request_id)
         row = await _payment_request("GET", f"/media-tools/{request_id}?telegram_id={callback.from_user.id}")
-        await show_result(callback.message, callback.from_user.id, request_id, row)
+        message = await maybe_show_preview(callback.message, callback.from_user.id, request_id, row)
+        await show_result(message, callback.from_user.id, request_id, row)
     except (ValueError, BackendAPIError):
         await callback.message.answer(friendly_error("not_found"))
 
@@ -280,11 +322,12 @@ async def check_result(callback: CallbackQuery):
 async def show_result(message, telegram_id, request_id, row):
     status = row["status"]
     if status in {"pending", "processing"}:
-        await message.answer(text('still_processing'), reply_markup=status_keyboard(request_id))
+        await update_music_card(message, html.escape(text('still_processing')), reply_markup=status_keyboard(request_id))
         return
     if status != "completed":
         prompt = text('request_cancelled') if status == "cancelled" else friendly_error(row.get("error_code") or "input_expired")
-        await message.answer(prompt)
+        await update_music_card(message, html.escape(prompt),
+            reply_markup=recovery_keyboard(no_match=row.get("error_code") == "music_not_found"))
         return
     if row["kind"] != "music":
         await message.answer(friendly_error("tool_disabled"))
@@ -293,25 +336,32 @@ async def show_result(message, telegram_id, request_id, row):
     heading = text("music_identity", title=html.escape(result.get("title", "")), artist=html.escape(result.get("artist", "")))
     candidates = result.get("candidates") or []
     if not candidates:
-        await message.answer(heading + "\n\n" + text('the_song_was_identified_but'), parse_mode="HTML")
+        await update_music_card(message, heading + "\n\n" + html.escape(text('the_song_was_identified_but')),
+                                reply_markup=recovery_keyboard())
         return
     automatic = result.get("automatic_candidate")
     auto_start = row.get("auto_mp3") and type(automatic) is int and 0 <= automatic < len(candidates)
     rows = []
     instruction = (text('mp_kbps_from_source_number', number=automatic + 1) if auto_start else
                    text('tap_a_source_s_download'))
-    parts = [heading, instruction,
-             text('mp_is_encoded_at_kbps')]
-    if not result.get("duration"):
-        parts.append(text('the_original_duration_is_unava'))
+    parts = [heading, html.escape(instruction)]
     for i, candidate in enumerate(candidates):
         minutes, seconds = divmod(candidate["duration"], 60)
-        parts.append(text("source_line", number=i+1, title=html.escape(candidate["title"]), channel=html.escape(candidate["channel"]), duration=f"{minutes}:{seconds:02d}", url=candidate["url"]))
+        parts.append(html.escape(text("music_source_choice", number=i+1, title=candidate["title"][:100],
+                                      duration=f"{minutes}:{seconds:02d}")))
         rows.append([(text('download_mp_number', number=i + 1), f"tool:audio:{request_id}:{i}:mp3"),
                      (text('other_formats'), f"tool:source:{request_id}:{i}")])
-    await message.answer("\n\n".join(parts), parse_mode="HTML", reply_markup=keyboard(rows), disable_web_page_preview=True)
+    rows.append([(text("music_output_help"), "tool:about")])
+    await update_music_card(message, "\n\n".join(parts), reply_markup=keyboard(rows))
     if auto_start:
         await run_track_download(message, telegram_id, request_id, automatic, "mp3", row=row, automatic=True)
+
+
+@router.callback_query(F.data.in_({"tool:why", "tool:about"}))
+async def music_help(callback: CallbackQuery):
+    await callback.answer()
+    await callback.message.answer(text("music_no_match_help" if callback.data == "tool:why" else "music_download_help"),
+                                   reply_markup=recovery_keyboard())
 
 
 @router.callback_query(F.data.startswith("tool:source:"))
@@ -335,29 +385,33 @@ async def choose_source(callback: CallbackQuery):
         reply_markup=keyboard([buttons[i:i+3] for i in range(0, len(buttons), 3)]))
 
 
-@router.callback_query(F.data.startswith("tool:audio:"))
+@router.callback_query(F.data.startswith("tool:audio:") | F.data.startswith("tool:retry:"))
 async def download_track(callback: CallbackQuery):
     parts = callback.data.split(":")
-    if len(parts) != 5 or parts[4] not in FORMATS:
+    retry = len(parts) > 1 and parts[1] == "retry"
+    if len(parts) != (6 if retry else 5) or parts[4] not in FORMATS:
         return
-    request_id, index, output_format = parts[2:]
+    request_id, index, output_format = parts[2:5]
     await callback.answer()
     try:
         UUID(request_id)
         index = int(index)
+        failed_job = int(parts[5]) if retry else None
     except ValueError:
         await callback.message.answer(friendly_error("not_found"))
         return
-    await run_track_download(callback.message, callback.from_user.id, request_id, index, output_format)
+    await run_track_download(callback.message, callback.from_user.id, request_id, index, output_format,
+                             retry_failed_job_id=failed_job)
 
 
-async def run_track_download(message, telegram_id, request_id, index, output_format, *, row=None, automatic=False):
+async def run_track_download(message, telegram_id, request_id, index, output_format, *, row=None, automatic=False,
+                             retry_failed_job_id=None):
     key = (telegram_id, UUID(request_id).hex, index, output_format)
     if key in _song_downloads_in_progress:
         await message.answer(text('this_file_is_already_being'))
         return
     _song_downloads_in_progress.add(key)
-    stage, job_id = "download", None
+    stage, job_id, status_message = "download", None, None
     try:
         if not await access(message, telegram_id):
             return
@@ -370,21 +424,24 @@ async def run_track_download(message, telegram_id, request_id, index, output_for
             return
         payload = {"telegram_id": telegram_id, "candidate": index, "output_format": output_format}
         job = await _payment_request("POST", f"/media-tools/{request_id}/download", payload={
-            **payload, "automatic": automatic})
+            **payload, "automatic": automatic,
+            **({"retry_failed_job_id": retry_failed_job_id} if retry_failed_job_id is not None else {})})
         job_id = job["id"]
         if job.get("delivered_at"):
             await message.answer(friendly_error("already_delivered"))
             return
         quality = text("format_mp3") if output_format == "mp3" else output_format.upper()
         info = {"title": " - ".join(filter(None, (result.get("artist"), result.get("title")))),
-                "duration": candidates[index].get("duration"), "media_type": "audio"}
+                "duration": candidates[index].get("duration"), "media_type": "audio",
+                "music": {"title": result.get("title", ""), "artist": result.get("artist", ""),
+                          "request_id": UUID(request_id).hex, "candidate": index}}
         status_message = await message.answer(text('full_track_download_queued_qua', quality=quality),
             reply_markup=build_active_download_keyboard(job_id))
         completed = await _download_runtime_function("wait_for_download")(job_id, status_message, quality, media_info=info)
         if completed.get("status") == "completed":
             claim = await _payment_request("POST", f"/media-tools/{request_id}/claim-song-delivery", payload=payload)
             if not claim.get("claimed"):
-                await message.answer(friendly_error(claim.get("reason") or "delivery_started"))
+                await update_music_card(status_message, html.escape(friendly_error(claim.get("reason") or "delivery_started")))
                 return
             stage = "delivery"
             await _download_runtime_function("send_downloaded_file")(
@@ -412,13 +469,20 @@ async def run_track_download(message, telegram_id, request_id, index, output_for
             body = text('telegram_delivery_could_not_be')
         else:
             detail = str(exc).lower()
-            if "ffmpeg" in detail or "conversion" in detail:
-                body = text('the_song_was_identified_but_alt')
-            elif any(word in detail for word in ("403", "sign in", "login", "private", "unavailable", "format")):
+            if any(word in detail for word in ("403", "sign in", "login", "private", "unavailable", "format")):
                 body = text('the_song_was_identified_but_alt_alt')
+            elif "ffmpeg" in detail or "conversion" in detail:
+                body = text('the_song_was_identified_but_alt')
             else:
                 body = text('the_full_track_download_failed')
-        await message.answer("❌ " + body)
+        buttons = [[(text("music_back_to_sources"), f"tool:check:{request_id}")],
+                   [(text("music_request_review"), "support:open")]]
+        if stage == "download" and job_id is not None:
+            buttons.insert(0, [(text("music_retry_download"), f"tool:retry:{UUID(request_id).hex}:{index}:{output_format}:{job_id}")])
+        if status_message is not None:
+            await update_music_card(status_message, "❌ " + html.escape(body), reply_markup=keyboard(buttons))
+        else:
+            await message.answer("❌ " + body, reply_markup=keyboard(buttons))
     finally:
         _song_downloads_in_progress.discard(key)
 

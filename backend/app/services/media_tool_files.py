@@ -26,15 +26,17 @@ def input_file(telegram_id, request_id, kind):
     return path
 
 
-def remove_files(telegram_id, request_id):
+def remove_files(telegram_id, request_id, *, keep_preview=False):
     path = folder(telegram_id, request_id)
     # Never follow user symlinks or recurse into unexpected subdirectories.
     if path.is_dir():
         for temporary in path.glob("link-source.*"):
             if temporary.is_file() or temporary.is_symlink():
                 temporary.unlink(missing_ok=True)
-        for name in ("input", "sample.wav", "photo.png", "result.jpg", "result.tmp"):
+        for name in ("input", "sample.wav", "photo.png", "result.jpg", "result.tmp", "preview.tmp.mp4"):
             (path / name).unlink(missing_ok=True)
+        if not keep_preview:
+            (path / "preview.mp4").unlink(missing_ok=True)
         try:
             path.rmdir()
         except OSError:

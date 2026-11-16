@@ -20,7 +20,9 @@ def state():
 
 
 def callback(data):
-    message = SimpleNamespace(answer=AsyncMock(), edit_text=AsyncMock(), answer_document=AsyncMock())
+    message = SimpleNamespace(answer=AsyncMock(), edit_text=AsyncMock(), edit_caption=AsyncMock(),
+                              answer_document=AsyncMock(), answer_video=AsyncMock(), delete=AsyncMock(), video=None)
+    message.answer.return_value = message
     return SimpleNamespace(from_user=SimpleNamespace(id=42), message=message, data=data, answer=AsyncMock())
 
 
@@ -93,7 +95,8 @@ def test_no_full_source_never_sends_clip_audio(monkeypatch):
         monkeypatch.setattr(tools, "_payment_request", post)
         await tools.show_result(event.message, 42, uuid4().hex, {"status": "completed", "kind": "music",
             "result": {"title": "Song", "artist": "Artist", "candidates": []}})
-        assert event.message.answer.await_count == 1
+        assert event.message.edit_text.await_count == 1
+        assert "Song" in event.message.edit_text.await_args.args[0]
         event.message.answer_document.assert_not_awaited()
         post.assert_not_awaited()
     asyncio.run(exercise())
@@ -219,8 +222,8 @@ def test_ambiguous_or_old_requests_require_clearly_labelled_download_button(monk
             await tools.show_result(message, 42, uuid4().hex, row)
         finally:
             ui_language.reset(token)
-        assert "No download starts until you choose" in message.answer.await_args.args[0]
-        buttons = [b for r in message.answer.await_args.kwargs["reply_markup"].inline_keyboard for b in r]
+        assert "Tap Download" in message.edit_text.await_args.args[0]
+        buttons = [b for r in message.edit_text.await_args.kwargs["reply_markup"].inline_keyboard for b in r]
         assert "MP3 320" in buttons[0].text and buttons[0].callback_data.endswith(":0:mp3")
         assert all(len(b.callback_data.encode()) <= 64 for b in buttons)
         post.assert_not_awaited()
@@ -239,8 +242,15 @@ def test_download_failure_does_not_leave_user_waiting_or_expose_upstream_data(mo
         monkeypatch.setattr(tools, "access", AsyncMock(return_value=True))
         monkeypatch.setattr(tools, "_download_runtime_function", {"wait_for_download": wait, "send_downloaded_file": send}.__getitem__)
         await tools.run_track_download(message, 42, request_id, 0, "mp3", row=song_result())
-        assert message.answer.await_count == 2
-        assert "secret" not in message.answer.await_args.args[0]
+        if isinstance(failure, asyncio.TimeoutError):
+            assert message.answer.await_count == 2
+            body = message.answer.await_args.args[0]
+        else:
+            assert message.answer.await_count == 1
+            body = message.edit_text.await_args.args[0]
+            assert all(not b.callback_data.startswith('download_pause:')
+                       for r in message.edit_text.await_args.kwargs['reply_markup'].inline_keyboard for b in r)
+        assert "secret" not in body
         send.assert_not_awaited()
         assert post.await_count == 1 and not tools._song_downloads_in_progress
     asyncio.run(exercise())
@@ -256,5 +266,84 @@ def test_repeated_or_uncertain_delivery_never_sends_audio_twice(monkeypatch):
         monkeypatch.setattr(tools, "_download_runtime_function", {"wait_for_download": wait, "send_downloaded_file": send}.__getitem__)
         await tools.run_track_download(message, 42, uuid4().hex, 0, "mp3", row=song_result())
         send.assert_not_awaited()
-        assert message.answer.await_args.args[0] == tools.friendly_error("delivery_started")
+        assert message.edit_text.await_args.args[0] == tools.friendly_error("delivery_started")
+    asyncio.run(exercise())
+
+
+@pytest.mark.parametrize("language", ["fa", "en"])
+def test_no_match_edits_preview_and_offers_real_help(language):
+    async def exercise():
+        message = callback("").message
+        message.video = object()
+        token = ui_language.set(language)
+        try:
+            await tools.show_result(message, 42, uuid4().hex,
+                {"status": "failed", "error_code": "music_not_found"})
+        finally:
+            ui_language.reset(token)
+        message.edit_caption.assert_awaited_once()
+        sent = message.edit_caption.await_args.kwargs
+        assert {b.callback_data for r in sent["reply_markup"].inline_keyboard for b in r} == {
+            "tool:why", "tool:open:music", "support:open"}
+        assert not any(word in sent["caption"] for word in ("AudD", "Shazam", "FFmpeg"))
+        message.answer.assert_not_awaited()
+    asyncio.run(exercise())
+
+
+@pytest.mark.parametrize("send_fails", [False, True])
+def test_preview_claim_cleanup_and_uncertain_send_do_not_repeat(monkeypatch, tmp_path, send_fails):
+    async def exercise():
+        monkeypatch.setattr(tools, "ROOT", tmp_path)
+        request_id = uuid4().hex
+        path = tools.tool_folder(42, request_id)
+        path.mkdir()
+        source = path / "input"
+        source.write_bytes(b"recognition is still using this")
+        preview = path / "preview.mp4"
+        preview.write_bytes(b"video")
+        metadata = {"width": 480, "height": 270, "duration": 12}
+        post = AsyncMock(side_effect=[{"claimed": True, "preview": metadata}, {"released": True}, {"claimed": False}])
+        monkeypatch.setattr(tools, "_payment_request", post)
+        message = callback("").message
+        if send_fails:
+            message.answer_video.side_effect = TimeoutError("unknown Telegram outcome")
+        else:
+            message.answer_video.return_value = callback("").message
+        row = {"status": "processing", "result": {"preview": metadata}}
+        result = await tools.maybe_show_preview(message, 42, request_id, row, reply_to=123)
+        assert result is (message if send_fails else message.answer_video.return_value)
+        assert message.answer_video.await_args.kwargs["reply_parameters"].message_id == 123
+        assert not preview.exists() and source.exists()
+        await tools.maybe_show_preview(message, 42, request_id, row)
+        message.answer_video.assert_awaited_once()
+    asyncio.run(exercise())
+
+
+def test_403_inside_ffmpeg_error_is_presented_as_source_access_failure(monkeypatch):
+    async def exercise():
+        message = callback("").message
+        monkeypatch.setattr(tools, "access", AsyncMock(return_value=True))
+        monkeypatch.setattr(tools, "_payment_request", AsyncMock(return_value={"id": 44}))
+        monkeypatch.setattr(tools, "_download_runtime_function", {"wait_for_download":
+            AsyncMock(side_effect=RuntimeError("FFmpeg exited: HTTP Error 403 secret"))}.__getitem__)
+        await tools.run_track_download(message, 42, uuid4().hex, 0, "mp3", row=song_result())
+        body = message.edit_text.await_args.args[0]
+        assert tools.text('the_song_was_identified_but_alt_alt') in body
+        assert "secret" not in body
+    asyncio.run(exercise())
+
+
+def test_explicit_retry_uses_existing_recognition_and_sends_the_expected_failed_job(monkeypatch):
+    async def exercise():
+        request_id = uuid4().hex
+        event = callback(f"tool:retry:{request_id}:0:mp3:44")
+        monkeypatch.setattr(tools, "access", AsyncMock(return_value=True))
+        post = AsyncMock(side_effect=[song_result(), {"id": 45}])
+        monkeypatch.setattr(tools, "_payment_request", post)
+        monkeypatch.setattr(tools, "_download_runtime_function", {"wait_for_download":
+            AsyncMock(return_value={"status": "cancelled"})}.__getitem__)
+        await tools.download_track(event)
+        assert post.await_args.kwargs["payload"] == {"telegram_id": 42, "candidate": 0,
+            "output_format": "mp3", "automatic": False, "retry_failed_job_id": 44}
+        assert all(call.args[1] != "/media-tools" for call in post.await_args_list)
     asyncio.run(exercise())

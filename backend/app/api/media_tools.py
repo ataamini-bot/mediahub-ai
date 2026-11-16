@@ -11,7 +11,7 @@ from app.core.internal_auth import require_internal_api_key
 from app.db.session import get_db
 from app.services.managed_settings import PublicOperationDisabled
 from app.services.media_tool_config import read_config, public_config
-from app.services.media_tool_files import remove_files
+from app.services.media_tool_files import folder, remove_files
 from app.services.media_tools import MediaToolError, owned, present, submit
 
 router = APIRouter(prefix="/media-tools", tags=["media-tools"], dependencies=[Depends(require_internal_api_key)])
@@ -33,6 +33,7 @@ class SongDownload(ToolOwner):
     candidate: int = Field(ge=0, le=2)
     output_format: Literal["mp3", "m4a", "wav", "aac", "flac", "ogg", "opus"]
     automatic: bool = False
+    retry_failed_job_id: int | None = Field(default=None, gt=0)
 
 
 def failure(exc):
@@ -106,11 +107,47 @@ async def release(request_id: UUID, data: ToolOwner, db: AsyncSession = Depends(
     return {"released": True}
 
 
+@router.post("/{request_id}/claim-preview")
+async def claim_preview(request_id: UUID, data: ToolOwner, db: AsyncSession = Depends(get_db)):
+    from app.services.media_tool_preview import MAX_PREVIEW_BYTES
+    try:
+        row = await owned(db, request_id, data.telegram_id, lock=True)
+    except MediaToolError as exc:
+        raise failure(exc) from exc
+    if row.kind != "music" or row.status not in {"processing", "completed", "failed", "uncertain"} or row.delivery_state:
+        return {"claimed": False}
+    preview = (row.result or {}).get("preview")
+    path = folder(data.telegram_id, request_id) / "preview.mp4"
+    if not preview or path.is_symlink() or not path.is_file() or not 0 < path.stat().st_size < MAX_PREVIEW_BYTES:
+        return {"claimed": False}
+    # Commit before Telegram receives bytes. An uncertain send is not repeated.
+    row.delivery_state = "preview_sending"
+    await db.commit()
+    return {"claimed": True, "preview": preview}
+
+
+@router.post("/{request_id}/release-preview")
+async def release_preview(request_id: UUID, data: ToolOwner, db: AsyncSession = Depends(get_db)):
+    try:
+        row = await owned(db, request_id, data.telegram_id, lock=True)
+    except MediaToolError as exc:
+        raise failure(exc) from exc
+    if row.delivery_state not in {"preview_sending", "preview_sent"}:
+        return {"released": False}
+    (folder(data.telegram_id, request_id) / "preview.mp4").unlink(missing_ok=True)
+    row.delivery_state = "preview_sent"
+    if row.status not in {"pending", "processing"}:
+        remove_files(data.telegram_id, request_id)
+        row.files_removed_at = datetime.now(timezone.utc)
+    await db.commit()
+    return {"released": True}
+
+
 
 
 @router.post("/{request_id}/download")
 async def download_song(request_id: UUID, data: SongDownload, db: AsyncSession = Depends(get_db)):
-    from app.models.download_job import DownloadJob
+    from app.models.download_job import DownloadJob, DownloadJobStatus
     from app.schemas.download import DownloadResponse
     from app.services.download import DownloadService, DownloadFormatError
     from app.services.download_access import DownloadAccessError
@@ -125,11 +162,18 @@ async def download_song(request_id: UUID, data: SongDownload, db: AsyncSession =
         raise HTTPException(409, {"code": "music_selection_required"})
     selection_key = f"{data.candidate}:{data.output_format}"
     selection = (row.downloads or {}).get(selection_key) or {}
+    previous_selection = dict(selection)
     if selection.get("job_id"):
         job = await db.get(DownloadJob, selection["job_id"])
         if not job:
             raise HTTPException(409, {"code": "not_found"})
-        return DownloadResponse.model_validate(job)
+        if data.retry_failed_job_id != job.id:
+            # A duplicate click carries the old failed ID and reuses its
+            # replacement; it cannot create a second download.
+            return DownloadResponse.model_validate(job)
+        if (data.automatic or job.status != DownloadJobStatus.FAILED or job.delivered_at
+                or selection.get("delivery_state")):
+            raise HTTPException(409, {"code": "music_not_ready"})
     if selection.get("state") == "starting":
         raise HTTPException(409, {"code": "download_start_uncertain"})
     candidates = (row.result or {}).get("candidates") or []
@@ -148,7 +192,7 @@ async def download_song(request_id: UUID, data: SongDownload, db: AsyncSession =
         await db.rollback()
         row = await owned(db, request_id, data.telegram_id, lock=True)
         row.download_state = "rejected"
-        row.downloads = {**(row.downloads or {}), selection_key: {"state": "rejected"}}
+        row.downloads = {**(row.downloads or {}), selection_key: previous_selection or {"state": "rejected"}}
         await db.commit()
         if isinstance(exc, DownloadAccessError):
             raise HTTPException(exc.status_code, exc.detail()) from exc

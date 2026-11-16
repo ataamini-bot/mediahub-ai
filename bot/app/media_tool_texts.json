@@ -1,8 +1,8 @@
 {
   "b_identify_a_song_and": {
     "label": "🎵 تشخیص آهنگ و دریافت نسخه کامل",
-    "fa": "🎵 <b>تشخیص آهنگ و دریافت نسخه کامل</b>\n\nلینک عمومی ویدئو یا پست از اینستاگرام، یوتیوب، تیک‌تاک، X یا Threads را بفرستید؛ یا ویس، فایل صوتی و کلیپ را مستقیم ارسال کنید (فایل تا ۲۵ مگابایت). آهنگ باید در ۱۲ ثانیه اول واضح شنیده شود.\nنام آهنگ و خواننده را پیدا می‌کنیم؛ اگر یک منبع با تطبیق کافی پیدا شود، نسخه کامل را خودکار به‌صورت MP3 با نرخ ۳۲۰ کیلوبیت بر ثانیه می‌فرستیم. اگر چند انتخاب وجود داشته باشد یا تطبیق کافی نباشد، دکمه دانلود منابع را نشان می‌دهیم. فرمت‌های دیگر هم قابل انتخاب‌اند.\nخروجی از منبع نسخه کامل دانلود می‌شود، نه از صدای همین کلیپ. نرخ ۳۲۰ کیفیت منبع ضعیف‌تر را افزایش نمی‌دهد.\nاین قابلیت برای موسیقی ضبط‌شده است؛ تشخیص زمزمه یا نامی که با صدای خودتان می‌گویید تضمین نمی‌شود.",
-    "en": "🎵 <b>Identify a song and get the full track</b>\n\nSend a public Instagram, YouTube, TikTok, X or Threads video/post link, or upload a voice message, audio file or clip (uploads up to 25 MB). Music should be clear in the first 12 seconds.\nWe identify the title and artist. With one sufficiently matching source, we automatically send the full track as MP3 at 320 kbps. When the match is uncertain or ambiguous, choose a source using its download button. Other formats remain available.\nThe download comes from a separate full-track source, not your sample. Encoding at 320 kbps cannot improve a lower-quality source.\nThis is for recorded music; humming or speaking a song title may not be recognized.",
+    "fa": "🎵 آهنگ این کلیپ چیه؟\n\nیکی از این‌ها را بفرست:\n🔗 لینک ویدئو\n🎬 کلیپ یا فایل آهنگ\n🎙 ویس با حداقل ۱۰ ثانیه موسیقی واضح\n\nبعد از شناسایی، می‌توانی نسخهٔ کامل آهنگ را با فرمت دلخواه دریافت کنی.",
+    "en": "🎵 What song is this?\n\nSend one of these:\n🔗 A video link\n🎬 A clip or audio file\n🎙 A voice message with at least 10 seconds of clear music\n\nIdentify the song, then get the full track in your preferred format.",
     "fields": [],
     "maximum": 3000,
     "html": true,
@@ -10,8 +10,8 @@
   },
   "confirm_to_send_a_sample": {
     "label": "با تأیید شما، نمونه‌ای از ۱۲ ثانیه اول فایل یا لینک برا",
-    "fa": "با تأیید شما، ۱۲ ثانیه اول فایل یا لینک برای شناسایی آهنگ پردازش می‌شود و اطلاعات لازم به سرویس بیرونی تشخیص آهنگ ارسال می‌شود. این تلاش از سهمیه تشخیص آهنگ پلن شما مصرف می‌کند. در صورت پیدا شدن یک منبع با تطبیق کافی، دانلود و ارسال MP3 ۳۲۰ خودکار شروع می‌شود و یک دانلود از سهمیه عادی مصرف می‌کند. در غیر این صورت ابتدا منبع را انتخاب می‌کنید.",
-    "en": "Confirm to process the first 12 seconds of the file or link and send the required recognition data to an external music recognition service. This uses one recognition attempt from your plan. A single sufficiently matching full-track source will download and send automatically as MP3 320 kbps, using one normal download. Otherwise you choose the source first.",
+    "fa": "با تأیید تو، نمونهٔ کوتاهی از صدا برای شناسایی به یک سرویس بیرونی فرستاده می‌شود و یک نوبت از سهمیهٔ شناسایی استفاده می‌شود. دریافت آهنگ کامل از سهمیهٔ دانلود است. اگر منبع مطمئن و یکتا پیدا شود، MP3 با نرخ ۳۲۰ خودکار ارسال می‌شود؛ در غیر این صورت، منبع را انتخاب می‌کنی.",
+    "en": "With your confirmation, a short audio sample is processed by an external recognition service and uses one recognition attempt. The full track uses your download allowance. One clear match is sent automatically as MP3 320; otherwise you choose a source.",
     "fields": [],
     "maximum": 3000,
     "html": false,
@@ -19,8 +19,8 @@
   },
   "mp_kbps_from_source_number": {
     "label": "⬇️ دریافت MP3 ۳۲۰ از منبع {number} خودکار شروع می‌شود.",
-    "fa": "⬇️ دریافت MP3 ۳۲۰ از منبع {number} خودکار شروع می‌شود.",
-    "en": "⬇️ MP3 320 kbps from source {number} starts automatically.",
+    "fa": "⬇️ در حال آماده‌کردن آهنگ کامل…",
+    "en": "⬇️ Preparing the full song…",
     "fields": [
       "number"
     ],
@@ -30,8 +30,8 @@
   },
   "tap_a_source_s_download": {
     "label": "👇 برای دریافت فایل، دکمه «دانلود MP3 ۳۲۰» یکی از منابع ",
-    "fa": "👇 برای دریافت فایل، دکمه «دانلود MP3 ۳۲۰» یکی از منابع را بزنید. تا انتخاب شما، دانلودی شروع نمی‌شود.",
-    "en": "👇 Tap a source's Download MP3 320 button to receive the file. No download starts until you choose.",
+    "fa": "برای دریافت آهنگ کامل، دکمهٔ دانلود را بزن.",
+    "en": "Tap Download to get the full song.",
     "fields": [],
     "maximum": 500,
     "html": true,
@@ -57,8 +57,8 @@
   },
   "request_accepted_processing": {
     "label": "⏳ درخواست ثبت شد؛ در حال پردازش…",
-    "fa": "⏳ درخواست ثبت شد؛ در حال پردازش…",
-    "en": "⏳ Request accepted. Processing…",
+    "fa": "🎧 در حال شناسایی آهنگ…",
+    "en": "🎧 Identifying the song…",
     "fields": [],
     "maximum": 3000,
     "html": false,
@@ -158,8 +158,8 @@
   },
   "still_processing": {
     "label": "⏳ هنوز در حال پردازش است.",
-    "fa": "⏳ هنوز در حال پردازش است.",
-    "en": "⏳ Still processing.",
+    "fa": "🎧 هنوز در حال شناسایی آهنگ هستم…",
+    "en": "🎧 Still identifying the song…",
     "fields": [],
     "maximum": 3000,
     "html": false,
@@ -176,8 +176,8 @@
   },
   "full_track_download_queued_qua": {
     "label": "⏳ دانلود آهنگ کامل در صف است…",
-    "fa": "⏳ دانلود آهنگ کامل در صف است…\n🎵 {quality}",
-    "en": "⏳ Full-track download queued…\n🎵 {quality}",
+    "fa": "⏳ در حال آماده‌کردن آهنگ کامل…\n🎵 {quality}",
+    "en": "⏳ Preparing the full song…\n🎵 {quality}",
     "fields": [
       "quality"
     ],
@@ -214,8 +214,8 @@
   },
   "the_song_was_identified_but": {
     "label": "آهنگ شناسایی شد، اما منبع قابل دانلود برای نسخه کامل پی",
-    "fa": "آهنگ شناسایی شد، اما منبع قابل دانلود برای نسخه کامل پیدا نشد؛ دانلودی در حال انجام نیست و لازم نیست منتظر فایل بمانید. صدای کلیپ شما به‌جای آهنگ ارسال نمی‌شود.",
-    "en": "The song was identified, but no matching full-track download source was found. No download is running; there is no file to wait for. Your sample will not be sent as a substitute.",
+    "fa": "آهنگ را شناختم، اما فعلاً منبع قابل دریافت برای نسخهٔ کامل پیدا نشد.",
+    "en": "I identified the song, but couldn’t find an available full-track source.",
     "fields": [],
     "maximum": 500,
     "html": true,
@@ -234,8 +234,8 @@
   },
   "other_formats": {
     "label": "فرمت‌های دیگر",
-    "fa": "فرمت‌های دیگر",
-    "en": "Other formats",
+    "fa": "🎚 فرمت‌های دیگر",
+    "en": "🎚 Other formats",
     "fields": [],
     "maximum": 64,
     "html": false,
@@ -261,8 +261,8 @@
   },
   "the_song_was_identified_but_alt_alt": {
     "label": "آهنگ شناسایی شد، اما دانلود این منبع ممکن نشد. اگر منبع",
-    "fa": "آهنگ شناسایی شد، اما دانلود این منبع ممکن نشد. اگر منبع دیگری نمایش داده شده، آن را انتخاب کنید.",
-    "en": "The song was identified, but this source could not be downloaded. Choose another source if one is listed.",
+    "fa": "آهنگ شناسایی شد، اما منبع اجازهٔ دریافت فایل را نداد. از نتیجهٔ شناسایی، منبع دیگری را انتخاب کن یا درخواست بررسی بفرست.",
+    "en": "The song was identified, but the source did not allow the file download. Choose another source from the result, or request help.",
     "fields": [],
     "maximum": 3000,
     "html": false,
@@ -360,8 +360,8 @@
   },
   "error_music_not_found": {
     "label": "آهنگ شناسایی نشد. یک نمونه واضح‌تر با حداقل ۱۰ ثانیه مو",
-    "fa": "آهنگ شناسایی نشد. یک نمونه واضح‌تر با حداقل ۱۰ ثانیه موسیقی بفرستید.",
-    "en": "No song was identified. Try a clearer sample with at least 10 seconds of music.",
+    "fa": "🔎 این آهنگ را پیدا نکردم.\n\nیک بخش دیگر با حداقل ۱۰ ثانیه موسیقی واضح بفرست.",
+    "en": "🔎 I couldn’t identify this song.\n\nTry another part with at least 10 seconds of clear music.",
     "fields": [],
     "maximum": 3000,
     "html": false,
@@ -531,8 +531,8 @@
   },
   "music_identity": {
     "label": "🎵 {title}",
-    "fa": "🎵 {title}\n👤 {artist}",
-    "en": "🎵 {title}\n👤 {artist}",
+    "fa": "🎵 <b>{title}</b>\n🎤 {artist}",
+    "en": "🎵 <b>{title}</b>\n🎤 {artist}",
     "fields": [
       "artist",
       "title"
@@ -12198,5 +12198,120 @@
     "html": false,
     "scope": "common",
     "maximum": 3900
+  },
+  "music_no_match_why": {
+    "label": "🔎 چرا پیدا نشد؟",
+    "fa": "🔎 چرا پیدا نشد؟",
+    "en": "🔎 Why no match?",
+    "fields": [],
+    "maximum": 64,
+    "html": false,
+    "scope": "tools"
+  },
+  "music_try_another": {
+    "label": "🎵 آهنگ دیگر",
+    "fa": "🎵 آهنگ دیگر",
+    "en": "🎵 Another song",
+    "fields": [],
+    "maximum": 64,
+    "html": false,
+    "scope": "tools"
+  },
+  "music_request_review": {
+    "label": "💬 درخواست بررسی",
+    "fa": "💬 درخواست بررسی",
+    "en": "💬 Request help",
+    "fields": [],
+    "maximum": 64,
+    "html": false,
+    "scope": "tools"
+  },
+  "music_file_details": {
+    "label": "📋 جزئیات فایل",
+    "fa": "📋 جزئیات فایل",
+    "en": "📋 File details",
+    "fields": [],
+    "maximum": 64,
+    "html": false,
+    "scope": "tools"
+  },
+  "music_output_help": {
+    "label": "ℹ️ دربارهٔ دانلود",
+    "fa": "ℹ️ دربارهٔ دانلود",
+    "en": "ℹ️ About downloads",
+    "fields": [],
+    "maximum": 64,
+    "html": false,
+    "scope": "tools"
+  },
+  "music_back_to_sources": {
+    "label": "↩️ بازگشت به نتیجهٔ شناسایی",
+    "fa": "↩️ بازگشت به نتیجهٔ شناسایی",
+    "en": "↩️ Back to recognition result",
+    "fields": [],
+    "maximum": 64,
+    "html": false,
+    "scope": "tools"
+  },
+  "music_source_choice": {
+    "label": "{number}. {title} · {duration}",
+    "fa": "{number}. {title} · {duration}",
+    "en": "{number}. {title} · {duration}",
+    "fields": [
+      "number",
+      "title",
+      "duration"
+    ],
+    "maximum": 800,
+    "html": false,
+    "scope": "tools"
+  },
+  "music_preview_processing": {
+    "label": "🎧 در حال شناسایی آهنگ…",
+    "fa": "🎧 در حال شناسایی آهنگ…\nپیش‌نمایش کوتاه کلیپ شما",
+    "en": "🎧 Identifying the song…\nA short preview of your clip",
+    "fields": [],
+    "maximum": 800,
+    "html": false,
+    "scope": "tools"
+  },
+  "music_audio_caption": {
+    "label": "🎵 <b>{title}</b>",
+    "fa": "🎵 <b>{title}</b>\n🎤 {artist}\n\n🎧 MediaHub AI",
+    "en": "🎵 <b>{title}</b>\n🎤 {artist}\n\n🎧 MediaHub AI",
+    "fields": [
+      "title",
+      "artist"
+    ],
+    "maximum": 800,
+    "html": true,
+    "scope": "tools"
+  },
+  "music_no_match_help": {
+    "label": "گاهی نمونه خیلی کوتاه است، روی موسیقی صحبت می‌شود، یا ",
+    "fa": "گاهی نمونه خیلی کوتاه است، روی موسیقی صحبت می‌شود، یا نسخهٔ ریمیکس و تغییرسرعت‌یافتهٔ آهنگ قابل شناسایی نیست. ممکن است سرویس هم این ضبط را نشناسد.\n\nیک بخش واضح‌تر از جای دیگری از آهنگ بفرست. برای بررسی توسط پشتیبانی، «درخواست بررسی» را بزن؛ ثبت درخواست به معنی اضافه‌شدن آهنگ به سرویس شناسایی نیست.",
+    "en": "The sample may be too short or contain speech over the music. Remixes and speed changes can make recognition harder, and the service may not recognize this recording.\n\nTry a clearer section from another part of the song. Request help to contact support; this does not add the song to the recognition service.",
+    "fields": [],
+    "maximum": 800,
+    "html": false,
+    "scope": "tools"
+  },
+  "music_download_help": {
+    "label": "فایل ارسالی از یک منبع مستقل برای آهنگ کامل دریافت می‌",
+    "fa": "فایل ارسالی از یک منبع مستقل برای آهنگ کامل دریافت می‌شود؛ صدای کلیپ شما جای آن فرستاده نمی‌شود. MP3 با نرخ ۳۲۰ ساخته می‌شود، اما کیفیت شنیداری به منبع بستگی دارد.\n\nاگر چند منبع نمایش داده شد یا انتخاب خودکار ممکن نبود، پیش از دانلود عنوان و مدت آن را بررسی کن. ممکن است دسترسی به بعضی منابع موقتاً برقرار نباشد. تلاش مجددِ دانلود شکست‌خورده از سهمیهٔ دانلود استفاده می‌کند؛ تشخیص آهنگ تکرار نمی‌شود.",
+    "en": "The full song comes from an independent source; your clip’s audio is never substituted. MP3 is encoded at 320 kbps, but audible quality depends on the source.\n\nIf you need to choose a source, check its title and duration. Some sources may be temporarily unavailable. Retrying a failed download uses the download allowance; recognition is not repeated.",
+    "fields": [],
+    "maximum": 800,
+    "html": false,
+    "scope": "tools"
+  },
+  "music_retry_download": {
+    "label": "🔄 تلاش مجدد دانلود",
+    "fa": "🔄 تلاش مجدد دانلود",
+    "en": "🔄 Retry download",
+    "fields": [],
+    "maximum": 64,
+    "html": false,
+    "scope": "tools"
   }
 }

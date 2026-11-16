@@ -164,7 +164,12 @@ def sweep_tools(db, *, now=None):
         if row.status in {"pending", "processing"}:
             active.add(folder(telegram_id, row.id).name)
             continue
-        if row.status == "completed" and now - (row.completed_at or row.created_at) < timedelta(minutes=30):
+        if (row.status in {"completed", "failed", "uncertain"} and (row.result or {}).get("preview")
+                and row.delivery_state != "preview_sent" and now - row.created_at < timedelta(minutes=10)):
+            active.add(folder(telegram_id, row.id).name)
+            continue
+        if (row.status == "completed" and not (row.result or {}).get("preview")
+                and now - (row.completed_at or row.created_at) < timedelta(minutes=30)):
             active.add(folder(telegram_id, row.id).name)
             continue
         try:

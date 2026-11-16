@@ -12,6 +12,7 @@ from app.models.user import User, UserStatus
 from app.services.media_tool_config import read_worker_config, provider_configured
 from app.services.media_tool_files import folder, input_file, remove_files
 from app.services.media_tool_providers import ToolError, automatic_song_candidate, find_full_tracks, recognize_music
+from app.services.media_tool_preview import prepare_preview
 from app.workers.celery_app import celery_app
 
 logger = logging.getLogger(__name__)
@@ -44,7 +45,7 @@ def run_tool(request_id):
         row.status, row.started_at = "processing", datetime.now(timezone.utc)
         db.commit()
         telegram_id, kind, options = user.telegram_id, row.kind, row.options
-    result, error = None, None
+    result, error, preview = None, None, None
     try:
         if kind == "music" and options.get("source_url"):
             from app.services.media_tool_links import fetch_music_link
@@ -54,11 +55,18 @@ def run_tool(request_id):
         else:
             source = input_file(telegram_id, request_id, kind)
         if kind == "music":
+            preview = prepare_preview(source)
+            if preview:
+                with WorkerSessionLocal() as db:
+                    current = db.scalar(select(MediaToolRequest).where(MediaToolRequest.id == request_id).with_for_update())
+                    if current and current.status == "processing":
+                        current.result = {"preview": preview}
+                        db.commit()
             # Link extraction can take longer than an upload. A cancellation
             # received during it must stop before any paid recognition call.
             with WorkerSessionLocal() as db:
                 if db.scalar(select(MediaToolRequest.status).where(MediaToolRequest.id == request_id)) != "processing":
-                    return
+                    raise ToolError("request_cancelled")
             started = time.monotonic()
             result = recognize_music(source, config["token"], provider=config["provider"])
             logger.warning("Music recognition complete: request=%s, elapsed_s=%.2f, duration_known=%s",
@@ -78,15 +86,16 @@ def run_tool(request_id):
         # Do not log provider responses, credentials, photo bytes or file paths.
         error = "tool_failed"
     finally:
-        remove_files(telegram_id, request_id)
+        remove_files(telegram_id, request_id, keep_preview=bool(preview))
     with WorkerSessionLocal() as db:
         row = db.scalar(select(MediaToolRequest).where(MediaToolRequest.id == request_id).with_for_update())
         if not row or row.status != "processing":
             remove_files(telegram_id, request_id)
             return
         row.completed_at = datetime.now(timezone.utc)
-        row.result, row.error_code = result if not error else None, error
+        row.result = {**((result or {}) if not error else {}), **({"preview": preview} if preview else {})} or None
+        row.error_code = error
         row.status = "uncertain" if error == "provider_uncertain" else "failed" if error else "completed"
-        if error or kind == "music":
+        if not (folder(telegram_id, request_id) / "preview.mp4").exists():
             row.files_removed_at = row.completed_at
         db.commit()

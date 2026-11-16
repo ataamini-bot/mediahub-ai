@@ -179,6 +179,81 @@ async def test_api_requires_internal_key_checks_owner_and_cleans_input(records):
 
 
 @pytest.mark.asyncio
+async def test_preview_is_owned_claimed_once_and_released_without_deleting_active_input(records):
+    value = records.payload()
+    await accept(value)
+    path = folder(value.telegram_id, value.request_id)
+    (path / "preview.mp4").write_bytes(b"preview")
+    async with AsyncSessionLocal() as db:
+        await db.execute(update(MediaToolRequest).where(MediaToolRequest.id == value.request_id).values(
+            status="processing", result={"preview": {"width": 480, "height": 270, "duration": 12}}))
+        await db.commit()
+    app = FastAPI()
+    app.include_router(router)
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test",
+            headers={"X-Internal-API-Key": settings.bot_backend_api_key}) as client:
+        endpoint = f"/media-tools/{value.request_id}"
+        assert (await client.post(endpoint + "/claim-preview", json={"telegram_id": records.users[2].telegram_id})).status_code == 404
+        async def claim():
+            return (await client.post(endpoint + "/claim-preview", json={"telegram_id": value.telegram_id})).json()
+        claims = await asyncio.gather(claim(), claim())
+        assert [r["claimed"] for r in claims].count(True) == 1
+        assert (await client.post(endpoint + "/release-preview", json={"telegram_id": value.telegram_id})).json()["released"]
+        assert (path / "input").exists() and not (path / "preview.mp4").exists()
+        assert not (await claim())["claimed"]
+    async with AsyncSessionLocal() as db:
+        row = await db.get(MediaToolRequest, value.request_id)
+        assert row.files_removed_at is None
+
+
+@pytest.mark.asyncio
+async def test_worker_cancellation_after_preview_cleans_it_and_skips_recognition(records, monkeypatch):
+    from app.workers.tasks import media_tools as worker
+    value = records.payload()
+    await accept(value)
+    path = folder(value.telegram_id, value.request_id)
+    def preview(source):
+        (source.parent / "preview.mp4").write_bytes(b"preview")
+        with worker.WorkerSessionLocal() as db:
+            db.execute(update(MediaToolRequest).where(MediaToolRequest.id == value.request_id).values(status="cancelled"))
+            db.commit()
+        return {"width": 480, "height": 270, "duration": 12}
+    monkeypatch.setattr(worker, "prepare_preview", preview)
+    monkeypatch.setattr(worker, "recognize_music", lambda *a, **k: pytest.fail("Cancelled recognition started"))
+    await asyncio.to_thread(worker.run_tool.run, str(value.request_id))
+    assert not path.exists()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("delivery_state", [None, "preview_sending"])
+async def test_failed_recognition_preview_expires_and_input_is_removed_immediately(records, monkeypatch, delivery_state):
+    from app.workers.tasks import media_tools as worker
+    from app.services.media_tool_providers import ToolError
+    value = records.payload()
+    await accept(value)
+    path = folder(value.telegram_id, value.request_id)
+    def preview(source):
+        (source.parent / "preview.mp4").write_bytes(b"preview")
+        return {"width": 480, "height": 270, "duration": 12}
+    def recognize(*args, **kwargs):
+        raise ToolError("music_not_found")
+    monkeypatch.setattr(worker, "prepare_preview", preview)
+    monkeypatch.setattr(worker, "recognize_music", recognize)
+    await asyncio.to_thread(worker.run_tool.run, str(value.request_id))
+    assert not (path / "input").exists() and (path / "preview.mp4").exists()
+    async with AsyncSessionLocal() as db:
+        row = await db.get(MediaToolRequest, value.request_id)
+        row.delivery_state = delivery_state
+        await db.commit()
+        assert row.status == "failed" and row.result["preview"] and row.files_removed_at is None
+        await db.run_sync(sweep_tools)
+        assert (path / "preview.mp4").exists()
+        await db.run_sync(lambda session: sweep_tools(session, now=datetime.now(timezone.utc) + timedelta(minutes=11)))
+        await db.commit()
+        assert not path.exists() and row.files_removed_at
+
+
+@pytest.mark.asyncio
 async def test_tokens_encrypted_and_omitted_from_public_configuration(records):
     async with AsyncSessionLocal() as db:
         row = await db.scalar(select(ApplicationSetting).where(ApplicationSetting.key == "tools.music.token"))
@@ -273,6 +348,46 @@ async def test_link_admission_needs_no_upload_and_rejects_unsafe_urls_before_pro
     assert (await accept(value))[1] is False
     bad = value.model_copy(update={"request_id": uuid4(), "source_url": "http://127.0.0.1/private"})
     assert await accept(bad) == "invalid_music_link"
+
+
+@pytest.mark.asyncio
+async def test_retry_failed_song_uses_normal_admission_and_old_click_cannot_duplicate_it(records, monkeypatch):
+    from app.services.download import DownloadService
+    from app.repositories.download_job import DownloadJobRepository
+    value = records.payload()
+    await accept(value)
+    async with AsyncSessionLocal() as db:
+        old = DownloadJob(user_id=records.users[1].id, source_url="https://youtu.be/AbcDefGhI12",
+                          media_type="audio", output_format="mp3", status=DownloadJobStatus.FAILED)
+        db.add(old)
+        await db.flush()
+        row = await db.get(MediaToolRequest, value.request_id)
+        row.status, row.download_job_id = "completed", old.id
+        row.result = {"candidates": [{"url": old.source_url}]}
+        row.downloads = {"0:mp3": {"state": "created", "job_id": old.id}}
+        await db.commit()
+    calls = []
+    async def create(service, **kwargs):
+        calls.append(kwargs)
+        return await DownloadJobRepository(service.session).create(user_id=records.users[1].id,
+            source_url=kwargs["source_url"], media_type="audio", output_format="mp3")
+    monkeypatch.setattr(DownloadService, "create_job", create)
+    app = FastAPI()
+    app.include_router(router)
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test",
+            headers={"X-Internal-API-Key": settings.bot_backend_api_key}) as client:
+        endpoint = f"/media-tools/{value.request_id}/download"
+        body = {"telegram_id": value.telegram_id, "candidate": 0, "output_format": "mp3"}
+        assert (await client.post(endpoint, json=body)).json()["id"] == old.id
+        retry = {**body, "retry_failed_job_id": old.id}
+        results = await asyncio.gather(client.post(endpoint, json=retry), client.post(endpoint, json=retry))
+        assert len(calls) == 1 and all(r.status_code in (200, 409) for r in results)
+        current = (await client.post(endpoint, json=retry)).json()
+        assert current["id"] != old.id and len(calls) == 1
+        # An in-flight or already delivered job is never retried by this API.
+        refused = await client.post(endpoint, json={**body, "retry_failed_job_id": current["id"]})
+        assert refused.status_code == 409 and len(calls) == 1
+        assert (await client.post(endpoint, json={**retry, "telegram_id": records.users[2].telegram_id})).status_code == 404
 
 
 @pytest.mark.asyncio

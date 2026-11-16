@@ -126,6 +126,51 @@ and intercepted HTTP responses. They do not prove access from the production ser
 After updating, test one uploaded clip/voice and one supported public link there. No real
 recognition request or paid test call is made by the installer or CI.
 
+### Music presentation and source-download diagnostics
+
+Music uses a compact processing/result card. When the uploaded media or the bounded
+Instagram sample contains video, the worker makes a best-effort H.264/AAC preview
+(at most 12 seconds, 480 pixels, 5 MiB) from that same input. A failed preview never
+blocks recognition. The bot edits its caption with the result and sends MP3/M4A
+full songs with Telegram's audio player, title and performer; other formats remain
+documents. The preview is labelled as the user's clip and is never substituted for
+the independently selected full song. Source choice remains required when matching
+is ambiguous or the reference duration is unavailable.
+
+Preview delivery is owner-checked and claimed in the database before sending; an
+unknown Telegram outcome is never automatically repeated. The bot removes its local
+preview after the attempt. Original recognition inputs are removed when the worker
+finishes. Unclaimed previews expire after ten minutes, and cancelled requests remove
+them. All new copy is in the existing FA/EN message editor.
+
+No-match cards offer an explanation, another sample, and the existing support form.
+Requesting support does not add a song to Shazam's catalogue. The reference bot's
+lyrics, similar songs, likes, weekly charts and catalogue submissions are not features
+of this presentation change.
+
+After a definitive failed download, Retry starts a fresh download through normal plan
+admission, using the saved identification. It consumes the normal download allowance.
+The button carries the failed job ID: repeated clicks reuse its replacement or report
+that the admission is still in progress. A sending/uncertain/completed job cannot be
+retried this way, so a lost Telegram acknowledgement cannot trigger duplicate delivery.
+
+A source HTTP 403 is a download failure, even if an upstream message mentions FFmpeg.
+Provider health and a search result alone do not prove that media bytes are accessible.
+For an operator-selected audio job, this read-only check uses the worker's current
+YouTube profile, fresh metadata and up to 1 KiB from each of at most two audio formats:
+
+```bash
+docker compose exec -T -e DEBUG=false worker python - 44 41 < scripts/diagnose_music_download.py
+```
+
+Replace the IDs with a failed job and optionally a previously successful audio job.
+The check does not modify jobs, write media, send Telegram messages or call recognition
+providers. It stops on rate limits/authentication challenges/timeouts and prints only
+versions, flags, format IDs and response status, never signed media URLs or token values.
+Successful probes do not guarantee a complete transfer. The production 403 reported
+for job 44 is not yet verified as resolved; no speculative client/proxy/cookie changes
+are part of this update.
+
 
 ## Plan quotas and editable messages
 
