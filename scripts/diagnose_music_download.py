@@ -1,9 +1,11 @@
 """Read-only worker diagnostic: fresh metadata and at most 1 KiB per audio format.
 
 Run: python - JOB_ID [PREVIOUSLY_SUCCESSFUL_JOB_ID] < this_file.py
+Or:  python - --latest --stored-only < this_file.py
 No files, downloads, queue changes, Telegram sends, recognition calls, or raw URLs.
 """
 import json
+import re
 import signal
 import sys
 from importlib.metadata import PackageNotFoundError, version
@@ -19,14 +21,62 @@ def safe_reason(error):
     if isinstance(status, int):
         return "HTTP_" + str(status)
     message = str(error).lower()
-    for code in (401, 403, 429):
-        if str(code) in message:
-            return "HTTP_" + str(code)
+    http = re.search(r"(?:http(?:\s+error)?|status(?:\s+code)?)\s*[:=]?\s*([45]\d\d)\b", message)
+    if http:
+        return "HTTP_" + http[1]
     if "sign in" in message or "login" in message:
         return "LOGIN_REQUIRED"
     if isinstance(error, TimeoutError) or "timeout" in message or "timed out" in message:
         return "TIMEOUT"
+    for needles, reason in (
+        (("requested format is not available", "no video formats", "no usable formats"), "NO_FORMATS"),
+        (("video unavailable", "video is unavailable", "private video", "has been removed"), "SOURCE_UNAVAILABLE"),
+        (("confirm your age", "age-restricted"), "AGE_RESTRICTED"),
+        (("no space left", "disk quota exceeded"), "DISK_FULL"),
+        (("file-size limit", "file size limit", "size limit exceeded"), "SIZE_LIMIT"),
+        (("permission denied", "read-only file system"), "FILE_PERMISSION"),
+        (("unknown encoder", "encoder not found"), "ENCODER_MISSING"),
+        (("ffmpeg is not available", "unable to start ffmpeg"), "FFMPEG_MISSING"),
+        (("channel layout", "invalid number of channels"), "AUDIO_CHANNEL_LAYOUT"),
+        (("invalid data found", "moov atom not found", "not a readable audio/video"), "INVALID_MEDIA"),
+        (("input file has no audio", "matches no streams"), "AUDIO_STREAM_MISSING"),
+        (("error while opening encoder", "error initializing output stream"), "ENCODER_INITIALIZATION"),
+        (("unable to choose an output format", "requested output format", "not a suitable output format"), "OUTPUT_FORMAT"),
+        (("invalid argument", "unrecognized option", "option not found"), "INVALID_ARGUMENT"),
+        (("no such file", "no output files", "no valid output", "did not create a valid output"), "FILE_MISSING"),
+        (("ffmpeg", "conversion"), "CONVERSION_FAILED"),
+        (("connection reset", "connection refused", "network is unreachable"), "CONNECTION_FAILED"),
+    ):
+        if any(needle in message for needle in needles):
+            return reason
     return type(error).__name__
+
+
+def recorded_failure(job):
+    """Classify the failure that actually happened, before any new network test."""
+    message = str(job.get("error_message") or "")
+    lower = message.lower()
+    stage = "unknown"
+    if "unable to download video data" in lower:
+        stage = "media_transfer"
+    elif "ffmpeg media conversion" in lower or "ffmpeg conversion" in lower or "converted output" in lower:
+        stage = "conversion"
+    elif "requested format" in lower or "[youtube]" in lower:
+        stage = "extraction"
+    result = {"id": job["id"], "status": job["status"], "format": job.get("output_format"),
+            "time": str(job.get("created_at") or ""), "stage": stage,
+            "reason": safe_reason(RuntimeError(message)) if message else "NONE"}
+    prefix = "FFmpeg media conversion failed:"
+    if message.startswith(prefix):
+        # Only our local encoder's bounded stderr, never extractor/provider bodies.
+        detail = message[len(prefix):].strip()
+        detail = re.sub(r"\x1b\[[0-9;]*m", "", detail)
+        detail = re.sub(r"(?i)\b(?:https?|rtmps?)://\S+", "[url]", detail)
+        detail = re.sub(r"(?im)^.*(?:authorization|cookie|api[_-]?(?:key|hash)|password|secret|token)\b.*$", "[redacted]", detail)
+        detail = re.sub(r"\b\d{5,20}:[A-Za-z0-9_-]{20,}", "[redacted]", detail)
+        detail = re.sub(r"(?<!\w)/[^\s\]\"']+", "[path]", detail)
+        result["encoder_detail"] = detail[-1500:]
+    return result
 
 
 class DiagnosticLogger:
@@ -100,7 +150,7 @@ def inspect_job(job_id, url):
                     return result["result"]
     except Exception as error:
         reason = safe_reason(error)
-        emit("JOB", {"id": job_id, "result": reason})
+        emit("JOB", {"id": job_id, "stage": "fresh_extraction", "result": reason})
         return reason
     finally:
         signal.alarm(0)
@@ -115,8 +165,12 @@ def main():
     from sqlalchemy import text
     from app.db.worker_session import WorkerSessionLocal
     from app.services.youtube_health import provider_health
-    if not 1 <= len(sys.argv[1:]) <= 2 or any(not arg.isdecimal() for arg in sys.argv[1:]):
-        raise SystemExit("Usage: python - JOB_ID [CONTROL_JOB_ID]")
+    args = sys.argv[1:]
+    stored_only = "--stored-only" in args
+    args = [arg for arg in args if arg != "--stored-only"]
+    latest = args == ["--latest"]
+    if not latest and (not 1 <= len(args) <= 2 or any(not arg.isdecimal() for arg in args)):
+        raise SystemExit("Usage: python - JOB_ID [CONTROL_JOB_ID] | --latest [--stored-only]")
     versions = {}
     for package in ("yt-dlp", "yt-dlp-ejs", "bgutil-ytdlp-pot-provider"):
         try:
@@ -124,16 +178,31 @@ def main():
         except PackageNotFoundError:
             versions[package] = "NOT_INSTALLED"
     emit("VERSIONS", versions)
-    emit("YOUTUBE_PROVIDER", provider_health())
-    signal.signal(signal.SIGALRM, deadline)
     with WorkerSessionLocal() as db:
         db.execute(text("SET TRANSACTION READ ONLY"))
-        jobs = [(int(arg), db.scalar(text("SELECT source_url FROM download_jobs WHERE id=:id AND media_type='audio'"),
-                                     {"id": int(arg)})) for arg in sys.argv[1:]]
-    for job_id, url in jobs:
-        if not url:
-            emit("JOB", {"id": job_id, "result": "AUDIO_JOB_NOT_FOUND"})
-        elif inspect_job(job_id, url) in {"HTTP_429", "HTTP_401", "LOGIN_REQUIRED", "TIMEOUT"}:
+        columns = "SELECT j.id, j.source_url, j.status::text, j.output_format, j.created_at, j.error_message FROM download_jobs j "
+        if latest:
+            jobs = db.execute(text(columns + """
+                WHERE j.media_type='audio' AND EXISTS (
+                    SELECT 1 FROM media_tool_requests r
+                    WHERE r.kind='music' AND (r.download_job_id=j.id OR EXISTS (
+                        SELECT 1 FROM json_each(coalesce(r.downloads, '{}'::json)) entry
+                        WHERE entry.value->>'job_id'=j.id::text)))
+                ORDER BY j.id DESC LIMIT 3""")).mappings().all()
+        else:
+            jobs = [db.execute(text(columns + "WHERE j.id=:id AND j.media_type='audio'"),
+                               {"id": int(arg)}).mappings().first() for arg in args]
+    found = [job for job in jobs if job]
+    if not found:
+        emit("JOB", {"result": "AUDIO_JOB_NOT_FOUND"})
+    for job in found:
+        emit("RECORDED", recorded_failure(job))
+    if stored_only or not found:
+        return
+    emit("YOUTUBE_PROVIDER", provider_health())
+    signal.signal(signal.SIGALRM, deadline)
+    for job in found:
+        if inspect_job(job["id"], job["source_url"]) in {"HTTP_429", "HTTP_401", "LOGIN_REQUIRED", "TIMEOUT"}:
             break
 
 

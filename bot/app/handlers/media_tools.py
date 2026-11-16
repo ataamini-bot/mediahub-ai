@@ -1,4 +1,4 @@
-"""Private, consent-first music recognition workflow."""
+"""Private music recognition with immediate submission and full-song delivery."""
 import asyncio
 import html
 import logging
@@ -139,6 +139,20 @@ async def upload(message: Message, state: FSMContext):
 
 @router.message(ToolStates.upload, F.text)
 async def receive_music_link(message: Message, state: FSMContext):
+    if not message.from_user:
+        return
+    user_id = message.from_user.id
+    if user_id in _uploads_in_progress:
+        await message.answer(text('the_previous_upload_is_still'))
+        return
+    _uploads_in_progress.add(user_id)
+    try:
+        await stage_music_link(message, state)
+    finally:
+        _uploads_in_progress.discard(user_id)
+
+
+async def stage_music_link(message, state):
     data = await state.get_data()
     if data.get("tool_kind") != "music" or not message.from_user:
         await message.answer(text('send_one_video_post_link'))
@@ -153,7 +167,7 @@ async def receive_music_link(message: Message, state: FSMContext):
     request_id = uuid4().hex
     await state.update_data(tool_request_id=request_id, tool_owner=message.from_user.id,
                             tool_queued=False, tool_source_url=urls[0])
-    await confirmation(message, state, request_id)
+    await start_staged_tool(message, state, request_id)
 
 
 async def stage_upload(message, state):
@@ -188,7 +202,7 @@ async def stage_upload(message, state):
     if (await state.get_data()).get("tool_request_id") != request_id:
         cleanup_tool_state({"tool_request_id": request_id, "tool_owner": message.from_user.id})
         return
-    await confirmation(message, state, request_id)
+    await start_staged_tool(message, state, request_id)
 
 
 async def valid_state(callback, state, request_id):
@@ -199,13 +213,9 @@ async def valid_state(callback, state, request_id):
     return data
 
 
-async def confirmation(message, state, request_id):
-    data = await state.get_data()
-    await state.set_state(ToolStates.confirmation)
+async def start_staged_tool(message, state, request_id):
     await state.update_data(tool_input_message_id=getattr(message, "message_id", None))
-    prompt = text('confirm_to_send_a_sample')
-    await message.answer(prompt, reply_markup=keyboard([
-        [(text('confirm_and_start'), f"tool:start:{request_id}")], cancel_row(request_id)]))
+    await submit_tool(message, message.from_user.id, state, request_id)
 
 
 def status_keyboard(request_id):
@@ -214,6 +224,7 @@ def status_keyboard(request_id):
 
 @router.callback_query(F.data.startswith("tool:start:"))
 async def start_tool(callback: CallbackQuery, state: FSMContext):
+    # Keep old inline buttons usable after an update; new inputs have no prompt.
     request_id = callback.data.rsplit(":", 1)[1]
     try:
         UUID(request_id)
@@ -224,18 +235,28 @@ async def start_tool(callback: CallbackQuery, state: FSMContext):
         await callback.answer(text('this_menu_expired'), show_alert=True)
         return
     await callback.answer()
+    await submit_tool(callback.message, callback.from_user.id, state, request_id, edit_message=True)
+
+
+async def submit_tool(message, telegram_id, state, request_id, *, edit_message=False):
+    data = await state.get_data()
+    if data.get("tool_request_id") != request_id or data.get("tool_owner") != telegram_id:
+        return
     if data.get("tool_kind") != "music":
         cleanup_tool_state(data)
         await state.clear()
-        await callback.message.answer(friendly_error("tool_disabled"))
+        await message.answer(friendly_error("tool_disabled"))
         return
-    if not await access(callback.message, callback.from_user.id):
+    if not await access(message, telegram_id):
+        return
+    # Membership checks yield: a cancellation or a newer form must win.
+    if (await state.get_data()).get("tool_request_id") != request_id:
         return
     # Mark the handoff before HTTP so a lost response cannot cause cleanup to
     # delete a file that a Worker already accepted.
     await state.update_data(tool_queued=True)
     await state.set_state(ToolStates.working)
-    payload = {"request_id": request_id, "telegram_id": callback.from_user.id, "kind": "music"}
+    payload = {"request_id": request_id, "telegram_id": telegram_id, "kind": "music"}
     if data["tool_kind"] == "music":
         payload["auto_mp3"] = True
         if data.get("tool_source_url"):
@@ -247,12 +268,17 @@ async def start_tool(callback: CallbackQuery, state: FSMContext):
         if code != "backend_unavailable":
             cleanup_tool_state({**data, "tool_queued": False})
             await state.clear()
-        await callback.message.answer(friendly_error(code), reply_markup=status_keyboard(request_id) if code == "backend_unavailable" else None)
+        await message.answer(friendly_error(code), reply_markup=status_keyboard(request_id) if code == "backend_unavailable" else None)
         return
-    await callback.message.edit_text(text('request_accepted_processing'),
-        reply_markup=status_keyboard(request_id))
-    await wait_result(callback.message, callback.from_user.id, request_id,
-                      reply_to=data.get("tool_input_message_id"))
+    if edit_message:
+        await message.edit_text(text('request_accepted_processing'), reply_markup=status_keyboard(request_id))
+        progress = message
+    else:
+        progress = await message.answer(text('request_accepted_processing'), reply_markup=status_keyboard(request_id))
+    await wait_result(progress, telegram_id, request_id, reply_to=data.get("tool_input_message_id"))
+    # Keep the music form ready for another input without overwriting a new menu.
+    if (await state.get_data()).get("tool_request_id") == request_id:
+        await state.set_state(ToolStates.upload)
 
 
 async def maybe_show_preview(message, telegram_id, request_id, row, *, reply_to=None):
@@ -306,7 +332,7 @@ async def wait_result(message, telegram_id, request_id, *, reply_to=None):
     await message.answer(text('processing_has_not_finished_us'), reply_markup=status_keyboard(request_id))
 
 
-@router.callback_query(F.data.startswith("tool:check:"))
+@router.callback_query(F.data.startswith("tool:check:") | F.data.startswith("tool:sources:"))
 async def check_result(callback: CallbackQuery):
     request_id = callback.data.rsplit(":", 1)[1]
     await callback.answer()
@@ -314,12 +340,13 @@ async def check_result(callback: CallbackQuery):
         UUID(request_id)
         row = await _payment_request("GET", f"/media-tools/{request_id}?telegram_id={callback.from_user.id}")
         message = await maybe_show_preview(callback.message, callback.from_user.id, request_id, row)
-        await show_result(message, callback.from_user.id, request_id, row)
+        await show_result(message, callback.from_user.id, request_id, row,
+                          auto_download=not callback.data.startswith("tool:sources:"))
     except (ValueError, BackendAPIError):
         await callback.message.answer(friendly_error("not_found"))
 
 
-async def show_result(message, telegram_id, request_id, row):
+async def show_result(message, telegram_id, request_id, row, *, auto_download=True):
     status = row["status"]
     if status in {"pending", "processing"}:
         await update_music_card(message, html.escape(text('still_processing')), reply_markup=status_keyboard(request_id))
@@ -340,10 +367,13 @@ async def show_result(message, telegram_id, request_id, row):
                                 reply_markup=recovery_keyboard())
         return
     automatic = result.get("automatic_candidate")
-    auto_start = row.get("auto_mp3") and type(automatic) is int and 0 <= automatic < len(candidates)
+    auto_start = auto_download and row.get("auto_mp3") and type(automatic) is int and 0 <= automatic < len(candidates)
+    if auto_start:
+        await update_music_card(message, heading)
+        await run_track_download(message, telegram_id, request_id, automatic, "mp3", row=row, automatic=True)
+        return
     rows = []
-    instruction = (text('mp_kbps_from_source_number', number=automatic + 1) if auto_start else
-                   text('tap_a_source_s_download'))
+    instruction = text('tap_a_source_s_download')
     parts = [heading, html.escape(instruction)]
     for i, candidate in enumerate(candidates):
         minutes, seconds = divmod(candidate["duration"], 60)
@@ -353,8 +383,6 @@ async def show_result(message, telegram_id, request_id, row):
                      (text('other_formats'), f"tool:source:{request_id}:{i}")])
     rows.append([(text("music_output_help"), "tool:about")])
     await update_music_card(message, "\n\n".join(parts), reply_markup=keyboard(rows))
-    if auto_start:
-        await run_track_download(message, telegram_id, request_id, automatic, "mp3", row=row, automatic=True)
 
 
 @router.callback_query(F.data.in_({"tool:why", "tool:about"}))
@@ -469,13 +497,15 @@ async def run_track_download(message, telegram_id, request_id, index, output_for
             body = text('telegram_delivery_could_not_be')
         else:
             detail = str(exc).lower()
-            if any(word in detail for word in ("403", "sign in", "login", "private", "unavailable", "format")):
+            if any(word in detail for word in ("http error 403", "http 403", "sign in", "login required",
+                                               "private video", "video unavailable", "requested format",
+                                               "no video formats")):
                 body = text('the_song_was_identified_but_alt_alt')
             elif "ffmpeg" in detail or "conversion" in detail:
                 body = text('the_song_was_identified_but_alt')
             else:
                 body = text('the_full_track_download_failed')
-        buttons = [[(text("music_back_to_sources"), f"tool:check:{request_id}")],
+        buttons = [[(text("music_back_to_sources"), f"tool:sources:{request_id}")],
                    [(text("music_request_review"), "support:open")]]
         if stage == "download" and job_id is not None:
             buttons.insert(0, [(text("music_retry_download"), f"tool:retry:{UUID(request_id).hex}:{index}:{output_format}:{job_id}")])

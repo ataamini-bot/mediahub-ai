@@ -136,26 +136,29 @@ def song_result(*, automatic=True):
             "channel": "Example Artist", "duration": 180, "url": "https://www.youtube.com/watch?v=AbcDefGhI12"}]}}
 
 
-def test_music_link_is_staged_without_downloading_or_calling_provider(monkeypatch):
+def test_music_link_submits_immediately_without_a_confirmation_message(monkeypatch):
     async def exercise():
         context = state()
         await context.update_data(tool_kind="music", tool_owner=42)
         message = SimpleNamespace(from_user=SimpleNamespace(id=42),
-            text="https://www.instagram.com/reel/Example/", entities=[], answer=AsyncMock())
+            text="https://www.instagram.com/reel/Example/", entities=[], message_id=123, answer=AsyncMock())
         post = AsyncMock()
         monkeypatch.setattr(tools, "_payment_request", post)
+        monkeypatch.setattr(tools, "access", AsyncMock(return_value=True))
+        wait = AsyncMock()
+        monkeypatch.setattr(tools, "wait_result", wait)
         await tools.receive_music_link(message, context)
         data = await context.get_data()
-        assert data["tool_source_url"] == message.text and not data["tool_queued"]
-        assert await context.get_state() == tools.ToolStates.confirmation.state
-        assert "AudD" not in message.answer.await_args.args[0]
-        assert "سرویس بیرونی" in message.answer.await_args.args[0]
-        post.assert_not_awaited()
-        monkeypatch.setattr(tools, "access", AsyncMock(return_value=True))
-        monkeypatch.setattr(tools, "wait_result", AsyncMock())
-        await tools.start_tool(callback(f"tool:start:{data['tool_request_id']}"), context)
+        assert data["tool_source_url"] == message.text and data["tool_queued"]
+        assert await context.get_state() == tools.ToolStates.upload.state
+        post.assert_awaited_once()
         payload = post.await_args.kwargs["payload"]
         assert payload["source_url"] == message.text and payload["auto_mp3"] is True
+        message.answer.assert_awaited_once()
+        assert message.answer.await_args.args[0] == tools.text('request_accepted_processing')
+        assert not any(b.callback_data.startswith("tool:start:") for row in
+                       message.answer.await_args.kwargs['reply_markup'].inline_keyboard for b in row)
+        assert wait.await_args.kwargs["reply_to"] == 123
     asyncio.run(exercise())
 
 
@@ -165,8 +168,64 @@ def test_music_link_can_come_from_telegram_text_link_entity(monkeypatch):
         await context.update_data(tool_kind="music", tool_owner=42)
         message = SimpleNamespace(from_user=SimpleNamespace(id=42), text="این ویدئو",
             entities=[SimpleNamespace(url="https://youtu.be/AbcDefGhI12")], answer=AsyncMock())
+        monkeypatch.setattr(tools, "access", AsyncMock(return_value=True))
+        monkeypatch.setattr(tools, "_payment_request", AsyncMock())
+        monkeypatch.setattr(tools, "wait_result", AsyncMock())
         await tools.receive_music_link(message, context)
         assert (await context.get_data())["tool_source_url"] == "https://youtu.be/AbcDefGhI12"
+    asyncio.run(exercise())
+
+
+def test_two_simultaneous_links_cannot_replace_an_inflight_submission(monkeypatch):
+    async def exercise():
+        context = state()
+        await context.update_data(tool_kind="music", tool_owner=42)
+        entered, finish = asyncio.Event(), asyncio.Event()
+        async def wait(*args, **kwargs):
+            entered.set()
+            await finish.wait()
+        post = AsyncMock()
+        monkeypatch.setattr(tools, "access", AsyncMock(return_value=True))
+        monkeypatch.setattr(tools, "_payment_request", post)
+        monkeypatch.setattr(tools, "wait_result", wait)
+        first = SimpleNamespace(from_user=SimpleNamespace(id=42), text="https://youtu.be/AbcDefGhI12",
+                                entities=[], answer=AsyncMock())
+        second = SimpleNamespace(from_user=first.from_user, text="https://youtu.be/ABCDEFGHIJK",
+                                 entities=[], answer=AsyncMock())
+        task = asyncio.create_task(tools.receive_music_link(first, context))
+        await entered.wait()
+        try:
+            await tools.receive_music_link(second, context)
+            post.assert_awaited_once()
+            assert (await context.get_data())["tool_source_url"] == first.text
+            assert second.answer.await_args.args[0] == tools.text('the_previous_upload_is_still')
+            # Leaving music while the result is awaited must preserve the new form.
+            await context.clear()
+            await context.update_data(other_form=True)
+        finally:
+            finish.set()
+            await task
+        assert await context.get_state() is None
+        assert await context.get_data() == {"other_form": True}
+        assert not tools._uploads_in_progress
+    asyncio.run(exercise())
+
+
+def test_cancellation_during_membership_check_prevents_automatic_submission(monkeypatch):
+    async def exercise():
+        context = state()
+        await context.update_data(tool_kind="music", tool_owner=42)
+        async def access(*args, **kwargs):
+            await context.clear()
+            return True
+        post = AsyncMock()
+        monkeypatch.setattr(tools, "access", access)
+        monkeypatch.setattr(tools, "_payment_request", post)
+        message = SimpleNamespace(from_user=SimpleNamespace(id=42), text="https://youtu.be/AbcDefGhI12",
+                                  entities=[], answer=AsyncMock())
+        await tools.receive_music_link(message, context)
+        post.assert_not_awaited()
+        assert await context.get_data() == {}
     asyncio.run(exercise())
 
 
@@ -180,11 +239,17 @@ def test_upload_replaces_a_previously_staged_link(monkeypatch, tmp_path):
         async def download(bot, file_id, target, **kwargs):
             target.write_bytes(b"audio")
         monkeypatch.setattr(tools, "_download_telegram_file", download)
+        monkeypatch.setattr(tools, "access", AsyncMock(return_value=True))
+        post = AsyncMock()
+        monkeypatch.setattr(tools, "_payment_request", post)
+        monkeypatch.setattr(tools, "wait_result", AsyncMock())
         message = SimpleNamespace(from_user=SimpleNamespace(id=42), bot=object(), answer=AsyncMock())
         await tools.stage_upload(message, context)
         data = await context.get_data()
         assert data["tool_source_url"] is None
         assert (tools.tool_folder(42, data["tool_request_id"]) / "input").read_bytes() == b"audio"
+        assert data["tool_queued"] and "source_url" not in post.await_args.kwargs["payload"]
+        assert message.answer.await_args.args[0] == tools.text('request_accepted_processing')
     asyncio.run(exercise())
 
 
@@ -205,6 +270,9 @@ def test_strict_match_downloads_mp3_and_delivers_without_extra_click(monkeypatch
         assert post.await_args_list[1].args[1].endswith("/claim-song-delivery")
         send.assert_awaited_once()
         assert send.await_args.kwargs["media_info"]["title"] == "Example Artist - Original Song"
+        # Automatic results display identity, not an extra source-selection form.
+        assert "Tap Download" not in message.edit_text.await_args.args[0]
+        assert message.edit_text.await_args.kwargs.get("reply_markup") is None
         assert not tools._song_downloads_in_progress
     asyncio.run(exercise())
 
@@ -267,6 +335,19 @@ def test_repeated_or_uncertain_delivery_never_sends_audio_twice(monkeypatch):
         await tools.run_track_download(message, 42, uuid4().hex, 0, "mp3", row=song_result())
         send.assert_not_awaited()
         assert message.edit_text.await_args.args[0] == tools.friendly_error("delivery_started")
+    asyncio.run(exercise())
+
+
+def test_back_to_sources_after_auto_download_failure_does_not_restart_download(monkeypatch):
+    async def exercise():
+        request_id = uuid4().hex
+        event = callback(f"tool:sources:{request_id}")
+        post = AsyncMock(return_value=song_result())
+        monkeypatch.setattr(tools, "_payment_request", post)
+        await tools.check_result(event)
+        post.assert_awaited_once_with("GET", f"/media-tools/{request_id}?telegram_id=42")
+        buttons = [b for row in event.message.edit_text.await_args.kwargs["reply_markup"].inline_keyboard for b in row]
+        assert any(b.callback_data == f"tool:audio:{request_id}:0:mp3" for b in buttons)
     asyncio.run(exercise())
 
 

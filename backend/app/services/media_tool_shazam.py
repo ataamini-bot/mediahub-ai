@@ -61,8 +61,8 @@ def track_identity(response):
     if not isinstance(title, str) or not title.strip() or not isinstance(artist, str) or not artist.strip():
         raise ToolError("invalid_provider_result")
     # Shazam does not reliably supply full-track duration. Never treat the
-    # sample/preview duration as the song's duration or start an unverified download.
-    # Missing duration keeps the existing explicit source-selection step.
+    # sample/preview duration as the song's duration. Full-song selection uses
+    # strict title/artist matching and the independent source's duration.
     return {"title": title.strip()[:200], "artist": artist.strip()[:200],
             "album": "", "duration": None}
 

@@ -351,6 +351,43 @@ async def test_link_admission_needs_no_upload_and_rejects_unsafe_urls_before_pro
 
 
 @pytest.mark.asyncio
+async def test_stored_music_diagnostic_reads_actual_failure_without_network(records, monkeypatch, capsys):
+    import importlib.util
+    from pathlib import Path
+    import sys
+    from app.services import youtube_health
+    value = records.payload()
+    await accept(value)
+    async with AsyncSessionLocal() as db:
+        failed = DownloadJob(user_id=records.users[1].id, source_url="https://youtu.be/AbcDefGhI12",
+            media_type="audio", output_format="mp3", status=DownloadJobStatus.FAILED,
+            error_message="FFmpeg media conversion failed: Unknown encoder 'libmp3lame' token=private")
+        unrelated = DownloadJob(user_id=records.users[1].id, source_url="https://youtu.be/ABCDEFGHIJK",
+            media_type="audio", output_format="mp3", status=DownloadJobStatus.FAILED)
+        db.add_all([failed, unrelated])
+        await db.flush()
+        # The diagnostic must also find a download stored in the per-format map.
+        row = await db.get(MediaToolRequest, value.request_id)
+        row.downloads = {"0:mp3": {"job_id": failed.id, "state": "created"}}
+        await db.commit()
+        failed_id, unrelated_id = failed.id, unrelated.id
+    script = Path(__file__).resolve().parents[2] / "scripts/diagnose_music_download.py"
+    spec = importlib.util.spec_from_file_location("music_diagnostic_integration", script)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    monkeypatch.setattr(sys, "argv", ["diagnostic", "--latest", "--stored-only"])
+    monkeypatch.setattr(youtube_health, "provider_health", lambda: pytest.fail("network call in stored-only mode"))
+    await asyncio.to_thread(module.main)
+    import json
+    reports = [json.loads(line.removeprefix("RECORDED=")) for line in capsys.readouterr().out.splitlines()
+               if line.startswith("RECORDED=")]
+    report = next(item for item in reports if item["id"] == failed_id)
+    assert report["reason"] == "ENCODER_MISSING" and report["stage"] == "conversion"
+    assert unrelated_id not in [item["id"] for item in reports]
+    assert "private" not in str(reports) and "youtu.be" not in str(reports)
+
+
+@pytest.mark.asyncio
 async def test_retry_failed_song_uses_normal_admission_and_old_click_cannot_duplicate_it(records, monkeypatch):
     from app.services.download import DownloadService
     from app.repositories.download_job import DownloadJobRepository
@@ -392,7 +429,8 @@ async def test_retry_failed_song_uses_normal_admission_and_old_click_cannot_dupl
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("cancel_during_fetch", [False, True])
-async def test_link_sample_recognizes_once_and_cancellation_stops_before_billing(records, monkeypatch, cancel_during_fetch):
+@pytest.mark.parametrize("reference_duration", [None, 180])
+async def test_link_sample_recognizes_once_and_cancellation_stops_before_billing(records, monkeypatch, cancel_during_fetch, reference_duration):
     from app.workers.tasks import media_tools as worker
     from app.services import media_tool_links
     value = records.payload().model_copy(update={"source_url": "https://youtu.be/AbcDefGhI12", "auto_mp3": True})
@@ -411,7 +449,7 @@ async def test_link_sample_recognizes_once_and_cancellation_stops_before_billing
         assert source.read_bytes() == b"sample-from-public-link"
         assert provider == "audd"
         calls.append(1)
-        return {"title": "Original Song", "artist": "Example Artist", "duration": 180}
+        return {"title": "Original Song", "artist": "Example Artist", "duration": reference_duration}
     monkeypatch.setattr(media_tool_links, "fetch_music_link", fetch)
     monkeypatch.setattr(worker, "recognize_music", recognize)
     monkeypatch.setattr(worker, "find_full_tracks", lambda track: [{"title": "Example Artist Original Song", "channel": "Example Artist",

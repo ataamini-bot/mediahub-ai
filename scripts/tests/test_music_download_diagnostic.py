@@ -1,6 +1,8 @@
 import importlib.util
 from pathlib import Path
 
+import pytest
+
 
 spec = importlib.util.spec_from_file_location("music_download_diagnostic", Path(__file__).parents[1] / "diagnose_music_download.py")
 diagnostic = importlib.util.module_from_spec(spec)
@@ -14,6 +16,38 @@ def test_diagnostic_errors_never_echo_secrets_or_urls():
     logger.debug("[pot:bgutil:http] Generating a gvs PO Token for mweb secret")
     logger.warning("[pot:bgutil:http] failed token=secret")
     assert logger.flags == {"PO_TOKEN_REQUESTED", "PO_PROVIDER_ERROR"}
+
+
+@pytest.mark.parametrize("message,reason", [
+    ("ERROR: [youtube] AbcDefGhI12: Requested format is not available", "NO_FORMATS"),
+    ("FFmpeg media conversion failed: HTTP Error 403 https://private.test/?pot=secret", "HTTP_403"),
+    ("FFmpeg media conversion failed: Unknown encoder 'libmp3lame'", "ENCODER_MISSING"),
+    ("FFmpeg media conversion failed: Invalid argument", "INVALID_ARGUMENT"),
+    ("FFmpeg media conversion failed: No space left on device", "DISK_FULL"),
+    ("Converted output exceeds the plan file-size limit", "SIZE_LIMIT"),
+    ("FFmpeg conversion did not create a valid output file", "FILE_MISSING"),
+    ("private URL https://example.test/403?token=secret", "RuntimeError"),
+])
+def test_recorded_failure_is_classified_without_a_new_extraction(message, reason):
+    row = {"id": 12, "status": "FAILED", "output_format": "mp3", "error_message": message}
+    result = diagnostic.recorded_failure(row)
+    assert result["reason"] == reason
+    assert all(word not in str(result) for word in ("secret", "https://", "AbcDefGhI12"))
+    if message.startswith("FFmpeg media conversion"):
+        assert result["stage"] == "conversion"
+
+
+def test_local_encoder_detail_keeps_error_but_redacts_paths_urls_and_credentials():
+    row = {"id": 12, "status": "FAILED", "error_message": (
+        "FFmpeg media conversion failed: [mp3 @ 0x123] Error while opening encoder\n"
+        "Output /app/downloads/private-name.mp3: Invalid argument\n"
+        "https://r1.googlevideo.com/videoplayback?pot=private\n"
+        "Authorization: Bearer private\nCookie: private\ntoken=private\n")}
+    detail = diagnostic.recorded_failure(row)["encoder_detail"]
+    assert "Error while opening encoder" in detail and "Invalid argument" in detail
+    assert all(value not in detail for value in ("private", "googlevideo", "/app", "Bearer"))
+    row["error_message"] = "ERROR: upstream response body private"
+    assert "encoder_detail" not in diagnostic.recorded_failure(row)
 
 
 def test_probe_reads_only_one_kib_and_carries_extracted_headers():

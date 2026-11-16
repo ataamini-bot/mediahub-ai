@@ -52,21 +52,23 @@ messages, GitHub, or logs.
 1. Open **Identify music**, then send a public Instagram, YouTube, TikTok, X or Threads
    video/post link, or upload a voice message, audio file or video clip up to 25 MiB.
    Music should be audible in the first 12 seconds. Humming recognition is not promised.
-2. User confirms processing the first 12 seconds and sharing the required recognition
-   data with the selected external service, and downloading a sufficiently
-   matching full track automatically. Links use the existing site's extractor profile,
+2. Sending the input immediately starts recognition, without a separate confirmation
+   message or button. The first 12 seconds supply the recognition data to the configured
+   service; recognition and download allowances still apply. Links use the existing site's extractor profile,
    including the YouTube PO-token provider. Only the first media item and first 12 seconds
    are requested. The fetch is limited to 120 seconds and 25 MiB; private/inaccessible links
    fail visibly before recognition is called. Uploaded files remain supported in the same form.
 3. The bot shows the identified artist/title and up to three matching public YouTube
    sources, filtered by title, artist, duration and unwanted cover/remix variants.
-4. One unambiguous strict title/artist/duration match starts an **MP3 320 kbps** download.
-   Otherwise, the result explicitly asks the user to press **Download MP3 320** beside a
-   source. Missing reference duration no longer hides all candidates, but those sources
-   require review and never start automatically. **Other formats** offers M4A, WAV, AAC,
-   FLAC, OGG and OPUS. Older requests without auto-download consent remain manual.
-   ShazamIO results do not reliably include full-song duration, so they use explicit source
-   selection via **Download MP3 320**. Preview or sample duration is never used as song duration.
+4. A strict title/artist match starts an **MP3 320 kbps** download, including ShazamIO
+   results without reference duration. Artist/Topic and official-audio metadata are preferred.
+   When reference duration is available it must agree; otherwise the independent source
+   must be at least a minute long. Equally ranked copies with conflicting durations or
+   loose identity matches still need source selection. Comparable copies use the first
+   match. The automatic result shows artist/title without an extra selection prompt.
+   **Other formats** on the delivered file offers M4A, WAV, AAC, FLAC, OGG and OPUS.
+   Older requests without auto-download enabled remain manual. Preview or sample duration
+   is never used as song duration.
 5. The ordinary downloader fetches **that independent full-track source**. Normal download
    quotas and file-size limits apply; the stored link is included in admin activity exports.
 
@@ -79,8 +81,8 @@ Concurrent/repeated result checks reuse the source/format job and claim Telegram
 once in the database. Uncertain Telegram delivery is not automatically repeated.
 
 These providers identify music; they do not supply a licensed master audio file. Apple Music preview
-URLs and the submitted clip are **never** substituted for the full track. If recognition,
-duration metadata or a matching accessible source is unavailable, the bot says so. Title
+URLs and the submitted clip are **never** substituted for the full track. If recognition
+or a matching accessible source is unavailable, the bot says so. Title
 and duration matching cannot guarantee an official recording; review the displayed source.
 Downloads depend on the public source being accessible from the server. This feature does
 not bypass login, DRM or access restrictions. WAV/FLAC conversion does not increase source
@@ -90,7 +92,7 @@ quality. Acquire any rights needed for your use.
 
 Requests have durable UUIDs. Global and per-user admission limits are protected by a
 PostgreSQL lock. A Worker claims the request before calling a paid provider. Repeated
-confirmations or Celery redelivery cannot initiate the same paid operation twice. Paid
+submissions or Celery redelivery cannot initiate the same paid operation twice. Paid
 calls have bounded execution time and no automatic retry. Work interrupted after a claim
 becomes uncertain; after 15 minutes the janitor closes it and removes its working files.
 Use **Check result** after a bot restart. Cancellation suppresses delivery; it cannot undo
@@ -135,7 +137,7 @@ blocks recognition. The bot edits its caption with the result and sends MP3/M4A
 full songs with Telegram's audio player, title and performer; other formats remain
 documents. The preview is labelled as the user's clip and is never substituted for
 the independently selected full song. Source choice remains required when matching
-is ambiguous or the reference duration is unavailable.
+is ambiguous; missing recognition duration alone no longer requires an extra click.
 
 Preview delivery is owner-checked and claimed in the database before sending; an
 unknown Telegram outcome is never automatically repeated. The bot removes its local
@@ -156,6 +158,17 @@ retried this way, so a lost Telegram acknowledgement cannot trigger duplicate de
 
 A source HTTP 403 is a download failure, even if an upstream message mentions FFmpeg.
 Provider health and a search result alone do not prove that media bytes are accessible.
+Inspect the last three music downloads' stored errors without making any external request:
+
+```bash
+docker compose exec -T -e DEBUG=false worker python - --latest --stored-only < scripts/diagnose_music_download.py
+```
+
+This reports stage and classified failure reason (for example source HTTP rejection,
+missing format, conversion, disk space, encoder or plan file-size limit). Local encoder
+failures also include bounded stderr with paths, URLs and credential lines redacted;
+extractor/provider response bodies are not printed. A new network probe is separate from the stored
+failure and cannot explain a previous failure by itself.
 For an operator-selected audio job, this read-only check uses the worker's current
 YouTube profile, fresh metadata and up to 1 KiB from each of at most two audio formats:
 

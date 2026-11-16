@@ -71,22 +71,35 @@ def test_full_track_candidates_exclude_clips_covers_wrong_artists_and_unknown_du
     assert providers.automatic_song_candidate({**track, "duration": None}, unknown) is None
 
 
-def test_automatic_music_selection_requires_one_strict_match():
+def test_automatic_music_selection_requires_strict_identity_and_known_duration_match():
     track = {"title": "Original Song", "artist": "Example Artist", "duration": 180}
     good = {"title": "Original Song (Official Audio)", "channel": "Example Artist - Topic", "duration": 182}
     assert providers.automatic_song_candidate(track, [good]) == 0
-    assert providers.automatic_song_candidate(track, [good, dict(good)]) is None
+    assert providers.automatic_song_candidate(track, [good, dict(good)]) == 0
     assert providers.automatic_song_candidate(track, [{**good, "duration": 198}]) is None
     assert providers.automatic_song_candidate(track, [{**good, "channel": "Other Artist"}]) is None
-    assert providers.automatic_song_candidate({**track, "duration": None}, [good]) is None
+    assert providers.automatic_song_candidate({**track, "duration": None}, [good]) == 0
 
 
-def test_missing_reference_duration_keeps_manual_sources_but_rejects_previews():
+def test_missing_reference_duration_allows_full_song_but_rejects_previews():
     track = {"title": "Original Song", "artist": "Example Artist", "duration": None}
     entries = [{"id": "AbcDefGhI12", "title": "Example Artist Original Song", "duration": 180},
                {"id": "AAAAAAAAAAA", "title": "Example Artist Original Song teaser", "duration": 80},
                {"id": "BBBBBBBBBBB", "title": "Example Artist Original Song", "duration": 30}]
     assert [c["url"] for c in providers.song_candidates(track, entries)] == ["https://www.youtube.com/watch?v=AbcDefGhI12"]
+    assert providers.automatic_song_candidate(track, providers.song_candidates(track, entries)) == 0
+
+
+def test_shazam_auto_selection_prefers_topic_audio_and_rejects_conflicting_lengths():
+    track = {"title": "Original Song", "artist": "Example Artist", "duration": None}
+    upload = {"title": "Example Artist Original Song", "channel": "Music uploads", "duration": 180}
+    topic = {"title": "Original Song", "channel": "Example Artist - Topic", "duration": 182}
+    assert providers.automatic_song_candidate(track, [upload, topic]) == 1
+    assert providers.automatic_song_candidate(track, [upload, {**upload, "duration": 600}]) is None
+    for bad in ({**upload, "duration": 35}, {**upload, "duration": None},
+                {**upload, "title": "Example Artist Original Song remix"},
+                {**upload, "title": "Other Artist Original Song"}):
+        assert providers.automatic_song_candidate(track, [bad]) is None
 
 
 def test_arabic_and_persian_letters_match_in_music_metadata():

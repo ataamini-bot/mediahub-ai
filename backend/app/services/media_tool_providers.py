@@ -111,10 +111,7 @@ def track_duration(value):
 
 
 def song_candidates(track, entries):
-    """Independent sources; missing reference duration requires user selection.
-
-    No preview URLs, uploaded samples or arbitrary hosts.
-    """
+    """Independent full-song sources, never previews or uploaded samples."""
     expected = track_duration(track.get("duration"))
     wanted = words(track["title"])
     artist = words(track["artist"]) - {"the", "a", "an", "and", "feat", "ft", "official", "music"}
@@ -154,24 +151,40 @@ def song_candidates(track, entries):
 
 
 def automatic_song_candidate(track, candidates):
-    """Auto-download only one unambiguous, strict title/artist/duration match.
+    """Choose a strict identity match, including Shazam's duration-less results.
 
-    Search order is never enough. Missing reference duration, loose matches or
-    multiple equally plausible sources leave a clearly labelled user choice.
+    Prefer artist/Topic and official-audio metadata. Equally ranked copies with
+    comparable durations are interchangeable; conflicting durations need choice.
+    This is metadata matching, not a claim that an upload is a verified master.
     """
     expected = track_duration(track.get("duration"))
-    if not expected:
-        return None
     wanted, artist = words(track.get("title", "")), words(track.get("artist", ""))
     matches = []
     for index, candidate in enumerate(candidates):
         duration = track_duration(candidate.get("duration"))
         title = words(candidate.get("title", ""))
-        context = title | words(candidate.get("channel", ""))
-        if (wanted and artist and wanted <= title and artist <= context and duration
-                and abs(duration - expected) <= max(5, expected * .03)):
-            matches.append(index)
-    return matches[0] if len(matches) == 1 else None
+        channel = words(candidate.get("channel", ""))
+        context = title | channel
+        if not (wanted and artist and wanted <= title and artist <= context and duration):
+            continue
+        if expected and abs(duration - expected) > max(5, expected * .03):
+            continue
+        if not expected and duration < 60:
+            continue
+        variants = {"cover", "remix", "live", "karaoke", "slowed", "sped", "nightcore",
+                    "instrumental", "reaction", "preview", "teaser", "snippet", "shorts", "trailer", "loop"}
+        if (title & variants) - wanted:
+            continue
+        rank = (int(artist <= channel and "topic" in channel),
+                int({"official", "audio"} <= title), int(artist <= channel))
+        matches.append((rank, index, duration))
+    if not matches:
+        return None
+    best_rank = max(match[0] for match in matches)
+    best = [match for match in matches if match[0] == best_rank]
+    if not expected and max(m[2] for m in best) - min(m[2] for m in best) > max(15, min(m[2] for m in best) * .1):
+        return None
+    return best[0][1]
 
 
 class QuietLogger:
