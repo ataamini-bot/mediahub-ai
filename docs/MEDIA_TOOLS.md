@@ -160,16 +160,16 @@ For an operator-selected audio job, this read-only check uses the worker's curre
 YouTube profile, fresh metadata and up to 1 KiB from each of at most two audio formats:
 
 ```bash
-docker compose exec -T -e DEBUG=false worker python - 44 41 < scripts/diagnose_music_download.py
+docker compose exec -T -e DEBUG=false worker python - "$FAILED_AUDIO_JOB_ID" "$CONTROL_AUDIO_JOB_ID" < scripts/diagnose_music_download.py
 ```
 
-Replace the IDs with a failed job and optionally a previously successful audio job.
+Set these variables to a failed job and a previously successful audio job, or omit
+the control argument to inspect just one job.
 The check does not modify jobs, write media, send Telegram messages or call recognition
 providers. It stops on rate limits/authentication challenges/timeouts and prints only
 versions, flags, format IDs and response status, never signed media URLs or token values.
-Successful probes do not guarantee a complete transfer. The production 403 reported
-for job 44 is not yet verified as resolved; no speculative client/proxy/cookie changes
-are part of this update.
+Successful probes do not guarantee a complete transfer and the diagnostic itself
+does not resolve source rejections. No client/proxy/cookie changes are part of this update.
 
 
 ## Plan quotas and editable messages
