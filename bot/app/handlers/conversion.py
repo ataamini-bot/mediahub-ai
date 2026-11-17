@@ -100,7 +100,7 @@ def configure_download_runtime(
 def _download_runtime_function(name: str) -> DownloadRuntimeFunction:
     function = _download_runtime.get(name)
     if not callable(function):
-        raise RuntimeError("Conversion delivery runtime is not configured")
+        raise RuntimeError("Download delivery runtime is not configured")
     return function
 
 

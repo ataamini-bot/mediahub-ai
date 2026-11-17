@@ -450,6 +450,10 @@ async def run_track_download(message, telegram_id, request_id, index, output_for
         if row["kind"] != "music" or row["status"] != "completed" or not 0 <= index < len(candidates):
             await message.answer(friendly_error("music_not_ready"))
             return
+        # Check delivery wiring before admitting a paid/quota-counted download.
+        # A startup defect must not enqueue work that this process cannot follow.
+        wait_for_download = _download_runtime_function("wait_for_download")
+        send_downloaded_file = _download_runtime_function("send_downloaded_file")
         payload = {"telegram_id": telegram_id, "candidate": index, "output_format": output_format}
         job = await _payment_request("POST", f"/media-tools/{request_id}/download", payload={
             **payload, "automatic": automatic,
@@ -465,14 +469,14 @@ async def run_track_download(message, telegram_id, request_id, index, output_for
                           "request_id": UUID(request_id).hex, "candidate": index}}
         status_message = await message.answer(text('full_track_download_queued_qua', quality=quality),
             reply_markup=build_active_download_keyboard(job_id))
-        completed = await _download_runtime_function("wait_for_download")(job_id, status_message, quality, media_info=info)
+        completed = await wait_for_download(job_id, status_message, quality, media_info=info)
         if completed.get("status") == "completed":
             claim = await _payment_request("POST", f"/media-tools/{request_id}/claim-song-delivery", payload=payload)
             if not claim.get("claimed"):
                 await update_music_card(status_message, html.escape(friendly_error(claim.get("reason") or "delivery_started")))
                 return
             stage = "delivery"
-            await _download_runtime_function("send_downloaded_file")(
+            await send_downloaded_file(
                 message=status_message, status_message=status_message, job=completed, media_info=info)
     except BackendAPIError as exc:
         code = error_code(exc) or "tool_failed"

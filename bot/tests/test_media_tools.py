@@ -406,7 +406,8 @@ def test_403_inside_ffmpeg_error_is_presented_as_source_access_failure(monkeypat
         monkeypatch.setattr(tools, "access", AsyncMock(return_value=True))
         monkeypatch.setattr(tools, "_payment_request", AsyncMock(return_value={"id": 44}))
         monkeypatch.setattr(tools, "_download_runtime_function", {"wait_for_download":
-            AsyncMock(side_effect=RuntimeError("FFmpeg exited: HTTP Error 403 secret"))}.__getitem__)
+            AsyncMock(side_effect=RuntimeError("FFmpeg exited: HTTP Error 403 secret")),
+            "send_downloaded_file": AsyncMock()}.__getitem__)
         await tools.run_track_download(message, 42, uuid4().hex, 0, "mp3", row=song_result())
         body = message.edit_text.await_args.args[0]
         assert tools.text('the_song_was_identified_but_alt_alt') in body
@@ -422,7 +423,8 @@ def test_explicit_retry_uses_existing_recognition_and_sends_the_expected_failed_
         post = AsyncMock(side_effect=[song_result(), {"id": 45}])
         monkeypatch.setattr(tools, "_payment_request", post)
         monkeypatch.setattr(tools, "_download_runtime_function", {"wait_for_download":
-            AsyncMock(return_value={"status": "cancelled"})}.__getitem__)
+            AsyncMock(return_value={"status": "cancelled"}),
+            "send_downloaded_file": AsyncMock()}.__getitem__)
         await tools.download_track(event)
         assert post.await_args.kwargs["payload"] == {"telegram_id": 42, "candidate": 0,
             "output_format": "mp3", "automatic": False, "retry_failed_job_id": 44}

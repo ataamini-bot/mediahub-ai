@@ -5663,6 +5663,16 @@ async def main():
             "TELEGRAM_BOT_TOKEN is not configured."
         )
 
+    # The music and conversion routers use these helpers without importing this
+    # entrypoint again when launched as ``python -m app.main``. Wire them before
+    # polling can accept any request, including after a process restart.
+    configure_download_runtime(
+        wait_for_download=wait_for_download,
+        send_downloaded_file=send_downloaded_file,
+        download_error_text=download_error_text,
+        download_error_markup=download_error_markup,
+    )
+
     api = (
         TelegramAPIServer.from_base(
             TELEGRAM_BOT_API,
