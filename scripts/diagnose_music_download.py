@@ -1,7 +1,10 @@
-"""Read-only worker diagnostic: fresh metadata and at most 1 KiB per audio format.
+"""Read-only worker diagnostic: fresh metadata and bounded media requests.
 
 Run: python - JOB_ID [PREVIOUSLY_SUCCESSFUL_JOB_ID] < this_file.py
 Or:  python - --latest --stored-only < this_file.py
+Or:  python - --latest --transfer-check < this_file.py
+Transfer check inspects only the newest failed music download (or latest if none
+failed), reading at most 1 KiB using each of two request styles per audio format.
 No files, downloads, queue changes, Telegram sends, recognition calls, or raw URLs.
 """
 import json
@@ -97,7 +100,7 @@ class DiagnosticLogger:
     warning = error = debug
 
 
-def probe(downloader, item):
+def probe(downloader, item, *, transfer=False):
     from yt_dlp.networking import Request
     url = item.get("url") or ""
     parts = urlsplit(url)
@@ -107,15 +110,47 @@ def probe(downloader, item):
         return {**result, "result": "NOT_DIRECT_HTTPS_AUDIO"}
     headers = {**(item.get("http_headers") or {}), "Range": "bytes=0-1023"}
     try:
-        with downloader.urlopen(Request(url, headers=headers)) as response:
-            size = len(response.read(1024))
-            result.update(result="MEDIA_OK" if size else "EMPTY_RESPONSE", status=response.status, bytes=size)
+        if transfer:
+            from yt_dlp.downloader.http import HttpFD
+            original_open = downloader.urlopen
+
+            class ProbeComplete(Exception):
+                pass
+
+            def bounded_open(request):
+                # Use the *actual* production HTTP downloader's Range, headers
+                # and extensions. Stop before it can write any media bytes.
+                value = str(request.headers.get("Range", ""))
+                result["request_range"] = value if re.fullmatch(r"bytes=\d+-\d*", value) else "NONE"
+                try:
+                    with original_open(request) as response:
+                        size = len(response.read(1024))
+                        result.update(result="MEDIA_OK" if size else "EMPTY_RESPONSE",
+                                      status=response.status, bytes=size)
+                except Exception as error:
+                    result["result"] = safe_reason(error)
+                raise ProbeComplete()
+
+            downloader.urlopen = bounded_open
+            try:
+                http = HttpFD(downloader, {**downloader.params, "quiet": True,
+                    "noprogress": True, "continuedl": False, "retries": 0})
+                http.real_download("-", item)
+                result.setdefault("result", "TRANSFER_NOT_STARTED")
+            except ProbeComplete:
+                pass
+            finally:
+                downloader.urlopen = original_open
+        else:
+            with downloader.urlopen(Request(url, headers=headers)) as response:
+                size = len(response.read(1024))
+                result.update(result="MEDIA_OK" if size else "EMPTY_RESPONSE", status=response.status, bytes=size)
     except Exception as error:
         result["result"] = safe_reason(error)
     return result
 
 
-def inspect_job(job_id, url):
+def inspect_job(job_id, url, *, transfer_check=False):
     from yt_dlp import YoutubeDL
     from app.services.media_tool_links import normalize_music_link
     from app.workers.tasks.download import _get_format_selector, _get_yt_dlp_options
@@ -144,10 +179,11 @@ def inspect_job(job_id, url):
             if alternative:
                 candidates.append(alternative)
             for item in candidates:
-                result = probe(downloader, item)
-                emit("AUDIO", {"job": job_id, **result})
-                if result["result"] in {"HTTP_429", "HTTP_401", "LOGIN_REQUIRED", "TIMEOUT"}:
-                    return result["result"]
+                for transfer in ((True, False) if transfer_check else (False,)):
+                    result = probe(downloader, item, transfer=transfer)
+                    emit("AUDIO", {"job": job_id, "probe": "downloader" if transfer else "range_1k", **result})
+                    if result["result"] in {"HTTP_429", "HTTP_401", "LOGIN_REQUIRED", "TIMEOUT"}:
+                        return result["result"]
     except Exception as error:
         reason = safe_reason(error)
         emit("JOB", {"id": job_id, "stage": "fresh_extraction", "result": reason})
@@ -167,10 +203,12 @@ def main():
     from app.services.youtube_health import provider_health
     args = sys.argv[1:]
     stored_only = "--stored-only" in args
-    args = [arg for arg in args if arg != "--stored-only"]
+    transfer_check = "--transfer-check" in args
+    args = [arg for arg in args if arg not in {"--stored-only", "--transfer-check"}]
     latest = args == ["--latest"]
-    if not latest and (not 1 <= len(args) <= 2 or any(not arg.isdecimal() for arg in args)):
-        raise SystemExit("Usage: python - JOB_ID [CONTROL_JOB_ID] | --latest [--stored-only]")
+    if ((stored_only and transfer_check) or (transfer_check and not latest and len(args) != 1)
+            or (not latest and (not 1 <= len(args) <= 2 or any(not arg.isdecimal() for arg in args)))):
+        raise SystemExit("Usage: python - JOB_ID [CONTROL_JOB_ID] | --latest [--stored-only | --transfer-check]")
     versions = {}
     for package in ("yt-dlp", "yt-dlp-ejs", "bgutil-ytdlp-pot-provider"):
         try:
@@ -193,6 +231,8 @@ def main():
             jobs = [db.execute(text(columns + "WHERE j.id=:id AND j.media_type='audio'"),
                                {"id": int(arg)}).mappings().first() for arg in args]
     found = [job for job in jobs if job]
+    if transfer_check and found:
+        found = [next((job for job in found if job["status"] == "FAILED"), found[0])]
     if not found:
         emit("JOB", {"result": "AUDIO_JOB_NOT_FOUND"})
     for job in found:
@@ -202,7 +242,7 @@ def main():
     emit("YOUTUBE_PROVIDER", provider_health())
     signal.signal(signal.SIGALRM, deadline)
     for job in found:
-        if inspect_job(job["id"], job["source_url"]) in {"HTTP_429", "HTTP_401", "LOGIN_REQUIRED", "TIMEOUT"}:
+        if inspect_job(job["id"], job["source_url"], transfer_check=transfer_check) in {"HTTP_429", "HTTP_401", "LOGIN_REQUIRED", "TIMEOUT"}:
             break
 
 

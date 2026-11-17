@@ -276,7 +276,8 @@ async def test_shazam_accepts_and_processes_without_audd_key(records, monkeypatc
     value = records.payload()
     await accept(value)
     calls = []
-    def recognize(source, token, *, provider):
+    def recognize(source, token, *, provider, check_cancelled):
+        check_cancelled()
         assert provider == "shazamio" and token == ""
         calls.append(1)
         return {"title": "Song", "artist": "Artist", "duration": None}
@@ -430,24 +431,30 @@ async def test_retry_failed_song_uses_normal_admission_and_old_click_cannot_dupl
 @pytest.mark.asyncio
 @pytest.mark.parametrize("cancel_during_fetch", [False, True])
 @pytest.mark.parametrize("reference_duration", [None, 180])
-async def test_link_sample_recognizes_once_and_cancellation_stops_before_billing(records, monkeypatch, cancel_during_fetch, reference_duration):
+@pytest.mark.parametrize("recognition_provider", ["audd", "shazamio"])
+async def test_link_sample_recognizes_once_and_cancellation_stops_before_billing(records, monkeypatch, cancel_during_fetch, reference_duration, recognition_provider):
     from app.workers.tasks import media_tools as worker
     from app.services import media_tool_links
+    async with AsyncSessionLocal() as db:
+        await configure_tool(db, {"kind": "music", "enabled": True, "provider": recognition_provider}, records.users[0])
+        await db.commit()
     value = records.payload().model_copy(update={"source_url": "https://youtu.be/AbcDefGhI12", "auto_mp3": True})
     (folder(value.telegram_id, value.request_id) / "input").unlink()
     await accept(value)
     calls = []
-    def fetch(url, target):
+    def fetch(url, target, *, seconds):
         assert url == value.source_url
+        assert seconds == (36 if recognition_provider == "shazamio" else 12)
         target.write_bytes(b"sample-from-public-link")
         if cancel_during_fetch:
             with worker.WorkerSessionLocal() as db:
                 db.execute(update(MediaToolRequest).where(MediaToolRequest.id == value.request_id).values(status="cancelled"))
                 db.commit()
         return target
-    def recognize(source, token, *, provider):
+    def recognize(source, token, *, provider, check_cancelled):
+        check_cancelled()
         assert source.read_bytes() == b"sample-from-public-link"
-        assert provider == "audd"
+        assert provider == recognition_provider
         calls.append(1)
         return {"title": "Original Song", "artist": "Example Artist", "duration": reference_duration}
     monkeypatch.setattr(media_tool_links, "fetch_music_link", fetch)
@@ -474,7 +481,7 @@ async def test_failed_link_never_calls_paid_recognition_and_cleans_partial_files
     value = records.payload().model_copy(update={"source_url": "https://youtu.be/AbcDefGhI12"})
     (folder(value.telegram_id, value.request_id) / "input").unlink()
     await accept(value)
-    def fail(url, target):
+    def fail(url, target, **kwargs):
         (target.parent / "link-source.webm.part").write_bytes(b"partial")
         raise ToolError("link_timeout")
     monkeypatch.setattr(media_tool_links, "fetch_music_link", fail)

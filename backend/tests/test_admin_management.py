@@ -32,6 +32,7 @@ from app.services.admin_management import (  # noqa: E402
     LastSuperadminError,
 )
 from app.services.payment_management import PaymentManagementService  # noqa: E402
+from app.services.bot_experience import BotExperienceService  # noqa: E402
 
 
 def unique_telegram_id() -> int:
@@ -105,6 +106,46 @@ async def test_private_receipt_recipients_require_active_review_and_view_permiss
             record.account.is_active = False
             await session.flush()
             assert finance.telegram_id not in [item["telegram_id"] for item in await PaymentManagementService(session).reviewers()]
+        finally:
+            await transaction.rollback()
+            await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_support_alert_recipients_require_current_active_authority_and_own_language():
+    async with AsyncSessionLocal() as session:
+        transaction = await session.begin()
+        try:
+            owner, _ = await add_superadmin(session, unique_telegram_id())
+            owner.preferred_language = "en"
+            service = AdminManagementService(session)
+            support = await add_user(session, unique_telegram_id())
+            support.preferred_language, support.language_code = "fa", "en"
+            record = await service.create_account(
+                actor_telegram_id=owner.telegram_id, target_telegram_id=support.telegram_id,
+                role_codes=["support", "payment_finance"], is_superadmin=False,
+                reason="Support alert recipient test",
+            )
+            finance = await add_user(session, unique_telegram_id())
+            await service.create_account(
+                actor_telegram_id=owner.telegram_id, target_telegram_id=finance.telegram_id,
+                role_codes=["payment_finance"], is_superadmin=False, reason="Recipient isolation test",
+            )
+            disabled, disabled_account = await add_superadmin(session, unique_telegram_id())
+            disabled_account.is_active = False
+            blocked, _ = await add_superadmin(session, unique_telegram_id())
+            blocked.status = UserStatus.BLOCKED
+            ordinary = await add_user(session, unique_telegram_id())
+            await session.flush()
+            experience = BotExperienceService(session)
+            recipients = await experience.support_notification_recipients()
+            assert recipients[owner.telegram_id] == "en"
+            assert recipients[support.telegram_id] == "fa"
+            assert not {finance.telegram_id, disabled.telegram_id, blocked.telegram_id,
+                        ordinary.telegram_id}.intersection(recipients)
+            record.account.is_active = False
+            await session.flush()
+            assert support.telegram_id not in await experience.support_recipient_telegram_ids()
         finally:
             await transaction.rollback()
             await engine.dispose()

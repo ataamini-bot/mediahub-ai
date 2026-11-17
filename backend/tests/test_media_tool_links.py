@@ -28,7 +28,8 @@ def test_music_link_accepts_public_supported_hosts(url):
     assert links.normalize_music_link(url) == url
 
 
-def test_link_sample_uses_existing_profile_and_only_twelve_seconds(monkeypatch, tmp_path):
+@pytest.mark.parametrize("seconds", [12, 36])
+def test_link_sample_uses_existing_profile_and_requested_bounded_length(monkeypatch, tmp_path, seconds):
     import yt_dlp
     seen = {}
     class Downloader:
@@ -42,15 +43,15 @@ def test_link_sample_uses_existing_profile_and_only_twelve_seconds(monkeypatch, 
             assert url == "https://youtu.be/AbcDefGhI12" and download
             (tmp_path / "link-source.webm").write_bytes(b"independent-link-sample")
     monkeypatch.setattr(yt_dlp, "YoutubeDL", Downloader)
-    links.download_link_sample("https://youtu.be/AbcDefGhI12", tmp_path / "input")
+    links.download_link_sample("https://youtu.be/AbcDefGhI12", tmp_path / "input", seconds=seconds)
     assert (tmp_path / "input").read_bytes() == b"independent-link-sample"
     assert not (tmp_path / "link-source.webm").exists()
-    assert list(seen["download_ranges"]({}, None)) == [{"start_time": 0, "end_time": 12}]
+    assert list(seen["download_ranges"]({}, None)) == [{"start_time": 0, "end_time": seconds}]
     assert seen["playlist_items"] == "1" and seen["noplaylist"]
     assert seen["extractor_args"]["youtube"]["player_client"] == ["mweb"]
     assert seen["extractor_args"]["youtubepot-bgutilhttp"]["base_url"]
     assert "file" not in seen["external_downloader_args"]["ffmpeg_i"][1].split(",")
-    assert seen["external_downloader_args"]["ffmpeg_o"][-2:] == ["-t", "12"]
+    assert seen["external_downloader_args"]["ffmpeg_o"][-2:] == ["-t", str(seconds)]
 
 
 def test_failed_link_child_cleans_partial_sample(monkeypatch, tmp_path):

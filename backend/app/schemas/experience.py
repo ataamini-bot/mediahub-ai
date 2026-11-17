@@ -178,6 +178,7 @@ class SupportTicketResponse(BaseModel):
     messages: list[dict[str, Any]]
     events: list[dict[str, Any]] = Field(default_factory=list)
     recipients: list[int] = Field(default_factory=list)
+    recipient_languages: dict[int, str] = Field(default_factory=dict)
 
 
 class SupportTicketPageResponse(BaseModel):

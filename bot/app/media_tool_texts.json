@@ -12313,5 +12313,48 @@
     "maximum": 64,
     "html": false,
     "scope": "tools"
+  },
+  "support_private_new": {
+    "label": "اعلان خصوصی تیکت جدید",
+    "fa": "🛟 تیکت پشتیبانی جدید #{ticket_id}\n\n👤 {name}\n🆔 {telegram_id}\n🔗 {username}\nموضوع: {category}\nپلن: {plan}\n\n{body}",
+    "en": "🛟 New support ticket #{ticket_id}\n\n👤 {name}\n🆔 {telegram_id}\n🔗 {username}\nSubject: {category}\nPlan: {plan}\n\n{body}",
+    "fields": [
+      "ticket_id",
+      "name",
+      "telegram_id",
+      "username",
+      "category",
+      "plan",
+      "body"
+    ],
+    "maximum": 1000,
+    "html": false,
+    "scope": "common"
+  },
+  "support_private_reply": {
+    "label": "اعلان خصوصی پاسخ کاربر",
+    "fa": "💬 پیام جدید کاربر — تیکت #{ticket_id}\n\n👤 {name}\n🆔 {telegram_id}\n🔗 {username}\nموضوع: {category}\nپلن: {plan}\n\n{body}",
+    "en": "💬 New user reply — ticket #{ticket_id}\n\n👤 {name}\n🆔 {telegram_id}\n🔗 {username}\nSubject: {category}\nPlan: {plan}\n\n{body}",
+    "fields": [
+      "ticket_id",
+      "name",
+      "telegram_id",
+      "username",
+      "category",
+      "plan",
+      "body"
+    ],
+    "maximum": 1000,
+    "html": false,
+    "scope": "common"
+  },
+  "support_attachment_only": {
+    "label": "تیکت بدون متن، دارای پیوست",
+    "fa": "📎 کاربر یک پیوست فرستاده است.",
+    "en": "📎 The user sent an attachment.",
+    "fields": [],
+    "maximum": 200,
+    "html": false,
+    "scope": "common"
   }
 }

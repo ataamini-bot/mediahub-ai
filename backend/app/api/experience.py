@@ -69,6 +69,7 @@ def _serialize_ticket(
     record: SupportTicketRecord,
     *,
     recipients: list[int] | None = None,
+    recipient_languages: dict[int, str] | None = None,
 ) -> dict:
     return {
         "id": record.ticket.id,
@@ -116,6 +117,7 @@ def _serialize_ticket(
             for event in record.events
         ],
         "recipients": recipients or [],
+        "recipient_languages": recipient_languages or {},
     }
 
 
@@ -308,9 +310,9 @@ async def create_support_ticket(
             telegram_file_id=data.telegram_file_id,
             file_type=data.file_type,
         )
-        recipients = await service.support_recipient_telegram_ids()
+        recipients = await service.support_notification_recipients()
         await db.commit()
-        return _serialize_ticket(record, recipients=recipients)
+        return _serialize_ticket(record, recipients=list(recipients), recipient_languages=recipients)
     except (BotExperienceError, BotExperienceNotFound, BotExperienceConflict) as exc:
         await db.rollback()
         raise _error(exc) from exc
@@ -363,15 +365,17 @@ async def user_reply_support_ticket(
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     try:
-        record = await BotExperienceService(db).user_reply_ticket(
+        service = BotExperienceService(db)
+        record = await service.user_reply_ticket(
             ticket_id=ticket_id,
             telegram_id=data.telegram_id,
             body=data.body,
             telegram_file_id=data.telegram_file_id,
             file_type=data.file_type,
         )
+        recipients = await service.support_notification_recipients()
         await db.commit()
-        return _serialize_ticket(record)
+        return _serialize_ticket(record, recipients=list(recipients), recipient_languages=recipients)
     except (BotExperienceError, BotExperienceConflict, BotExperienceNotFound) as exc:
         await db.rollback()
         raise _error(exc) from exc

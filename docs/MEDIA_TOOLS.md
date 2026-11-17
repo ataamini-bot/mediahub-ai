@@ -30,10 +30,11 @@ ShazamIO **never** falls back to AudD. No new database migration is needed for p
 selection; it is stored in the existing music configuration.
 
 ShazamIO uses an unofficial interface. It has no purchased API token, but service
-availability, accuracy and unlimited usage are not promised. The adapter makes one
-recognition request, does not rotate profiles/proxies, does not retry rate limits or
-follow redirects, bounds the response size, and times out recognition after 45 seconds.
-It sends a fingerprint computed locally from the 12-second sample, rather than the audio
+availability, accuracy and unlimited usage are not promised. The adapter makes at most
+three recognition requests for distinct windows, does not rotate profiles/proxies,
+does not retry service errors or follow redirects, and bounds the response size.
+Each call is limited to 45 seconds, within one 90-second preparation/recognition budget.
+It sends a fingerprint computed locally from each 12-second sample, rather than the audio
 file itself. Input and sample files are removed by the existing cleanup flow.
 
 AudD charges belong to the operator's account; configure its billing limits as well as
@@ -51,12 +52,19 @@ messages, GitHub, or logs.
 
 1. Open **Identify music**, then send a public Instagram, YouTube, TikTok, X or Threads
    video/post link, or upload a voice message, audio file or video clip up to 25 MiB.
-   Music should be audible in the first 12 seconds. Humming recognition is not promised.
+   Clear recorded music works best. Humming recognition is not promised.
 2. Sending the input immediately starts recognition, without a separate confirmation
-   message or button. The first 12 seconds supply the recognition data to the configured
-   service; recognition and download allowances still apply. Links use the existing site's extractor profile,
-   including the YouTube PO-token provider. Only the first media item and first 12 seconds
-   are requested. The fetch is limited to 120 seconds and 25 MiB; private/inaccessible links
+   message or button. ShazamIO checks up to three distinct 12-second windows from the first
+   36 seconds, stopping at the first match. It checks another window only after a valid
+   no-match response, never after a timeout, invalid response, authentication error or rate
+   limit. Short trailing windows under eight seconds are skipped. The windows share a
+   90-second preparation/recognition budget; cancellation is checked between calls. AudD
+   still receives only the first 12 seconds in one paid request, with no automatic paid
+   fallback. All windows belong to one user recognition allowance; a no-match request can
+   therefore make up to three Shazam requests. Download allowances remain separate.
+   Links use the existing site's extractor profile, including the YouTube PO-token provider.
+   Only the first media item and up to 36 seconds (12 for AudD) are requested.
+   The fetch is limited to 120 seconds and 25 MiB; private/inaccessible links
    fail visibly before recognition is called. Uploaded files remain supported in the same form.
 3. The bot shows the identified artist/title and up to three matching public YouTube
    sources, filtered by title, artist, duration and unwanted cover/remix variants.
@@ -146,6 +154,8 @@ finishes. Unclaimed previews expire after ten minutes, and cancelled requests re
 them. All new copy is in the existing FA/EN message editor.
 
 No-match cards offer an explanation, another sample, and the existing support form.
+New tickets and user replies also alert authorized support administrators privately;
+see [Support notifications](SUPPORT_NOTIFICATIONS.md).
 Requesting support does not add a song to Shazam's catalogue. The reference bot's
 lyrics, similar songs, likes, weekly charts and catalogue submissions are not features
 of this presentation change.
@@ -183,6 +193,21 @@ providers. It stops on rate limits/authentication challenges/timeouts and prints
 versions, flags, format IDs and response status, never signed media URLs or token values.
 Successful probes do not guarantee a complete transfer and the diagnostic itself
 does not resolve source rejections. No client/proxy/cookie changes are part of this update.
+
+To compare the production HTTP downloader's actual initial request (including its
+Range, headers and request extensions) with the small-range probe, use:
+
+```bash
+docker compose exec -T -e DEBUG=false worker python - --latest --transfer-check < scripts/diagnose_music_download.py
+```
+
+This selects the newest failed job among the last three music downloads, or the most
+recent if none failed. It makes at most four media requests from one fresh extraction,
+reads at most 1 KiB from each response, and closes it before any file is written.
+`probe=downloader` tests the real downloader's initial request; `probe=range_1k` tests
+the previous small byte range against the same signed URL. Both use the same client
+and session. Different results identify a request-dependent rejection, while a new
+successful probe still cannot establish why an earlier transfer failed.
 
 
 ## Plan quotas and editable messages

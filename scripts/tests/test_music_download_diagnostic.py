@@ -68,3 +68,46 @@ def test_probe_reads_only_one_kib_and_carries_extracted_headers():
         "http_headers": {"User-Agent": "extracted-agent"}})
     assert result["result"] == "MEDIA_OK" and result["bytes"] == 1024 and result["po_token_present"]
     assert "private" not in str(result) and "googlevideo" not in str(result)
+
+
+@pytest.mark.parametrize("chunk_size", [0, 10 * 1024**2])
+@pytest.mark.parametrize("rejected", [False, True])
+def test_transfer_probe_uses_real_downloader_request_without_writing_or_full_download(monkeypatch, chunk_size, rejected):
+    from yt_dlp import YoutubeDL
+    from yt_dlp.downloader.http import HttpFD
+    requests, reads, closes = [], [], []
+    class Response:
+        status = 206
+        def __enter__(self): return self
+        def __exit__(self, *args): closes.append(True)
+        def read(self, size):
+            reads.append(size)
+            return b"x" * size
+    def opener(request):
+        requests.append(request)
+        if rejected:
+            raise RuntimeError("HTTP Error 403 https://private.example/?pot=secret")
+        return Response()
+    monkeypatch.setattr(HttpFD, "sanitize_open", lambda *a, **k: pytest.fail("Probe tried to write a file"))
+    with YoutubeDL({"quiet": True, "cachedir": False, "logger": diagnostic.DiagnosticLogger()}) as downloader:
+        monkeypatch.setattr(downloader, "urlopen", opener)
+        result = diagnostic.probe(downloader, {
+            "url": "https://r1.googlevideo.com/videoplayback?pot=private",
+            "protocol": "https", "format_id": "140", "ext": "m4a", "acodec": "mp4a.40.2",
+            "http_headers": {"User-Agent": "extracted-agent"},
+            "downloader_options": {"http_chunk_size": chunk_size},
+        }, transfer=True)
+        assert downloader.urlopen is opener
+    assert len(requests) == 1
+    assert requests[0].headers["Accept-Encoding"] == "identity"
+    assert requests[0].headers["User-Agent"] == "extracted-agent"
+    if chunk_size:
+        value = result["request_range"]
+        assert value.startswith("bytes=0-")
+        assert int(chunk_size * .95) <= int(value.removeprefix("bytes=0-")) + 1 <= chunk_size
+    else:
+        assert result["request_range"] == "NONE"
+    assert result["result"] == ("HTTP_403" if rejected else "MEDIA_OK")
+    assert reads == ([] if rejected else [1024])
+    assert closes == ([] if rejected else [True])
+    assert not any(private in str(result) for private in ("secret", "private", "https://", "extracted-agent"))

@@ -30,14 +30,16 @@ def normalize_music_link(value):
     return urlunsplit(("https", parts.hostname, parts.path or "/", parts.query, ""))
 
 
-def fetch_music_link(url, target, *, timeout=120):
+def fetch_music_link(url, target, *, timeout=120, seconds=12):
+    if seconds not in (12, 36):
+        raise ValueError("Unsupported recognition sample length")
     url = normalize_music_link(url)
     target.parent.mkdir(parents=True, mode=0o700, exist_ok=True)
     if target.is_symlink() or target.exists():
         raise ToolError("input_expired")
     # yt-dlp may spawn FFmpeg. A process group ensures timeout/cancellation
     # kills both, before the Worker removes the attempt's temporary files.
-    process = subprocess.Popen([sys.executable, "-m", "app.services.media_tool_links", url, str(target)],
+    process = subprocess.Popen([sys.executable, "-m", "app.services.media_tool_links", url, str(target), str(seconds)],
         stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
     try:
         code = process.wait(timeout=timeout)
@@ -60,26 +62,28 @@ def fetch_music_link(url, target, *, timeout=120):
     return target
 
 
-def download_link_sample(url, target):
-    """Child process: existing extractor profile, first media item, 12 seconds."""
+def download_link_sample(url, target, *, seconds=12):
+    """Child process: first media item, bounded audio for recognition windows."""
     from yt_dlp import YoutubeDL
     from yt_dlp.utils import download_range_func
     from app.services.download import _get_media_info_options
     from app.services.media_tool_providers import QuietLogger
 
+    if seconds not in (12, 36):
+        raise ValueError("Unsupported recognition sample length")
     url = normalize_music_link(url)
     options = _get_media_info_options(url)
     # A combined Instagram rendition supplies the small visual preview without
-    # another fetch. Recognition still receives only the first 12 seconds.
+    # another fetch. Each recognition signature is still at most 12 seconds.
     format_selector = ("best[height<=480]/best/bestaudio" if urlsplit(url).hostname in
                        {"instagram.com", "www.instagram.com", "m.instagram.com"} else "bestaudio/best")
     options.update(
         skip_download=False, noplaylist=True, playlist_items="1", playlistend=1,
         format=format_selector, outtmpl=str(target.parent / "link-source.%(ext)s"),
-        download_ranges=download_range_func(None, [(0, 12)]),
+        download_ranges=download_range_func(None, [(0, seconds)]),
         external_downloader="ffmpeg", external_downloader_args={
             "ffmpeg_i": ["-protocol_whitelist", "http,https,tcp,tls,crypto", "-rw_timeout", "15000000"],
-            "ffmpeg_o": ["-fs", str(MAX_SAMPLE_BYTES), "-t", "12"],
+            "ffmpeg_o": ["-fs", str(MAX_SAMPLE_BYTES), "-t", str(seconds)],
         },
         allowed_extractors=["youtube.*", "instagram.*", "tiktok.*", "twitter.*", "threads.*"],
         socket_timeout=12, retries=0, fragment_retries=0, extractor_retries=0,
@@ -96,7 +100,7 @@ def download_link_sample(url, target):
 
 if __name__ == "__main__":
     try:
-        download_link_sample(sys.argv[1], Path(sys.argv[2]))
+        download_link_sample(sys.argv[1], Path(sys.argv[2]), seconds=int(sys.argv[3]) if len(sys.argv) > 3 else 12)
     except Exception:
         # Parent maps this to a fixed user-visible error, without upstream
         # URLs, cookies, headers, or provider secrets in process output.

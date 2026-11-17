@@ -18,6 +18,12 @@ from app.workers.celery_app import celery_app
 logger = logging.getLogger(__name__)
 
 
+def ensure_request_active(request_id):
+    with WorkerSessionLocal() as db:
+        if db.scalar(select(MediaToolRequest.status).where(MediaToolRequest.id == request_id)) != "processing":
+            raise ToolError("request_cancelled")
+
+
 @celery_app.task(name="media_tools.run", acks_late=True, reject_on_worker_lost=False,
                  soft_time_limit=300, time_limit=330, max_retries=0, ignore_result=True)
 def run_tool(request_id):
@@ -50,7 +56,8 @@ def run_tool(request_id):
         if kind == "music" and options.get("source_url"):
             from app.services.media_tool_links import fetch_music_link
             started = time.monotonic()
-            source = fetch_music_link(options["source_url"], folder(telegram_id, request_id) / "input")
+            source = fetch_music_link(options["source_url"], folder(telegram_id, request_id) / "input",
+                                      seconds=36 if config["provider"] == "shazamio" else 12)
             logger.warning("Music link sample ready: request=%s, elapsed_s=%.2f", request_id, time.monotonic() - started)
         else:
             source = input_file(telegram_id, request_id, kind)
@@ -64,14 +71,14 @@ def run_tool(request_id):
                         db.commit()
             # Link extraction can take longer than an upload. A cancellation
             # received during it must stop before any paid recognition call.
-            with WorkerSessionLocal() as db:
-                if db.scalar(select(MediaToolRequest.status).where(MediaToolRequest.id == request_id)) != "processing":
-                    raise ToolError("request_cancelled")
+            ensure_request_active(request_id)
             started = time.monotonic()
-            result = recognize_music(source, config["token"], provider=config["provider"])
+            result = recognize_music(source, config["token"], provider=config["provider"],
+                                     check_cancelled=lambda: ensure_request_active(request_id))
             logger.warning("Music recognition complete: request=%s, elapsed_s=%.2f, duration_known=%s",
                            request_id, time.monotonic() - started, bool(result.get("duration")))
             # Recognition metadata never supplies a downloadable preview.
+            ensure_request_active(request_id)
             started = time.monotonic()
             result["candidates"] = find_full_tracks(result)
             result["automatic_candidate"] = automatic_song_candidate(result, result["candidates"])

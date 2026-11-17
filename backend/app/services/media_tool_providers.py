@@ -46,24 +46,28 @@ def provider_json(url, *, token, files, data, timeout=45):
         raise ToolError("invalid_provider_result") from None
 
 
-def recognition_sample(source, target):
+def recognition_sample(source, target, *, seconds=12):
+    if seconds not in (12, 36):
+        raise ValueError("Unsupported recognition sample length")
     try:
         result = subprocess.run(["ffmpeg", "-nostdin", "-hide_banner", "-loglevel", "error", "-y",
-            "-protocol_whitelist", "file,pipe", "-i", str(source), "-t", "12", "-vn", "-ac", "1",
+            "-protocol_whitelist", "file,pipe", "-i", str(source), "-t", str(seconds), "-vn", "-ac", "1",
             "-ar", "16000", "-c:a", "pcm_s16le", str(target)],
             stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=45)
-        if result.returncode or not target.is_file() or not 16000 <= target.stat().st_size <= 500000:
+        if result.returncode or not target.is_file() or not 16000 <= target.stat().st_size <= seconds * 32000 + 116000:
             raise ToolError("invalid_audio")
     except (OSError, subprocess.TimeoutExpired):
         raise ToolError("invalid_audio") from None
 
 
-def recognize_music(source, token="", *, provider="shazamio"):
+def recognize_music(source, token="", *, provider="shazamio", check_cancelled=None):
     # Never switch to a paid service after a free provider fails.
     if provider == "shazamio":
         from app.services.media_tool_shazam import recognize_shazam
-        return recognize_shazam(source)
+        return recognize_shazam(source, check_cancelled=check_cancelled)
     if provider == "audd" and token:
+        if check_cancelled:
+            check_cancelled()
         return recognize_audd(source, token)
     raise ToolError("provider_auth")
 
