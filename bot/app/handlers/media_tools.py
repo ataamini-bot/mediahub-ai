@@ -19,6 +19,7 @@ from app.runtime_config import runtime_configuration
 from app.tool_texts import TOOL_TEXTS, tool_text as text
 from app.services.backend import BackendAPIError, _payment_request, get_download_entitlement, register_telegram_user
 from app.music_presentation import recovery_keyboard, update_music_card
+from app.navigation import MediaFormInputFilter
 
 router = Router(name="media_tools")
 router.message.filter(F.chat.type == "private")
@@ -137,7 +138,7 @@ async def upload(message: Message, state: FSMContext):
         _uploads_in_progress.discard(user_id)
 
 
-@router.message(ToolStates.upload, F.text)
+@router.message(ToolStates.upload, F.text, MediaFormInputFilter())
 async def receive_music_link(message: Message, state: FSMContext):
     if not message.from_user:
         return

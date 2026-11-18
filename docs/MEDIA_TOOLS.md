@@ -88,6 +88,14 @@ song title. Download/encoding failures are shown explicitly; a polling timeout p
 Concurrent/repeated result checks reuse the source/format job and claim Telegram delivery
 once in the database. Uncertain Telegram delivery is not automatically repeated.
 
+In every private-chat section and form stage, `/menu` (also `/منو`) restores the
+persistent first-page keyboard. It is handled before payment, support and admin
+forms, so it cannot be stored as form input. In media forms, other commands and
+home buttons, including renamed FA/EN labels and custom buttons, reach their usual
+handlers. Returning to the menu
+clears the input form and removes unsubmitted local uploads. The Worker retains
+ownership of queued files; leaving the form does not cancel an admitted request.
+
 These providers identify music; they do not supply a licensed master audio file. Apple Music preview
 URLs and the submitted clip are **never** substituted for the full track. If recognition
 or a matching accessible source is unavailable, the bot says so. Title

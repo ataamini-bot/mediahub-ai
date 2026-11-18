@@ -18,7 +18,7 @@ from aiogram.types import (
     User,
 )
 
-from app import main
+from app import main, navigation
 from app.handlers import admin, admin_experience, admin_finance, home
 from app.runtime_config import fallback_configuration
 from app.state.admin_experience import AdminExperienceStates
@@ -89,7 +89,7 @@ def test_editing_home_button_label_stays_in_editor(ui, monkeypatch, language, it
     monkeypatch.setattr(home, "register_telegram_user", register)
     configurations = (fallback_configuration("fa"), fallback_configuration("en"))
     configurations[0 if language == "fa" else 1]["buttons"][item] = text
-    monkeypatch.setattr(home, "all_runtime_configurations", AsyncMock(return_value=configurations))
+    monkeypatch.setattr(navigation, "all_runtime_configurations", AsyncMock(return_value=configurations))
     monkeypatch.setattr(home, "runtime_configuration", AsyncMock(return_value=configurations[0]))
 
     async def exercise():

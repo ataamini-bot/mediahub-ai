@@ -16,7 +16,7 @@ from urllib.parse import urljoin, urlparse
 from aiogram import Bot, Dispatcher, F
 from aiogram.client.session.aiohttp import AiohttpSession
 from aiogram.client.telegram import TelegramAPIServer
-from aiogram.filters import BaseFilter, CommandStart, StateFilter
+from aiogram.filters import BaseFilter, Command, CommandStart, StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.storage.redis import RedisStorage
 from aiogram.types import (
@@ -69,6 +69,7 @@ from app.handlers.conversion import (
     router as conversion_router,
 )
 from app.handlers.home import (
+    restore_main_menu,
     router as home_router,
 )
 from app.handlers.experience import (
@@ -186,6 +187,14 @@ from app.middleware.health import PollHeartbeatMiddleware
 dp.message.outer_middleware(InterfaceContext())
 dp.callback_query.outer_middleware(InterfaceContext())
 dp.callback_query.outer_middleware(InterfaceCallbacks(dp.storage.redis))
+
+# Root handlers run before every child router, regardless of the current FSM
+# state. A command must never become a receipt, support reply or admin setting.
+dp.message.register(
+    restore_main_menu,
+    Command("menu", "منو"),
+    F.chat.type == "private",
+)
 
 dp.include_router(operations_router)
 dp.include_router(customers_router)

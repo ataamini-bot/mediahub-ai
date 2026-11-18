@@ -23,6 +23,7 @@ from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMar
 from app.keyboards.conversion import build_conversion_format_keyboard
 from app.keyboards.download import build_active_download_keyboard
 from app.middleware.interface import ui_language
+from app.navigation import MediaFormInputFilter
 from app.runtime_config import runtime_configuration
 from app.services.backend import (
     BackendAPIError,
@@ -497,7 +498,7 @@ async def cancel_conversion(callback: CallbackQuery, state: FSMContext) -> None:
     await callback.answer("Cancelled." if language == "en" else "لغو شد.")
 
 
-@router.message(ConversionStates.waiting_for_media)
+@router.message(ConversionStates.waiting_for_media, MediaFormInputFilter())
 async def receive_conversion_media(message: Message, state: FSMContext) -> None:
     language = ui_language.get()
     attachment = _attachment(message)
