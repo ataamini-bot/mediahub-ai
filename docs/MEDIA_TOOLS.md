@@ -194,6 +194,25 @@ versions, flags, format IDs and response status, never signed media URLs or toke
 Successful probes do not guarantee a complete transfer and the diagnostic itself
 does not resolve source rejections. No client/proxy/cookie changes are part of this update.
 
+If initial requests succeed but normal audio downloads still fail, a separate bounded
+download check calls `YoutubeDL.download` with the stored job's format selection,
+the current worker client/provider options, and the existing extractor cache (reads
+only). It downloads one source audio file into a private temporary directory and
+removes it after success, failure or timeout. It does not encode MP3, update the job,
+consume quota, queue work or send Telegram messages:
+
+```bash
+docker compose exec -T -e DEBUG=false worker python - "$FAILED_AUDIO_JOB_ID" --download-check < scripts/diagnose_music_download.py
+```
+
+This check is limited to one attempt, 90 seconds, 32 MiB of media and 12 media requests.
+Retries are disabled; it does not change clients, cookies, proxies or token providers.
+It reports the actual ranges requested, the number of bytes received before failure,
+HTTP status and cache/challenge flags, without signed URLs or tokens. A `COMPLETE`
+result confirms source transfer in that diagnostic process only. It does not prove
+that a Celery process, audio encoding or Telegram delivery succeeded. The timestamp
+printed by the diagnostic can be compared with the stored failure's timestamp.
+
 To compare the production HTTP downloader's actual initial request (including its
 Range, headers and request extensions) with the small-range probe, use:
 
