@@ -108,7 +108,8 @@ def test_every_telegram_audio_video_attachment_uses_the_conversion_reader():
         assert declared_size == size
 
 
-def test_conversion_runtime_is_injected_without_reimporting_main():
+def test_conversion_runtime_is_injected_without_reimporting_main(monkeypatch):
+    monkeypatch.setattr(conversion, "_download_runtime", {})
     async def wait_for_download(*_args, **_kwargs):
         return {"status": "completed"}
 

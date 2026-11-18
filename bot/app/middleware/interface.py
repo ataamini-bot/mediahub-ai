@@ -65,6 +65,8 @@ class InterfaceContext(BaseMiddleware):
                 pass
         tokens = (ui_actor.set(user.id if user else None), ui_state.set(data.get("state")), ui_language.set(language))
         try:
+            from app.runtime_config import runtime_configuration
+            await runtime_configuration(language)
             return await handler(event, data)
         finally:
             ui_actor.reset(tokens[0]); ui_state.reset(tokens[1]); ui_language.reset(tokens[2])

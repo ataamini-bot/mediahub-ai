@@ -6,6 +6,7 @@ from sqlalchemy import (
     CheckConstraint,
     DateTime,
     Integer,
+    JSON,
     Numeric,
     String,
     Text,
@@ -107,6 +108,10 @@ class Plan(Base, TimestampMixin):
         Integer,
         nullable=True,
     )
+
+    # Missing tool entries inherit the operator's existing daily default.
+    # Explicit limits: 0 disabled, -1 unlimited, positive = attempts/window.
+    tool_limits: Mapped[dict] = mapped_column(JSON, default=dict, server_default=text("'{}'"), nullable=False)
 
     # The numeric limit is retained for compatibility with existing plans;
     # this field determines the window in which it is consumed.

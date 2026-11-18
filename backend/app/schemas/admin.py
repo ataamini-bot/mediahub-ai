@@ -311,6 +311,7 @@ class AdminPlanResponse(BaseModel):
     currency: str = "IRT"
     duration_days: int
     daily_download_limit: int | None
+    tool_limits: dict = Field(default_factory=dict)
     download_limit_period: Literal["daily", "weekly"] = "daily"
     max_file_size_mb: int | None
     max_quality: int | None
@@ -336,6 +337,7 @@ class AdminPlanCreate(BaseModel):
     price_usdt: Decimal | None = Field(default=None, gt=0, max_digits=12)
     duration_days: int = Field(ge=1, le=3650)
     daily_download_limit: int | None = Field(default=None, ge=0, le=1_000_000)
+    tool_limits: dict = Field(default_factory=dict)
     download_limit_period: Literal["daily", "weekly"] = "daily"
     max_file_size_mb: int = Field(ge=1, le=1900)
     max_quality: int
@@ -357,6 +359,7 @@ class AdminPlanUpdate(BaseModel):
     price_usdt: Decimal | None = Field(default=None, gt=0, max_digits=12)
     duration_days: int | None = Field(default=None, ge=1, le=3650)
     daily_download_limit: int | None = Field(default=None, ge=0, le=1_000_000)
+    tool_limits: dict | None = None
     download_limit_period: Literal["daily", "weekly"] | None = None
     max_file_size_mb: int | None = Field(default=None, ge=1, le=1900)
     max_quality: int | None = None

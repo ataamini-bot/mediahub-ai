@@ -11,6 +11,7 @@ from app.i18n import normalize_language
 from app.keyboards.admin_experience import (
     BUTTON_LABELS,
     CONTENT_LABELS,
+    TOOL_TEXT_LABELS,
     build_channel_delete_keyboard,
     build_channel_detail_keyboard,
     build_channel_language_keyboard,
@@ -60,7 +61,7 @@ router.message.filter(F.chat.type == "private")
 router.callback_query.filter(F.message.chat.type == "private")
 
 LANGUAGES = {"fa", "en"}
-SECTIONS = {"content", "buttons", "styles"}
+SECTIONS = {"content", "buttons", "styles", "tools"}
 HOME_ACTIONS = {
     "url",
     "message",
@@ -106,12 +107,12 @@ def _api_error(exc: BackendAPIError) -> str:
 def _copy_setting_key(language: str, section: str) -> str:
     if section == "layout":
         return f"bot.home_layout.{language}"
-    setting_section = "button_styles" if section == "styles" else section
+    setting_section = "tool_texts" if section == "tools" else "button_styles" if section == "styles" else section
     return f"bot.{setting_section}.{language}"
 
 
 def _copy_labels(section: str) -> dict[str, str]:
-    return CONTENT_LABELS if section == "content" else BUTTON_LABELS
+    return TOOL_TEXT_LABELS if section == "tools" else CONTENT_LABELS if section == "content" else BUTTON_LABELS
 
 
 async def _setting_row(
@@ -340,7 +341,7 @@ async def copy_language(callback: CallbackQuery, state: FSMContext) -> None:
 
 
 @router.callback_query(
-    F.data.regexp(r"^admin:copy:section:(fa|en):(content|buttons|styles)$")
+    F.data.regexp(r"^admin:copy:section:(fa|en):(content|buttons|styles|tools)$")
 )
 async def copy_section(callback: CallbackQuery, state: FSMContext) -> None:
     if not callback.data or not isinstance(callback.message, Message):
@@ -371,7 +372,7 @@ async def copy_section(callback: CallbackQuery, state: FSMContext) -> None:
     await callback.message.edit_text(
         (
             _tr("📝 <b>متن محتواها</b>\n\nیک مورد را برای ویرایش انتخاب کنید:")
-            if section == "content"
+            if section in {"content", "tools"}
             else _tr("🔘 <b>عنوان دکمه‌ها</b>\n\nیک دکمه را برای ویرایش انتخاب کنید:")
         ),
         parse_mode="HTML",
@@ -381,7 +382,7 @@ async def copy_section(callback: CallbackQuery, state: FSMContext) -> None:
 
 
 @router.callback_query(
-    F.data.regexp(r"^admin:copy:item:(fa|en):(content|buttons):[a-z_]+$")
+    F.data.regexp(r"^admin:copy:item:(fa|en):(content|buttons|tools):[a-z0-9_]+$")
 )
 async def begin_copy_edit(callback: CallbackQuery, state: FSMContext) -> None:
     if not callback.data or not isinstance(callback.message, Message):
@@ -407,7 +408,14 @@ async def begin_copy_edit(callback: CallbackQuery, state: FSMContext) -> None:
         await callback.answer(_tr("تنظیم مربوط در دیتابیس پیدا نشد."), show_alert=True)
         return
     values = row.get("value") if isinstance(row.get("value"), dict) else {}
-    current = str(values.get(item_key) or "—")
+    from app.tool_texts import TOOL_TEXTS
+    current = str(values.get(item_key) or (TOOL_TEXTS[item_key][language] if section == "tools" else "—"))
+    help_text = ""
+    if section == "tools":
+        fields = ", ".join("{" + name + "}" for name in TOOL_TEXTS[item_key]["fields"]) or "—"
+        help_text = f"\n\nمتغیرهای مجاز: {fields}\nبرای بازگشت به متن پیش‌فرض، default بفرستید."
+        help_text += ("\nبرچسب‌های HTML مانند <b> و <code> را بدون تغییر نگه دارید." if TOOL_TEXTS[item_key].get("scope") == "common" else "\nمتن ساده بنویسید.")
+
     await state.clear()
     await state.set_state(AdminExperienceStates.waiting_for_copy_value)
     await state.update_data(
@@ -417,7 +425,7 @@ async def begin_copy_edit(callback: CallbackQuery, state: FSMContext) -> None:
         copy_setting_row=row,
     )
     await callback.message.edit_text(
-        f"✏️ <b>{html.escape(labels[item_key])}{_tr('</b>\n\nمقدار فعلی:\n<code>')}{html.escape(current[:3000])}{_tr('</code>\n\nمقدار جدید را در یک پیام بفرستید.')}",
+        f"✏️ <b>{html.escape(labels[item_key])}{_tr('</b>\n\nمقدار فعلی:\n<code>')}{html.escape(current[:3000])}{_tr('</code>\n\nمقدار جدید را در یک پیام بفرستید.')}{html.escape(help_text)}",
         parse_mode="HTML",
         reply_markup=build_copy_cancel_keyboard(language, section),
     )
@@ -527,7 +535,7 @@ async def save_copy_value(message: Message, state: FSMContext) -> None:
     item_key = str(data.get("copy_item_key") or "")
     row = data.get("copy_setting_row")
     value = message.text.strip()
-    maximum = 3900 if section == "content" else 64
+    maximum = 3900 if section in {"content", "tools"} else 64
     if not value or len(value) > maximum:
         await message.answer(f"{_tr('متن باید بین ۱ تا ')}{maximum}{_tr(' نویسه باشد.')}")
         return
@@ -541,7 +549,17 @@ async def save_copy_value(message: Message, state: FSMContext) -> None:
         await message.answer(_tr("درخواست ویرایش منقضی شده است؛ دوباره از پنل وارد شوید."))
         return
     updated_values = dict(row.get("value") or {})
-    updated_values[item_key] = value
+    if section == "tools" and value == "default":
+        updated_values.pop(item_key, None)
+    else:
+        if section == "tools":
+            from app.tool_texts import validate_tool_text
+            try:
+                validate_tool_text(item_key, value)
+            except ValueError:
+                await message.answer("متن یا متغیرها معتبر نیستند؛ فقط متغیرهای نمایش‌داده‌شده مجازند.")
+                return
+        updated_values[item_key] = value
     try:
         await update_application_setting(
             actor_telegram_id=message.from_user.id,
@@ -1316,3 +1334,28 @@ async def channel_detail(callback: CallbackQuery, state: FSMContext) -> None:
         await callback.answer(_api_error(exc), show_alert=True)
     except ValueError:
         await callback.answer(_tr("کانال پیدا نشد."), show_alert=True)
+
+
+@router.callback_query(F.data.regexp(r"^admin:copy:search:(fa|en)$"))
+async def search_copy_prompt(callback: CallbackQuery, state: FSMContext):
+    if await _context(callback.from_user.id, "settings.manage") is None:
+        await callback.answer(_tr("دسترسی ندارید."), show_alert=True)
+        return
+    await state.clear()
+    await state.set_state(AdminExperienceStates.searching_copy)
+    await state.update_data(copy_language=callback.data.rsplit(":", 1)[1])
+    await callback.message.answer(_tr("بخشی از متن پیام را برای جستجو بفرستید."))
+    await callback.answer()
+
+
+@router.message(AdminExperienceStates.searching_copy, F.text)
+async def search_copy(message: Message, state: FSMContext):
+    if await _context(message.from_user.id, "settings.manage") is None:
+        await state.clear()
+        return
+    from app.tool_texts import TOOL_TEXTS
+    query = message.text.strip().casefold()
+    language = (await state.get_data()).get("copy_language", "fa")
+    keys = [key for key, entry in TOOL_TEXTS.items() if query and any(query in entry[field].casefold() for field in ("fa", "en", "label"))]
+    await message.answer(_tr("نتیجه جستجو؛ برای محدودکردن نتایج عبارت دقیق‌تری بفرستید:"),
+        reply_markup=build_copy_items_keyboard(language, "tools", keys=keys[:30]))

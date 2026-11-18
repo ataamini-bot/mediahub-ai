@@ -2,6 +2,7 @@ from aiogram.fsm.state import State, StatesGroup
 
 
 class AdminExperienceStates(StatesGroup):
+    searching_copy = State()
     waiting_for_copy_value = State()
 
     waiting_for_home_label_fa = State()

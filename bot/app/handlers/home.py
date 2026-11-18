@@ -1,6 +1,5 @@
 from app.localization import tr as _tr, localized_collection as _localized_collection
 from aiogram import F, Router
-from aiogram.filters import BaseFilter, Command
 from aiogram.fsm.context import FSMContext
 from aiogram.types import Message
 
@@ -15,39 +14,25 @@ from app.handlers.experience import (
     send_content_page,
     send_support_menu,
 )
-from app.i18n import HOME_BUTTON_ACTIONS, normalize_language, translate
+from app.i18n import normalize_language, translate
+from app.navigation import RuntimeHomeButtonFilter
 from app.keyboards.language import build_language_keyboard
 from app.keyboards.payment import build_home_reply_keyboard
 from app.services.backend import register_telegram_user
-from app.runtime_config import (
-    action_for_runtime_text,
-    all_runtime_configurations,
-    runtime_configuration,
-)
+from app.runtime_config import runtime_configuration
 
 
 router = Router(name="home")
 router.message.filter(F.chat.type == "private")
 
 
-class RuntimeHomeButtonFilter(BaseFilter):
-    async def __call__(self, message: Message) -> dict | bool:
-        text = str(message.text or "").strip()
-        if not text or text.startswith("/") or "https://" in text or "http://" in text:
-            return False
-        legacy = HOME_BUTTON_ACTIONS.get(text)
-        if legacy is not None:
-            return {"runtime_home_action": {"action": legacy}}
-        action = action_for_runtime_text(text, await all_runtime_configurations())
-        return {"runtime_home_action": action} if action is not None else False
-
-
-@router.message(Command("menu"))
 async def restore_main_menu(
     message: Message,
     state: FSMContext,
 ) -> None:
-    """Restore the persistent bottom menu from Telegram's command button."""
+    """Leave any input form and restore the persistent first-page keyboard."""
+    await cleanup_staged_state(state)
+    await state.clear()
     fallback_language = normalize_language(
         message.from_user.language_code if message.from_user else None
     )
@@ -60,8 +45,6 @@ async def restore_main_menu(
     except Exception:
         language = fallback_language
 
-    await cleanup_staged_state(state)
-    await state.clear()
     configuration = await runtime_configuration(language)
     await message.answer(
         translate(language, "home.ready"),
@@ -151,6 +134,11 @@ async def persistent_home_button(
 
     if action == "convert":
         await send_conversion_prompt(message, state)
+        return
+
+    if action == "music":
+        from app.handlers.media_tools import send_tool_prompt
+        await send_tool_prompt(message, state, action, message.from_user.id)
         return
 
     if action in {"tutorial", "faq"}:

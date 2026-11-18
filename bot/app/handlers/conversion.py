@@ -23,6 +23,7 @@ from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMar
 from app.keyboards.conversion import build_conversion_format_keyboard
 from app.keyboards.download import build_active_download_keyboard
 from app.middleware.interface import ui_language
+from app.navigation import MediaFormInputFilter
 from app.runtime_config import runtime_configuration
 from app.services.backend import (
     BackendAPIError,
@@ -100,7 +101,7 @@ def configure_download_runtime(
 def _download_runtime_function(name: str) -> DownloadRuntimeFunction:
     function = _download_runtime.get(name)
     if not callable(function):
-        raise RuntimeError("Conversion delivery runtime is not configured")
+        raise RuntimeError("Download delivery runtime is not configured")
     return function
 
 
@@ -437,6 +438,8 @@ def cleanup_staged_upload(data: dict | None) -> None:
 
     if not isinstance(data, dict):
         return
+    from app.handlers.media_tools import cleanup_tool_state
+    cleanup_tool_state(data)
     name = str(data.get("input_name") or "")
     if (
         not name
@@ -495,7 +498,7 @@ async def cancel_conversion(callback: CallbackQuery, state: FSMContext) -> None:
     await callback.answer("Cancelled." if language == "en" else "لغو شد.")
 
 
-@router.message(ConversionStates.waiting_for_media)
+@router.message(ConversionStates.waiting_for_media, MediaFormInputFilter())
 async def receive_conversion_media(message: Message, state: FSMContext) -> None:
     language = ui_language.get()
     attachment = _attachment(message)

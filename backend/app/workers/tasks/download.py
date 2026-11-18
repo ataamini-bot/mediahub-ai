@@ -2237,7 +2237,9 @@ def _build_ffmpeg_conversion_command(
     if kind == "audio":
         command.extend(["-map", "0:a:0", "-vn"])
         audio_args = {
-            "mp3": ["-c:a", "libmp3lame", "-b:a", "192k", "-f", "mp3"],
+            # MPEG-1 sample rates are required for a real 320 kbps stream;
+            # low-rate inputs otherwise make libmp3lame silently cap bitrate.
+            "mp3": ["-c:a", "libmp3lame", "-b:a", "320k", "-ar", "44100", "-f", "mp3"],
             "m4a": ["-c:a", "aac", "-b:a", "192k", "-f", "ipod"],
             "wav": ["-c:a", "pcm_s16le", "-f", "wav"],
             "aac": ["-c:a", "aac", "-b:a", "192k", "-f", "adts"],

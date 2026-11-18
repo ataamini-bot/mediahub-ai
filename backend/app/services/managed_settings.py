@@ -54,6 +54,7 @@ BUTTON_KEYS = frozenset(
         "language",
         "support",
         "convert",
+    "music",
         "tutorial",
         "faq",
         "admin",
@@ -68,6 +69,7 @@ HOME_MENU_BUTTON_KEYS = (
     "support",
     "language",
     "convert",
+    "music",
     "tutorial",
     "faq",
     "admin",
@@ -199,6 +201,14 @@ MANAGED_SETTINGS: dict[str, ManagedSetting] = {
 }
 
 
+from app.tool_texts import TOOL_TEXTS, validate_tool_text
+for _language in ("fa", "en"):
+    _key = f"bot.tool_texts.{_language}"
+    MANAGED_SETTINGS[_key] = ManagedSetting(key=_key, category="bot_content", kind="string_map",
+        default={}, label_fa=f"متن‌های آهنگ و عکس ({_language})", description_fa="پیام‌ها و دکمه‌های آهنگ و عکس",
+        allowed_keys=frozenset(TOOL_TEXTS))
+
+
 def validate_managed_setting(key: str, value: Any) -> Any:
     definition = MANAGED_SETTINGS.get(key)
     if definition is None:
@@ -242,6 +252,11 @@ def validate_managed_setting(key: str, value: Any) -> Any:
                 raise SettingValidationError("Text setting values cannot be blank")
             if len(rendered) > maximum:
                 raise SettingValidationError("Text setting value is too long")
+            if key.startswith("bot.tool_texts."):
+                try:
+                    rendered = validate_tool_text(raw_key, rendered)
+                except ValueError as exc:
+                    raise SettingValidationError(str(exc)) from None
             normalized[str(raw_key)] = rendered
         return normalized
 

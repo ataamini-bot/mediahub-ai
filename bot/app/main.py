@@ -16,7 +16,7 @@ from urllib.parse import urljoin, urlparse
 from aiogram import Bot, Dispatcher, F
 from aiogram.client.session.aiohttp import AiohttpSession
 from aiogram.client.telegram import TelegramAPIServer
-from aiogram.filters import BaseFilter, CommandStart, StateFilter
+from aiogram.filters import BaseFilter, Command, CommandStart, StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.storage.redis import RedisStorage
 from aiogram.types import (
@@ -69,6 +69,7 @@ from app.handlers.conversion import (
     router as conversion_router,
 )
 from app.handlers.home import (
+    restore_main_menu,
     router as home_router,
 )
 from app.handlers.experience import (
@@ -187,6 +188,14 @@ dp.message.outer_middleware(InterfaceContext())
 dp.callback_query.outer_middleware(InterfaceContext())
 dp.callback_query.outer_middleware(InterfaceCallbacks(dp.storage.redis))
 
+# Root handlers run before every child router, regardless of the current FSM
+# state. A command must never become a receipt, support reply or admin setting.
+dp.message.register(
+    restore_main_menu,
+    Command("menu", "منو"),
+    F.chat.type == "private",
+)
+
 dp.include_router(operations_router)
 dp.include_router(customers_router)
 dp.include_router(backups_router)
@@ -194,6 +203,8 @@ dp.include_router(broadcasts_router)
 dp.include_router(credit_router)
 dp.include_router(coupons_router)
 dp.include_router(coupon_checkout_router)
+from app.handlers.media_tools import router as media_tools_router
+dp.include_router(media_tools_router)
 dp.include_router(conversion_router)
 dp.include_router(
     experience_router
@@ -3034,20 +3045,32 @@ async def send_downloaded_file(
                 if ui_language.get() == "en" else "\n\nاگر ویدئو پخش نشد، «نسخهٔ سازگار» را بزنید."
             )
         upload_started = time.monotonic()
-        await message.answer_document(
-            document=FSInputFile(str(path), filename=filename),
-            disable_content_type_detection=True,
-            caption=caption,
-            parse_mode="HTML",
-            reply_markup=build_completed_download_keyboard(job_id,
+        markup = build_completed_download_keyboard(job_id,
                 media_type=str(job.get("media_type") or "video"),
                 compatible=compatible,
-                source_media_type="image" if job.get("media_type") == "image" else _source_media_type(media_info)),
-        )
+                source_media_type="image" if job.get("media_type") == "image" else _source_media_type(media_info))
+        music = (media_info or {}).get("music")
+        if music:
+            from app.music_presentation import music_file_presentation
+            caption, markup = music_file_presentation(music, job_id)
+        if music and path.suffix.lower() in {".mp3", ".m4a"}:
+            await message.answer_audio(
+                audio=FSInputFile(str(path), filename=filename), title=music["title"][:128],
+                performer=music["artist"][:128], duration=int((media_info or {}).get("duration") or 0),
+                caption=caption, parse_mode="HTML", reply_markup=markup)
+        else:
+            await message.answer_document(
+                document=FSInputFile(str(path), filename=filename), disable_content_type_detection=True,
+                caption=caption, parse_mode="HTML", reply_markup=markup)
         print(f"Telegram media sent: job={job_id}, bytes={file_size}, elapsed_s={time.monotonic()-upload_started:.2f}")
         # Remove the bytes immediately after Telegram accepts the file, even
         # when delivery accounting is temporarily unreachable.
         unlink_output()
+        if music:
+            try:
+                await status_message.delete()
+            except Exception:
+                pass
         for attempt in range(3):
             try:
                 await mark_download_delivered(job_id)
@@ -5648,6 +5671,16 @@ async def main():
         raise RuntimeError(
             "TELEGRAM_BOT_TOKEN is not configured."
         )
+
+    # The music and conversion routers use these helpers without importing this
+    # entrypoint again when launched as ``python -m app.main``. Wire them before
+    # polling can accept any request, including after a process restart.
+    configure_download_runtime(
+        wait_for_download=wait_for_download,
+        send_downloaded_file=send_downloaded_file,
+        download_error_text=download_error_text,
+        download_error_markup=download_error_markup,
+    )
 
     api = (
         TelegramAPIServer.from_base(

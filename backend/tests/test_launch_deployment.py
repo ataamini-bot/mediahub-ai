@@ -76,6 +76,11 @@ if name == "docker":
             for service in ("backend", "bot", "worker", "monitor", "backup")
         }}))
     if args[:2] == ["compose", "exec"] and "postgres" in args:
+        if any("psql -X -q -v ON_ERROR_STOP=1" in arg for arg in args):
+            sql = sys.stdin.read()
+            assert "media_tool_requests" in sql and "to_regclass" in sql
+            stopped = ["docker", "compose", "stop", "bot"] in state["calls"]
+            done(code=1 if state.get("busy_tools") or (state.get("busy_tools_after_stop") and stopped) else 0)
         state["job_checks"] = state.get("job_checks", 0) + 1
         done("1" if state.get("busy_after_stop") and state["job_checks"] == 3 else "0")
     if args[:2] == ["compose", "exec"] and "backup" in args:
@@ -174,6 +179,16 @@ def test_job_arriving_after_bot_stop_does_not_restart_active_worker(tmp_path):
                 (["docker", "compose", "up"], ["docker", "compose", "start"])]
     assert restarts == [["docker", "compose", "start", "bot"]]
     assert not any("alembic" in c for c in state["calls"])
+
+
+@pytest.mark.parametrize("after_stop", [False, True])
+def test_paid_tool_in_progress_prevents_worker_interruption(tmp_path, after_stop):
+    result, state = deploy(tmp_path, **{"busy_tools_after_stop" if after_stop else "busy_tools": True})
+    assert result.returncode != 0
+    assert not any("alembic" in c for c in state["calls"])
+    assert not any(c[:3] == ["docker", "compose", "stop"] and "worker" in c for c in state["calls"])
+    if after_stop:
+        assert ["docker", "compose", "start", "bot"] in state["calls"]
 
 
 def test_build_failure_keeps_existing_services_running(tmp_path):

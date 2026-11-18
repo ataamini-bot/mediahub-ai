@@ -107,6 +107,34 @@ async def test_concurrent_ticket_limit_and_owner_isolation(records):
         await session.rollback()
 
 
+async def test_new_ticket_and_user_reply_return_current_private_recipients(records):
+    from app.api.experience import create_support_ticket, user_reply_support_ticket, get_user_support_ticket
+    from app.models.admin import AdminAccount
+    from app.schemas.experience import SupportTicketCreate, SupportUserReplyCreate, SupportTicketResponse
+    admin, customer = records.users
+    async with AsyncSessionLocal() as session:
+        account = AdminAccount(user_id=admin.id, is_active=True, is_superadmin=True)
+        session.add(account)
+        await session.commit()
+        ticket = await create_support_ticket(SupportTicketCreate(
+            telegram_id=customer.telegram_id, category="download", body="Need help"), db=session)
+        assert admin.telegram_id in ticket["recipients"]
+        # JSON object keys become strings at the HTTP boundary.
+        wire = SupportTicketResponse.model_validate(ticket).model_dump(mode="json")
+        assert wire["recipient_languages"][str(admin.telegram_id)] == "en"
+        reply = await user_reply_support_ticket(ticket["id"], SupportUserReplyCreate(
+            telegram_id=customer.telegram_id, body="Additional details"), db=session)
+        assert admin.telegram_id in reply["recipients"]
+        assert reply["messages"][-1]["body"] == "Additional details"
+        detail = await get_user_support_ticket(ticket["id"], telegram_id=customer.telegram_id, db=session)
+        assert detail["recipients"] == [] and detail["recipient_languages"] == {}
+        account.is_active = False
+        await session.commit()
+        reply = await user_reply_support_ticket(ticket["id"], SupportUserReplyCreate(
+            telegram_id=customer.telegram_id, body="After recipient was deactivated"), db=session)
+        assert admin.telegram_id not in reply["recipients"]
+
+
 async def test_downgrade_waits_and_renewal_preserves_future_purchase(records):
     user = records.users[0]; basic, premium = records.plans
     async with AsyncSessionLocal() as session:

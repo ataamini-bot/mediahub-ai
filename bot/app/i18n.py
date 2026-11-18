@@ -19,6 +19,7 @@ MESSAGES: dict[str, dict[str, str]] = {
         "home.language": "🌐 تغییر زبان | Language",
         "home.support": "🛟 پشتیبانی",
         "home.convert": "🔄 تبدیل فایل",
+        "home.music": "🎵 تشخیص آهنگ",
         "home.tutorial": "📘 آموزش استفاده",
         "home.faq": "❓ سوالات متداول",
         "home.admin": "⚙️ پنل مدیریت",
@@ -40,6 +41,7 @@ MESSAGES: dict[str, dict[str, str]] = {
         "home.language": "🌐 Language",
         "home.support": "🛟 Support",
         "home.convert": "🔄 Convert media",
+        "home.music": "🎵 Identify music",
         "home.tutorial": "📘 How to use",
         "home.faq": "❓ FAQ",
         "home.admin": "⚙️ Admin panel",
@@ -64,6 +66,8 @@ def translate(language: str | None, key: str, **values: Any) -> str:
     if template is None:
         template = MESSAGES[DEFAULT_LANGUAGE].get(key, key)
 
+    from app.tool_texts import authored_copy
+    template = authored_copy(None, normalized, template, key="i18n_" + key.replace(".", "_"))
     return template.format(**values)
 
 
@@ -73,6 +77,7 @@ HOME_ACTION_KEYS: dict[str, str] = {
     "home.language": "language",
     "home.support": "support",
     "home.convert": "convert",
+    "home.music": "music",
     "home.tutorial": "tutorial",
     "home.faq": "faq",
     "home.admin": "admin",
