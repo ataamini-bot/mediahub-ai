@@ -4,12 +4,15 @@ Run: python - JOB_ID [PREVIOUSLY_SUCCESSFUL_JOB_ID] < this_file.py
 Or:  python - --latest --stored-only < this_file.py
 Or:  python - --latest --transfer-check < this_file.py
 Or:  python - JOB_ID --download-check < this_file.py
+Or:  python - JOB_ID --formats-check < this_file.py
 Transfer check inspects only the newest failed music download (or latest if none
 failed), reading at most 1 KiB using each of two request styles per audio format.
 Download check uses the real download entrypoint in a private temporary directory:
 one attempt, up to 32 MiB/90 seconds, then removes every temporary file. It reads
 the worker's existing extractor cache but never writes to it. No conversion,
 queue changes, Telegram sends, recognition calls, or raw URLs in any mode.
+Formats check compares raw metadata with the existing read-only cache and with
+cache disabled. At most two extractions/90 seconds; no media download or writes.
 """
 from datetime import datetime, timezone
 import json
@@ -110,6 +113,14 @@ class DiagnosticLogger:
             self.flags.add("JS_CHALLENGE_SOLVER_USED")
         if "larger than max-filesize" in message:
             self.flags.add("FILE_SIZE_LIMIT")
+        if "only images are available" in message:
+            self.flags.add("ONLY_IMAGES")
+        if "missing a url" in message or "missing url" in message:
+            self.flags.add("FORMATS_MISSING_URL")
+        if "sabr" in message:
+            self.flags.add("SABR_REPORTED")
+        if "signature" in message and ("failed" in message or "unable" in message):
+            self.flags.add("SIGNATURE_FAILED")
 
     warning = error = debug
 
@@ -360,6 +371,74 @@ def inspect_download(job):
         signal.signal(signal.SIGALRM, previous)
 
 
+def format_inventory(info):
+    """Only aggregate counts; no titles, media URLs, headers or identifiers."""
+    formats = list((info or {}).get("formats") or [])
+    usable = [f for f in formats if f.get("url") and not f.get("has_drm")]
+    audio = lambda f: f.get("acodec") not in (None, "none")
+    video = lambda f: f.get("vcodec") not in (None, "none")
+    return {"total": len(formats), "with_url": sum(bool(f.get("url")) for f in formats),
+            "drm": sum(bool(f.get("has_drm")) for f in formats),
+            "audio_only": sum(audio(f) and f.get("vcodec") == "none" for f in usable),
+            "combined": sum(audio(f) and video(f) for f in usable),
+            "video_only": sum(video(f) and f.get("acodec") == "none" for f in usable),
+            "images": sum(f.get("protocol") == "mhtml" for f in formats)}
+
+
+def inspect_formats(job):
+    from yt_dlp import YoutubeDL
+    from app.services.media_tool_links import normalize_music_link
+    from app.workers.tasks.download import _get_format_selector, _get_yt_dlp_options
+    if job["status"] not in {"FAILED", "COMPLETED"}:
+        emit("FORMATS_CHECK", {"job": job["id"], "result": "JOB_NOT_TERMINAL"})
+        return
+    url = normalize_music_link(job["source_url"])
+    if urlsplit(url).hostname not in {"youtube.com", "www.youtube.com", "m.youtube.com", "music.youtube.com", "youtu.be"}:
+        emit("FORMATS_CHECK", {"job": job["id"], "result": "NOT_YOUTUBE"})
+        return
+    if job.get("playlist_index") is not None:
+        emit("FORMATS_CHECK", {"job": job["id"], "result": "PLAYLIST_NOT_SUPPORTED"})
+        return
+    previous = signal.getsignal(signal.SIGALRM)
+    def stop(*_):
+        raise DownloadCheckStopped("TIMEOUT")
+    signal.signal(signal.SIGALRM, stop)
+    signal.alarm(90)
+    try:
+        for cache in ("worker_read_only", "disabled"):
+            logger = DiagnosticLogger()
+            row = {"job": job["id"], "cache": cache,
+                   "explicit_format": bool(job.get("format_id"))}
+            options = _get_yt_dlp_options(url, format=_get_format_selector(
+                url, job.get("format_id"), job.get("quality"), "audio"),
+                skip_download=True, ignore_no_formats_error=True, noplaylist=True,
+                logger=logger, verbose=True, quiet=True, socket_timeout=12,
+                retries=0, fragment_retries=0, extractor_retries=0)
+            if cache == "disabled":
+                options["cachedir"] = False
+            try:
+                with YoutubeDL(options) as downloader:
+                    downloader.cache.store = lambda *_args, **_kwargs: None
+                    # Stop before format selection so an audio-only selector
+                    # cannot hide available combined audio/video formats.
+                    info = downloader.extract_info(url, download=False, process=False)
+                if not isinstance(info, dict) or info.get("_type", "video") != "video":
+                    row["result"] = "UNEXPECTED_METADATA"
+                else:
+                    row.update(result="EXTRACTED", **format_inventory(info))
+            except DownloadCheckStopped as error:
+                row["result"] = str(error)
+            except Exception as error:
+                row["result"] = safe_reason(error)
+            row["flags"] = sorted(logger.flags)
+            emit("FORMATS_CHECK", row)
+            if row["result"] in {"HTTP_429", "HTTP_401", "LOGIN_REQUIRED", "TIMEOUT", "UNEXPECTED_METADATA"}:
+                break
+    finally:
+        signal.alarm(0)
+        signal.signal(signal.SIGALRM, previous)
+
+
 def main():
     from sqlalchemy import text
     from app.db.worker_session import WorkerSessionLocal
@@ -368,15 +447,16 @@ def main():
     stored_only = "--stored-only" in args
     transfer_check = "--transfer-check" in args
     full_check = "--download-check" in args
-    args = [arg for arg in args if arg not in {"--stored-only", "--transfer-check", "--download-check"}]
+    formats_check = "--formats-check" in args
+    args = [arg for arg in args if arg not in {"--stored-only", "--transfer-check", "--download-check", "--formats-check"}]
     latest = args == ["--latest"]
-    if (sum((stored_only, transfer_check, full_check)) > 1
-            or (full_check and (latest or len(args) != 1))
+    if (sum((stored_only, transfer_check, full_check, formats_check)) > 1
+            or ((full_check or formats_check) and (latest or len(args) != 1))
             or (transfer_check and not latest and len(args) != 1)
             or (not latest and (not 1 <= len(args) <= 2 or any(not arg.isdecimal() for arg in args)))):
-        raise SystemExit("Usage: python - JOB_ID [CONTROL_JOB_ID] | --latest [--stored-only | --transfer-check] | JOB_ID --download-check")
+        raise SystemExit("Usage: python - JOB_ID [CONTROL_JOB_ID] | --latest [--stored-only | --transfer-check] | JOB_ID [--download-check | --formats-check]")
     emit("DIAGNOSTIC", {"utc": datetime.now(timezone.utc).isoformat(),
-                        "mode": "download_check" if full_check else "stored_only" if stored_only else "transfer_check" if transfer_check else "probe"})
+                        "mode": "formats_check" if formats_check else "download_check" if full_check else "stored_only" if stored_only else "transfer_check" if transfer_check else "probe"})
     versions = {}
     for package in ("yt-dlp", "yt-dlp-ejs", "bgutil-ytdlp-pot-provider"):
         try:
@@ -409,6 +489,9 @@ def main():
     if stored_only or not found:
         return
     emit("YOUTUBE_PROVIDER", provider_health())
+    if formats_check:
+        inspect_formats(found[0])
+        return
     if full_check:
         inspect_download(found[0])
         return

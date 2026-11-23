@@ -236,6 +236,22 @@ the previous small byte range against the same signed URL. Both use the same cli
 and session. Different results identify a request-dependent rejection, while a new
 successful probe still cannot establish why an earlier transfer failed.
 
+For `NO_FORMATS`, compare the raw format inventory before an audio-only selector
+is applied:
+
+```bash
+docker compose exec -T -e DEBUG=false worker python - "$FAILED_AUDIO_JOB_ID" --formats-check < scripts/diagnose_music_download.py
+```
+
+This makes at most two metadata extractions within 90 seconds, first reading the
+existing worker cache and then with cache disabled. It reports only aggregate counts
+of audio-only, combined, video-only, image and DRM formats plus diagnostic flags.
+It never writes extractor cache, downloads media, changes the job or sends a message.
+The comparison stops on authentication, rate limits or timeouts. Because the two
+responses are sequential, a difference is evidence to investigate, not proof that
+the cache caused the original failure. Missing audio-only formats with combined
+formats still available is different from an extraction returning only images.
+
 
 ## Plan quotas and editable messages
 
