@@ -19,7 +19,7 @@ diagnostic = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(diagnostic)
 
 
-@pytest.mark.parametrize("outcome", ["complete", "initial_403", "later_403", "byte_limit", "timeout", "large_file", "hls"])
+@pytest.mark.parametrize("outcome", ["complete", "combined", "initial_403", "later_403", "byte_limit", "timeout", "large_file", "hls"])
 def test_actual_download_is_bounded_observed_and_cleaned(monkeypatch, tmp_path, outcome):
     source = b"abcdefghijkl"
     created, responses, calls, parameters = [], [], [], []
@@ -41,7 +41,7 @@ def test_actual_download_is_bounded_observed_and_cleaned(monkeypatch, tmp_path, 
             assert self._downloader.cache.load("youtube-sigfuncs", "example") == {"existing": "signature"}
             self._downloader.cache.store("youtube-sigfuncs", "example", {"new": "signature"})
             return {"id": "AAAAAAAAAAA", "title": "Synthetic track", "formats": [{
-                "format_id": "140", "ext": "m4a", "vcodec": "none", "acodec": "mp4a.40.2",
+                "format_id": "140", "ext": "m4a", "vcodec": "h264" if outcome == "combined" else "none", "acodec": "mp4a.40.2",
                 "filesize": len(source) if outcome == "large_file" else None,
                 "protocol": "m3u8_native" if outcome == "hls" else "https",
                 "url": "https://r1.googlevideo.com/videoplayback?itag=140&pot=private-token",
@@ -84,7 +84,7 @@ def test_actual_download_is_bounded_observed_and_cleaned(monkeypatch, tmp_path, 
 
     monkeypatch.setattr(yt_dlp, "YoutubeDL", factory)
     monkeypatch.setattr(diagnostic.tempfile, "TemporaryDirectory", temporary)
-    result = diagnostic.download_check("https://www.youtube.com/watch?v=AAAAAAAAAAA", {"format": "bestaudio"})
+    result = diagnostic.download_check("https://www.youtube.com/watch?v=AAAAAAAAAAA", {"format": "bestaudio/best"})
 
     assert result["temporary_files"] == "REMOVED"
     assert created and all(not p.exists() for p in created)
@@ -96,8 +96,9 @@ def test_actual_download_is_bounded_observed_and_cleaned(monkeypatch, tmp_path, 
     assert all(secret not in str(result) for secret in ("googlevideo", "private-token", "secret upstream", "AAAAAAAAAAA", str(tmp_path)))
     assert all(response.closed for response in responses)
     assert len(result["requests"]) == len(calls)
-    if outcome == "complete":
+    if outcome in {"complete", "combined"}:
         assert result["result"] == "COMPLETE"
+        assert result["source_kind"] == ("audio_video" if outcome == "combined" else "audio_only")
         assert result["file_bytes"] == result["bytes_read"] == len(source)
         assert [r["range"] for r in result["requests"]] == ["bytes=0-3", "bytes=4-7", "bytes=8-11"]
     elif "403" in outcome:

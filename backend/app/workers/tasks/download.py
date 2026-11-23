@@ -3176,6 +3176,8 @@ def _get_format_selector(
     quality: str | None,
     media_type: str | None,
     playlist_index: int | None = None,
+    *,
+    allow_combined_audio: bool = False,
 ) -> str | Callable:
 
     if _is_instagram_url(source_url) and not format_id and media_type != "audio":
@@ -3202,6 +3204,10 @@ def _get_format_selector(
             source_url
         ):
 
+            # Some public player responses offer only a combined video/audio
+            # stream. Keep audio-only preferred, then extract audio from that
+            # same full source instead of failing format selection. Never use
+            # video-only streams or storyboards as audio.
             return (
                 "bestaudio"
                 "[ext=m4a]"
@@ -3211,6 +3217,7 @@ def _get_format_selector(
                 "[ext=m4a]"
                 "/"
                 "bestaudio"
+                + ("/best[vcodec!=none][acodec!=none]" if allow_combined_audio else "")
             )
 
         return (
@@ -4361,6 +4368,7 @@ def download_task(
                         playlist_index=(
                             playlist_index
                         ),
+                        allow_combined_audio=output_format_kind(output_format) == "audio",
                     )
                 )
 

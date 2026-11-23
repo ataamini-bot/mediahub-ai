@@ -15,6 +15,7 @@ Formats check compares raw metadata with the existing read-only cache and with
 cache disabled. At most two extractions/90 seconds; no media download or writes.
 """
 from datetime import datetime, timezone
+import inspect
 import json
 from pathlib import Path
 import re
@@ -289,12 +290,13 @@ def download_check(url, options):
     from yt_dlp import YoutubeDL
     from yt_dlp.postprocessor.common import PostProcessor
 
-    class DirectAudioOnly(PostProcessor):
+    class DirectAudibleSource(PostProcessor):
         def run(self, info):
             parts = urlsplit(info.get("url") or "")
-            if (info.get("protocol") != "https" or info.get("vcodec") != "none"
+            if (info.get("protocol") != "https" or info.get("acodec") in (None, "none")
                     or parts.scheme != "https" or not (parts.hostname or "").endswith(".googlevideo.com")):
                 raise DownloadCheckStopped("NOT_DIRECT_HTTPS_AUDIO")
+            result["source_kind"] = "audio_only" if info.get("vcodec") == "none" else "audio_video"
             return [], info
 
     trace = DownloadTrace()
@@ -317,7 +319,7 @@ def download_check(url, options):
                       "skip_download": False, "fixup": "never", "max_filesize": trace.limit,
                       "socket_timeout": 15, "retries": 0, "fragment_retries": 0, "extractor_retries": 0}
             with YoutubeDL(params) as downloader:
-                downloader.add_post_processor(DirectAudioOnly(), when="before_dl")
+                downloader.add_post_processor(DirectAudibleSource(), when="before_dl")
                 # Preserve the real cache's reads without creating/removing entries.
                 downloader.cache.store = lambda *_args, **_kwargs: None
                 opener = downloader.urlopen
@@ -354,8 +356,12 @@ def inspect_download(job):
     if urlsplit(url).hostname not in {"youtube.com", "www.youtube.com", "m.youtube.com", "music.youtube.com", "youtu.be"}:
         emit("DOWNLOAD_CHECK", {"job": job["id"], "result": "NOT_YOUTUBE"})
         return
+    selector_options = {}
+    # The diagnostic may be fetched before deploying its matching worker image.
+    if "allow_combined_audio" in inspect.signature(_get_format_selector).parameters:
+        selector_options["allow_combined_audio"] = bool(job.get("output_format"))
     options = _get_yt_dlp_options(url, format=_get_format_selector(
-        url, job.get("format_id"), job.get("quality"), "audio", job.get("playlist_index")))
+        url, job.get("format_id"), job.get("quality"), "audio", job.get("playlist_index"), **selector_options))
     if job.get("playlist_index") is not None:
         emit("DOWNLOAD_CHECK", {"job": job["id"], "result": "PLAYLIST_NOT_SUPPORTED"})
         return

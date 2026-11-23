@@ -79,6 +79,13 @@ messages, GitHub, or logs.
    is never used as song duration.
 5. The ordinary downloader fetches **that independent full-track source**. Normal download
    quotas and file-size limits apply; the stored link is included in admin activity exports.
+   Audio-only formats remain preferred. For a requested audio output format such as MP3,
+   if YouTube exposes only a combined video/audio format, the downloader uses that
+   format from the same full-track source and converts
+   its audio to the requested output. It does not fall back to the submitted clip, select
+   a different song, or accept a video-only stream. The combined source can be larger,
+   so normal transfer-size limits still apply. This fallback does not resolve HTTP 403
+   or responses that contain no accessible audible format.
 
 MP3 outputs are encoded at 320 kbps and 44.1 kHz, including low-sample-rate inputs that
 would otherwise make the encoder silently use a lower bitrate. This does **not** turn a
@@ -205,7 +212,7 @@ does not resolve source rejections. No client/proxy/cookie changes are part of t
 If initial requests succeed but normal audio downloads still fail, a separate bounded
 download check calls `YoutubeDL.download` with the stored job's format selection,
 the current worker client/provider options, and the existing extractor cache (reads
-only). It downloads one source audio file into a private temporary directory and
+only). It downloads one source file containing audio into a private temporary directory and
 removes it after success, failure or timeout. It does not encode MP3, update the job,
 consume quota, queue work or send Telegram messages:
 
@@ -216,7 +223,8 @@ docker compose exec -T -e DEBUG=false worker python - "$FAILED_AUDIO_JOB_ID" --d
 This check is limited to one attempt, 90 seconds, 32 MiB of media and 12 media requests.
 Retries are disabled; it does not change clients, cookies, proxies or token providers.
 It reports the actual ranges requested, the number of bytes received before failure,
-HTTP status and cache/challenge flags, without signed URLs or tokens. A `COMPLETE`
+HTTP status and cache/challenge flags, without signed URLs or tokens. It identifies
+`source_kind=audio_only` or `audio_video` for a combined fallback. A `COMPLETE`
 result confirms source transfer in that diagnostic process only. It does not prove
 that a Celery process, audio encoding or Telegram delivery succeeded. The timestamp
 printed by the diagnostic can be compared with the stored failure's timestamp.
