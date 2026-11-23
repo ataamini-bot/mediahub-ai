@@ -8,6 +8,7 @@ from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit
 
 from app.services.media_tool_providers import ToolError
+from app.services.instagram_access import InstagramRateLimited, check_instagram_access, media_downloader
 
 LINK_HOSTS = {
     "youtube.com", "www.youtube.com", "m.youtube.com", "music.youtube.com", "youtu.be",
@@ -34,6 +35,10 @@ def fetch_music_link(url, target, *, timeout=120, seconds=12):
     if seconds not in (12, 36):
         raise ValueError("Unsupported recognition sample length")
     url = normalize_music_link(url)
+    try:
+        check_instagram_access(url)
+    except InstagramRateLimited:
+        raise ToolError("instagram_rate_limited") from None
     target.parent.mkdir(parents=True, mode=0o700, exist_ok=True)
     if target.is_symlink() or target.exists():
         raise ToolError("input_expired")
@@ -56,6 +61,9 @@ def fetch_music_link(url, target, *, timeout=120, seconds=12):
         for path in target.parent.glob("link-source.*"):
             if path.is_file() or path.is_symlink():
                 path.unlink(missing_ok=True)
+    if code == 75:
+        target.unlink(missing_ok=True)
+        raise ToolError("instagram_rate_limited")
     if code or not target.is_file() or target.is_symlink() or not 0 < target.stat().st_size < MAX_SAMPLE_BYTES:
         target.unlink(missing_ok=True)
         raise ToolError("link_unavailable")
@@ -64,7 +72,6 @@ def fetch_music_link(url, target, *, timeout=120, seconds=12):
 
 def download_link_sample(url, target, *, seconds=12):
     """Child process: first media item, bounded audio for recognition windows."""
-    from yt_dlp import YoutubeDL
     from yt_dlp.utils import download_range_func
     from app.services.download import _get_media_info_options
     from app.services.media_tool_providers import QuietLogger
@@ -89,7 +96,7 @@ def download_link_sample(url, target, *, seconds=12):
         socket_timeout=12, retries=0, fragment_retries=0, extractor_retries=0,
         cachedir=False, nopart=True, fixup="never", logger=QuietLogger(),
     )
-    with YoutubeDL(options) as downloader:
+    with media_downloader(url, options) as downloader:
         downloader.extract_info(url, download=True)
     files = [path for path in target.parent.glob("link-source.*")
              if path.is_file() and not path.is_symlink() and path.suffix not in {".part", ".ytdl", ".temp"}]
@@ -101,6 +108,8 @@ def download_link_sample(url, target, *, seconds=12):
 if __name__ == "__main__":
     try:
         download_link_sample(sys.argv[1], Path(sys.argv[2]), seconds=int(sys.argv[3]) if len(sys.argv) > 3 else 12)
+    except InstagramRateLimited:
+        sys.exit(75)
     except Exception:
         # Parent maps this to a fixed user-visible error, without upstream
         # URLs, cookies, headers, or provider secrets in process output.

@@ -18,6 +18,7 @@ from sqlalchemy import select
 
 from app.db.worker_session import WorkerSessionLocal
 from app.services.instagram_formats import instagram_video_choices
+from app.services.instagram_access import media_downloader, rate_limit_error
 from app.models.download_job import (
     DownloadJob,
     DownloadJobStatus,
@@ -605,8 +606,8 @@ def _extract_instagram_image(
         "ignore_no_formats_error": True,
     }
 
-    with yt_dlp.YoutubeDL(
-        options
+    with media_downloader(
+        source_url, options
     ) as ydl:
 
         raw_info = ydl.extract_info(
@@ -2775,8 +2776,8 @@ def _get_non_youtube_format_selector(
             playlist_index
         )
 
-    with yt_dlp.YoutubeDL(
-        ydl_options
+    with media_downloader(
+        source_url, ydl_options
     ) as ydl:
 
         info = ydl.extract_info(
@@ -3238,8 +3239,8 @@ def _get_format_selector(
             )
         )
 
-        with yt_dlp.YoutubeDL(
-            ydl_options
+        with media_downloader(
+            source_url, ydl_options
         ) as ydl:
 
             info = ydl.extract_info(
@@ -4461,8 +4462,8 @@ def download_task(
             )
 
             download_started = time.monotonic()
-            with yt_dlp.YoutubeDL(
-                ydl_options
+            with media_downloader(
+                source_url, ydl_options
             ) as ydl:
 
                 ydl.download(
@@ -4618,9 +4619,10 @@ def download_task(
 
     except Exception as exc:
 
+        limited = rate_limit_error(exc, source_url)
         error_message = (
             str(
-                exc
+                limited or exc
             )
         )
 
@@ -4677,7 +4679,8 @@ def download_task(
         # ====================================================
 
         if (
-            self.request.retries
+            limited is None
+            and self.request.retries
             < self.max_retries
         ):
             countdown = min(

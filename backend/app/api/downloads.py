@@ -39,6 +39,7 @@ from app.services.download_access import (
     DownloadAccessError,
     DownloadAccessService,
 )
+from app.services.instagram_access import InstagramRateLimited
 from app.models.download_job import (
     DownloadJob,
     DownloadJobStatus,
@@ -119,6 +120,9 @@ async def create_download(
             playlist_index=data.playlist_index,
             estimated_size_bytes=data.estimated_size_bytes,
         )
+    except InstagramRateLimited as exc:
+        raise HTTPException(status_code=503, detail=exc.detail(),
+                            headers={"Retry-After": str(exc.retry_after)}) from exc
     except DownloadAccessError as exc:
         raise HTTPException(
             status_code=exc.status_code,
@@ -194,6 +198,10 @@ async def get_media_info(
         )
 
         return media_info
+
+    except InstagramRateLimited as exc:
+        raise HTTPException(status_code=503, detail=exc.detail(),
+                            headers={"Retry-After": str(exc.retry_after)}) from exc
 
     except PublicOperationDisabled as exc:
 

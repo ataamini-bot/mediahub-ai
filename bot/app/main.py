@@ -281,6 +281,10 @@ class DownloadMessageFilter(
 
 
 def download_error_text(exc: Exception) -> str:
+    code = exc.detail.get("code") if isinstance(exc, BackendAPIError) and isinstance(exc.detail, dict) else str(exc)
+    if code == "instagram_rate_limited":
+        from app.tool_texts import tool_text
+        return tool_text("error_instagram_rate_limited")
     if not isinstance(exc, BackendAPIError) or not isinstance(exc.detail, dict):
         return str(exc)[:1000]
 

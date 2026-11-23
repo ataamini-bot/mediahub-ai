@@ -1,4 +1,5 @@
 """Admission, ownership and retention for bounded external tool attempts."""
+import asyncio
 from datetime import datetime, timedelta, timezone
 import re
 from uuid import UUID
@@ -10,6 +11,7 @@ from app.models.user import User, UserStatus
 from app.services.managed_settings import ensure_public_operation, get_managed_setting
 from app.services.media_tool_config import read_config, provider_configured
 from app.services.media_tool_files import folder, input_file, remove_files, root
+from app.services.instagram_access import InstagramRateLimited, check_instagram_access
 
 
 class MediaToolError(RuntimeError):
@@ -65,6 +67,11 @@ async def submit(db, data):
     config = await read_config(db, data.kind)
     if not config["enabled"] or not provider_configured(config):
         raise MediaToolError("tool_disabled", 503)
+    if options.get("source_url"):
+        try:
+            await asyncio.to_thread(check_instagram_access, options["source_url"])
+        except InstagramRateLimited:
+            raise MediaToolError("instagram_rate_limited", 503) from None
     from app.services.download_access import quota_day_start_utc, quota_window_start_utc
     timezone_name = await get_managed_setting(db, "quota.timezone")
     midnight = quota_day_start_utc(timezone_name=timezone_name)

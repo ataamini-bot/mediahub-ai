@@ -1,4 +1,13 @@
 {
+  "error_instagram_rate_limited": {
+    "label": "محدودیت موقت دریافت از اینستاگرام",
+    "fa": "اینستاگرام دریافت محتوا را برای ربات موقتاً محدود کرده است. لطفاً کمی بعد دوباره تلاش کنید. دانلود از سایر سایت‌ها و شناسایی آهنگ از فایل یا ویس همچنان در دسترس است.",
+    "en": "Instagram is temporarily limiting the bot's access. Please try again later. Downloads from other sites and music recognition from uploaded files or voice messages remain available.",
+    "fields": [],
+    "maximum": 1000,
+    "html": false,
+    "scope": "common"
+  },
   "b_identify_a_song_and": {
     "label": "🎵 تشخیص آهنگ و دریافت نسخه کامل",
     "fa": "🎵 آهنگ این کلیپ چیه؟\n\nیکی از این‌ها را بفرست:\n🔗 لینک ویدئو\n🎬 کلیپ یا فایل آهنگ\n🎙 ویس با حداقل ۱۰ ثانیه موسیقی واضح\n\nبعد از شناسایی، می‌توانی نسخهٔ کامل آهنگ را با فرمت دلخواه دریافت کنی.",

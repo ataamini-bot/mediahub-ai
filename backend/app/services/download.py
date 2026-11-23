@@ -1,3 +1,4 @@
+import asyncio
 import json
 import subprocess
 from datetime import datetime, timezone
@@ -37,6 +38,7 @@ from app.services.media_formats import (
     output_format_kind,
 )
 from app.services.instagram_formats import instagram_video_choices
+from app.services.instagram_access import InstagramRateLimited, check_instagram_access, media_downloader
 from app.workers.tasks.download import (
     cleanup_paused_download,
     download_task,
@@ -1552,7 +1554,7 @@ def _get_instagram_raw_info(source_url: str) -> dict[str, Any] | None:
         "noplaylist": False, "socket_timeout": 15, "ignore_no_formats_error": True,
     }
     try:
-        with yt_dlp.YoutubeDL(options) as ydl:
+        with media_downloader(source_url, options) as ydl:
             raw_info = ydl.extract_info(source_url, download=False, process=False)
             if not isinstance(raw_info, dict):
                 return None
@@ -1560,6 +1562,8 @@ def _get_instagram_raw_info(source_url: str) -> dict[str, Any] | None:
                 # Gallery detection and quality selection both consume these entries.
                 raw_info["entries"] = list(raw_info.get("entries") or [])
         return raw_info
+    except InstagramRateLimited:
+        raise
     except Exception as exc:
         print(f"Instagram raw extraction failed: {type(exc).__name__}")
         return None
@@ -2649,6 +2653,8 @@ class DownloadService:
             if normalized_media_type == "video" and target_kind != "video":
                 raise DownloadFormatError("Video jobs require a video output format")
 
+        await asyncio.to_thread(check_instagram_access, source_url)
+
         entitlement = await DownloadAccessService(
             self.session
         ).authorize_job(
@@ -3444,8 +3450,8 @@ class DownloadService:
             )
         )
 
-        with yt_dlp.YoutubeDL(
-            options
+        with media_downloader(
+            source_url, options
         ) as ydl:
             if instagram_raw is not None:
                 info = ydl.process_ie_result(instagram_raw, download=False)
