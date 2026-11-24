@@ -5,6 +5,7 @@ import math
 import re
 import subprocess
 import unicodedata
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import httpx
@@ -161,6 +162,7 @@ def automatic_song_candidate(track, candidates):
     comparable durations are interchangeable; conflicting durations need choice.
     This is metadata matching, not a claim that an upload is a verified master.
     """
+    from app.services.music_source_catalog import is_public_candidate
     expected = track_duration(track.get("duration"))
     wanted, artist = words(track.get("title", "")), words(track.get("artist", ""))
     matches = []
@@ -179,7 +181,7 @@ def automatic_song_candidate(track, candidates):
                     "instrumental", "reaction", "preview", "teaser", "snippet", "shorts", "trailer", "loop"}
         if (title & variants) - wanted:
             continue
-        rank = (int(candidate.get("source") == "musicfa"), int(artist <= channel and "topic" in channel),
+        rank = (int(is_public_candidate(candidate)), int(artist <= channel and "topic" in channel),
                 int({"official", "audio"} <= title), int(artist <= channel))
         matches.append((rank, index, duration))
     if not matches:
@@ -215,9 +217,11 @@ def _find_youtube_tracks(track):
 
 
 def find_full_tracks(track):
-    from app.services.musicfa import find_tracks
-    # Keep independent alternatives available if the preferred source later fails.
-    # Music-fa returns at most one strict identity match with a probed MP3 320.
-    musicfa = find_tracks(track)
-    youtube = _find_youtube_tracks(track)
-    return (musicfa + youtube)[:3]
+    from app.services.music_sources import find_tracks
+    # Public catalogues run beside YouTube, never as a long sequential chain.
+    # Keep one YouTube alternative when two independent catalogue copies match.
+    with ThreadPoolExecutor(max_workers=2, thread_name_prefix="music-discovery") as executor:
+        public_future = executor.submit(find_tracks, track)
+        youtube_future = executor.submit(_find_youtube_tracks, track)
+        public, youtube = public_future.result(), youtube_future.result()
+    return (public + youtube)[:3]

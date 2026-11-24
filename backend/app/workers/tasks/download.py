@@ -19,7 +19,9 @@ from sqlalchemy import select
 from app.db.worker_session import WorkerSessionLocal
 from app.services.instagram_formats import instagram_video_choices
 from app.services.instagram_access import media_downloader, rate_limit_error
-from app.services.musicfa import MusicFaError, is_musicfa_source, download_track as download_musicfa_track
+from app.services.musicfa import MusicFaError
+from app.services.music_source_catalog import source_for_media
+from app.services.music_sources import download_track as download_public_music_track
 from app.models.download_job import (
     DownloadJob,
     DownloadJobStatus,
@@ -4317,17 +4319,17 @@ def download_task(
         # Native full-song source / uploaded conversion
         # ====================================================
 
-        elif media_type == "audio" and is_musicfa_source(source_url):
+        elif media_type == "audio" and source_for_media(source_url):
             download_started = time.monotonic()
-            file_path = download_musicfa_track(
+            file_path = download_public_music_track(
                 source_url, DOWNLOAD_DIR / f"{job_id}.mp3", max_bytes=max_download_bytes,
                 check_cancelled=lambda: _check_job_control(job_id), progress=progress_hook,
             )
-            print(f"Media download complete: job={job_id}, source=musicfa, elapsed_s={time.monotonic()-download_started:.2f}")
+            print(f"Media download complete: job={job_id}, source={source_for_media(source_url).key}, elapsed_s={time.monotonic()-download_started:.2f}")
             if output_format in (None, "mp3"):
                 # The adapter verifies the complete native MP3 320. Keep its
                 # original audio without a second lossy encode or extra delay.
-                print(f"Media output ready: job={job_id}, mode=musicfa_mp3_320")
+                print(f"Media output ready: job={job_id}, mode=public_mp3_320")
             else:
                 file_path = _prepare_requested_output(
                     job_id=job_id, file_path=file_path, media_type=media_type,

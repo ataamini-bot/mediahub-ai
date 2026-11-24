@@ -380,8 +380,9 @@ async def show_result(message, telegram_id, request_id, row, *, auto_download=Tr
         minutes, seconds = divmod(candidate["duration"], 60)
         parts.append(html.escape(text("music_source_choice", number=i+1, title=candidate["title"][:100],
                                       duration=f"{minutes}:{seconds:02d}")))
-        if candidate.get("source") == "musicfa":
-            parts[-1] += '\n<a href="' + html.escape(candidate["page_url"], quote=True) + '">Music-fa · MP3 320</a>'
+        if candidate.get("source_type") == "public_mp3" or candidate.get("source") == "musicfa":
+            label = html.escape(candidate.get("source_name") or "Music-fa")
+            parts[-1] += '\n<a href="' + html.escape(candidate["page_url"], quote=True) + '">' + label + ' · MP3 320</a>'
         rows.append([(text('download_mp_number', number=i + 1), f"tool:audio:{request_id}:{i}:mp3"),
                      (text('other_formats'), f"tool:source:{request_id}:{i}")])
     rows.append([(text("music_output_help"), "tool:about")])

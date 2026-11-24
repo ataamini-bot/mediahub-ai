@@ -27,6 +27,9 @@ VARIANTS = {"remix", "ریمیکس", "cover", "کاور", "live", "زنده", "k
 
 class MusicFaError(RuntimeError):
     """Stable errors only: never include response bodies or remote file URLs."""
+    def __init__(self, code, retry_after=300):
+        super().__init__(code)
+        self.retry_after = retry_after
 
 
 def _words(value):
@@ -70,13 +73,15 @@ def _allowed(url, media=False):
 
 
 @contextmanager
-def _response(client, url, deadline, *, media=False, headers=None):
+def _response(client, url, deadline, *, media=False, headers=None, allowed=None, check_cancelled=None):
     # Validate every redirect before following it, with no automatic retries.
     for redirect in range(3):
+        if check_cancelled:
+            check_cancelled()
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             raise MusicFaError("musicfa_timeout")
-        if not _allowed(url, media):
+        if not (allowed or _allowed)(url, media):
             raise MusicFaError("musicfa_invalid_source")
         client.cookies.clear()
         with client.stream("GET", url, headers=headers, timeout=min(5, remaining)) as response:
@@ -84,7 +89,14 @@ def _response(client, url, deadline, *, media=False, headers=None):
                 url = urljoin(url, response.headers.get("location", ""))
                 continue
             if response.status_code == 429:
-                raise MusicFaError("musicfa_rate_limited")
+                from email.utils import parsedate_to_datetime
+                from datetime import datetime, timezone
+                value = response.headers.get("retry-after", "300")
+                try:
+                    seconds = int(value) if value.isdigit() else int((parsedate_to_datetime(value) - datetime.now(timezone.utc)).total_seconds())
+                except (ValueError, TypeError, OverflowError):
+                    seconds = 300
+                raise MusicFaError("musicfa_rate_limited", retry_after=max(60, min(3600, seconds)))
             if response.status_code in (401, 403):
                 raise MusicFaError("musicfa_source_denied")
             if response.status_code not in (200, 206):
@@ -99,12 +111,14 @@ def _client():
                         headers={"User-Agent": "MediaHub/1.0 (public music lookup)", "Accept-Encoding": "identity"})
 
 
-def _html(client, url, deadline):
-    with _response(client, url, deadline) as response:
+def _html(client, url, deadline, *, allowed=None, check_cancelled=None):
+    with _response(client, url, deadline, allowed=allowed, check_cancelled=check_cancelled) as response:
         if "text/html" not in response.headers.get("content-type", "").lower():
             raise MusicFaError("musicfa_invalid_page")
         data = bytearray()
         for chunk in response.iter_bytes(16384):
+            if check_cancelled:
+                check_cancelled()
             data.extend(chunk)
             if len(data) > HTML_LIMIT or time.monotonic() > deadline:
                 raise MusicFaError("musicfa_page_limit")
@@ -194,11 +208,14 @@ def _audio_info(path):
         raise MusicFaError("musicfa_invalid_mp3_320") from None
 
 
-def _probe(client, url, deadline):
-    with _response(client, url, deadline, media=True, headers={"Range": f"bytes=0-{PROBE_LIMIT-1}"}) as response:
+def _probe(client, url, deadline, *, allowed=None, check_cancelled=None):
+    with _response(client, url, deadline, media=True, headers={"Range": f"bytes=0-{PROBE_LIMIT-1}"},
+                   allowed=allowed, check_cancelled=check_cancelled) as response:
         size = _media_size(response, partial=True)
         data = bytearray()
         for chunk in response.iter_bytes(16384):
+            if check_cancelled:
+                check_cancelled()
             data.extend(chunk[:PROBE_LIMIT-len(data)])
             if time.monotonic() > deadline:
                 raise MusicFaError("musicfa_timeout")
@@ -220,9 +237,9 @@ def _probe(client, url, deadline):
     return int(duration), size
 
 
-def find_tracks(track):
+def find_tracks(track, *, deadline=None, check_cancelled=None):
     """One user-triggered query, at most two matching pages, one verified source."""
-    deadline = time.monotonic() + 20
+    deadline = min(deadline or float("inf"), time.monotonic() + 20)
     query = " ".join((str(track.get("artist", "")), str(track.get("title", "")))).strip()
     if not track.get("artist") or not track.get("title") or len(query) > 400:
         return []
@@ -230,11 +247,12 @@ def find_tracks(track):
         with _client() as client:
             # Use the site's observed canonical search route, avoiding an extra
             # redirect from WordPress's ?s= form on every recognition.
-            articles = _Articles(_html(client, SITE + "/search/" + quote(query, safe=""), deadline)).articles
+            articles = _Articles(_html(client, SITE + "/search/" + quote(query, safe=""), deadline,
+                                       check_cancelled=check_cancelled)).articles
             matches = [a for a in articles[:12] if _matches(track, a)][:2]
             for item in matches:
                 page = SITE + "/download-song/" + item["id"] + "/"
-                details = _Articles(_html(client, page, deadline)).articles
+                details = _Articles(_html(client, page, deadline, check_cancelled=check_cancelled)).articles
                 for article in details:
                     if article["id"] != item["id"] or not _matches(track, article):
                         continue
@@ -246,7 +264,7 @@ def find_tracks(track):
                     url = urls[0]
                     if not _file_matches(article, url):
                         continue
-                    duration, size = _probe(client, url, deadline)
+                    duration, size = _probe(client, url, deadline, check_cancelled=check_cancelled)
                     expected = track.get("duration")
                     if expected is not None and (not math.isfinite(float(expected))
                             or abs(duration - float(expected)) > max(5, float(expected) * .03)):
@@ -256,18 +274,21 @@ def find_tracks(track):
                              "channel": str(track["artist"])[:150], "duration": duration,
                              "size_bytes": size, "url": url, "page_url": page}]
     except (MusicFaError, httpx.HTTPError, ValueError, TypeError) as exc:
+        if check_cancelled and isinstance(exc, MusicFaError) and str(exc) in {"musicfa_rate_limited", "musicfa_source_denied"}:
+            raise
         logger.warning("Music-fa lookup unavailable: error=%s", str(exc) if isinstance(exc, MusicFaError) else type(exc).__name__)
     return []
 
 
-def download_track(url, target, *, max_bytes, check_cancelled, progress):
+def download_track(url, target, *, max_bytes, check_cancelled, progress, allowed=None):
     """Use the normal job's allowance/control, validating the complete MP3 before publish."""
     part = target.with_suffix(".mp3.part")
     deadline = time.monotonic() + 180
     started, received = time.monotonic(), 0
     try:
         check_cancelled()
-        with _client() as client, _response(client, url, deadline, media=True) as response:
+        with _client() as client, _response(client, url, deadline, media=True, allowed=allowed,
+                                           check_cancelled=check_cancelled) as response:
             total = _media_size(response, partial=False)
             if total > max_bytes:
                 raise MusicFaError("Downloaded file exceeds the plan file-size limit")

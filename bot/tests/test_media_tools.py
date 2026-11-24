@@ -298,15 +298,18 @@ def test_ambiguous_or_old_requests_require_clearly_labelled_download_button(monk
     asyncio.run(exercise())
 
 
-def test_musicfa_source_card_preserves_format_buttons_and_page_link(monkeypatch):
+@pytest.mark.parametrize("source,name,page", [("musicfa", "Music-fa", "https://musics-fa.com/download-song/123/"),
+    ("musicviral", "MusicViral", "https://musicviral.ir/test-song/")])
+def test_musicfa_source_card_preserves_format_buttons_and_page_link(monkeypatch, source, name, page):
     async def exercise():
         row = song_result(automatic=False)
-        row["result"]["candidates"][0].update(source="musicfa", page_url="https://musics-fa.com/download-song/123/")
+        row["result"]["candidates"][0].update(source=source, source_name=name, source_type="public_mp3", page_url=page)
         message = callback("").message
         post = AsyncMock()
         monkeypatch.setattr(tools, "_payment_request", post)
         await tools.show_result(message, 42, uuid4().hex, row)
-        assert 'href="https://musics-fa.com/download-song/123/"' in message.edit_text.await_args.args[0]
+        assert 'href="'+page+'"' in message.edit_text.await_args.args[0]
+        assert name in message.edit_text.await_args.args[0]
         buttons = [b for r in message.edit_text.await_args.kwargs["reply_markup"].inline_keyboard for b in r]
         assert buttons[0].callback_data.endswith(":0:mp3")
         post.assert_not_awaited()

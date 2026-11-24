@@ -69,6 +69,29 @@ def test_search_matches_identity_probes_320_and_preserves_source_attribution(mp3
     assert len(calls) == 3 and calls[2].headers["range"] == "bytes=0-524287"
 
 
+@pytest.mark.parametrize("reference_duration,expected", [(90, True), (180, False)])
+def test_public_catalogue_resolves_real_mp3_prefix_and_checks_length(mp3, monkeypatch, reference_duration, expected):
+    import time
+    from app.services import music_sources
+    from app.services.music_source_catalog import BY_KEY
+    source = BY_KEY["musicviral"]
+    page = "https://musicviral.ir/synthetic-song/"
+    media = "https://dl.musicviral.ir/test/Example%20Artist%20-%20Original%20Song.mp3"
+    def handle(request):
+        if request.url.host == source.host:
+            return httpx.Response(200, text=f'<article><a href="{media}">Download MP3 320</a></article>',
+                                  headers={"Content-Type": "text/html"})
+        assert str(request.url) == media and request.headers["range"] == "bytes=0-524287"
+        return httpx.Response(206, content=mp3[:musicfa.PROBE_LIMIT], headers={
+            "Content-Range": f"bytes 0-{musicfa.PROBE_LIMIT-1}/{len(mp3)}", "Content-Type": "audio/mpeg"})
+    calls = transport(monkeypatch, handle)
+    item = music_sources._resolve(source, {**TRACK, "duration": reference_duration}, page, time.monotonic()+5, lambda:None)
+    assert bool(item) is expected and len(calls) == 2
+    if expected:
+        assert item["source"] == "musicviral" and item["source_type"] == "public_mp3"
+        assert item["url"] == media and item["duration"] == pytest.approx(90, abs=1)
+
+
 def test_persian_fields_and_latin_metadata_both_work(mp3, monkeypatch):
     catalogue(monkeypatch, mp3, search=article(persian=True), post=article(persian=True, links=[MEDIA]))
     assert musicfa.find_tracks({"artist": "هنرمند نمونه", "title": "آهنگ اصلي", "duration": 90})
@@ -138,14 +161,15 @@ def test_oversized_search_page_is_bounded(monkeypatch):
 
 
 def test_source_search_keeps_youtube_alternatives_and_prefers_verified_musicfa(monkeypatch):
+    from app.services import music_sources
     site = {"source": "musicfa", "title": TRACK["title"], "channel": TRACK["artist"], "duration": 90, "url": MEDIA}
     youtube = {"title": "Original Song (Official Audio)", "channel": "Example Artist - Topic", "duration": 90}
-    monkeypatch.setattr(musicfa, "find_tracks", lambda track: [site])
+    monkeypatch.setattr(music_sources, "find_tracks", lambda track: [site])
     monkeypatch.setattr(providers, "_find_youtube_tracks", lambda track: [youtube]*3)
     result = providers.find_full_tracks(TRACK)
     assert result == [site, youtube, youtube]
     assert providers.automatic_song_candidate(TRACK, result) == 0
-    monkeypatch.setattr(musicfa, "find_tracks", lambda track: [])
+    monkeypatch.setattr(music_sources, "find_tracks", lambda track: [])
     assert providers.find_full_tracks(TRACK) == [youtube]*3
 
 
@@ -168,7 +192,8 @@ def test_interrupted_or_oversized_transfer_removes_partial_file(mp3, monkeypatch
 
 
 @pytest.mark.parametrize("output_format,status", [("mp3", 200), ("m4a", 200), ("mp3", 429)])
-def test_real_worker_delivers_or_fails_source_without_repeating_transfer(mp3, monkeypatch, tmp_path, output_format, status):
+@pytest.mark.parametrize("source_url", [MEDIA, "https://dl.musicviral.ir/test/Example%20Artist%20-%20Original%20Song.mp3"])
+def test_real_worker_delivers_or_fails_source_without_repeating_transfer(mp3, monkeypatch, tmp_path, output_format, status, source_url):
     from app.workers.tasks import download as worker
     from app.models.download_job import DownloadJobStatus
     calls = transport(monkeypatch, lambda request: httpx.Response(status, content=mp3))
@@ -179,7 +204,7 @@ def test_real_worker_delivers_or_fails_source_without_repeating_transfer(mp3, mo
     monkeypatch.setattr(worker, "_set_processing", lambda _: True)
     monkeypatch.setattr(worker, "_get_job_status", lambda _: DownloadJobStatus.PROCESSING)
     monkeypatch.setattr(worker.yt_dlp, "YoutubeDL", lambda *a, **k: pytest.fail("Music-fa must not use YouTube"))
-    job = SimpleNamespace(status=DownloadJobStatus.PENDING, source_url=MEDIA, format_id=None, quality=None,
+    job = SimpleNamespace(status=DownloadJobStatus.PENDING, source_url=source_url, format_id=None, quality=None,
         media_type="audio", output_format=output_format, playlist_index=None, plan_limits_snapshot={"max_file_size_mb": 8})
     session = MagicMock()
     session.__enter__.return_value.execute.return_value.scalar_one_or_none.return_value = job
