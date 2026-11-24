@@ -19,6 +19,7 @@ from sqlalchemy import select
 from app.db.worker_session import WorkerSessionLocal
 from app.services.instagram_formats import instagram_video_choices
 from app.services.instagram_access import media_downloader, rate_limit_error
+from app.services.musicfa import MusicFaError, is_musicfa_source, download_track as download_musicfa_track
 from app.models.download_job import (
     DownloadJob,
     DownloadJobStatus,
@@ -4313,8 +4314,25 @@ def download_task(
             )
 
         # ====================================================
-        # Uploaded conversion
+        # Native full-song source / uploaded conversion
         # ====================================================
+
+        elif media_type == "audio" and is_musicfa_source(source_url):
+            download_started = time.monotonic()
+            file_path = download_musicfa_track(
+                source_url, DOWNLOAD_DIR / f"{job_id}.mp3", max_bytes=max_download_bytes,
+                check_cancelled=lambda: _check_job_control(job_id), progress=progress_hook,
+            )
+            print(f"Media download complete: job={job_id}, source=musicfa, elapsed_s={time.monotonic()-download_started:.2f}")
+            if output_format in (None, "mp3"):
+                # The adapter verifies the complete native MP3 320. Keep its
+                # original audio without a second lossy encode or extra delay.
+                print(f"Media output ready: job={job_id}, mode=musicfa_mp3_320")
+            else:
+                file_path = _prepare_requested_output(
+                    job_id=job_id, file_path=file_path, media_type=media_type,
+                    output_format=output_format, max_download_bytes=max_download_bytes,
+                )
 
         elif media_type == "convert" and str(source_url).startswith(UPLOAD_SOURCE_PREFIX):
             uploaded_source = _resolve_uploaded_source(source_url)
@@ -4688,6 +4706,7 @@ def download_task(
 
         if (
             limited is None
+            and not isinstance(exc, MusicFaError)
             and self.request.retries
             < self.max_retries
         ):

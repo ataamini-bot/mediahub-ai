@@ -179,7 +179,7 @@ def automatic_song_candidate(track, candidates):
                     "instrumental", "reaction", "preview", "teaser", "snippet", "shorts", "trailer", "loop"}
         if (title & variants) - wanted:
             continue
-        rank = (int(artist <= channel and "topic" in channel),
+        rank = (int(candidate.get("source") == "musicfa"), int(artist <= channel and "topic" in channel),
                 int({"official", "audio"} <= title), int(artist <= channel))
         matches.append((rank, index, duration))
     if not matches:
@@ -197,7 +197,7 @@ class QuietLogger:
     warning = error = debug
 
 
-def find_full_tracks(track):
+def _find_youtube_tracks(track):
     from yt_dlp import YoutubeDL
     from app.services.download import _get_media_info_options
     options = _get_media_info_options("https://www.youtube.com/")
@@ -212,3 +212,12 @@ def find_full_tracks(track):
         # Keep the identification even when YouTube is unavailable on this server.
         logger.warning("Music source search failed: error=%s", type(exc).__name__)
         return []
+
+
+def find_full_tracks(track):
+    from app.services.musicfa import find_tracks
+    # Keep independent alternatives available if the preferred source later fails.
+    # Music-fa returns at most one strict identity match with a probed MP3 320.
+    musicfa = find_tracks(track)
+    youtube = _find_youtube_tracks(track)
+    return (musicfa + youtube)[:3]

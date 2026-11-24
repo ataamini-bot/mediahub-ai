@@ -180,10 +180,10 @@ def inspect_job(job_id, url, *, transfer_check=False):
     from yt_dlp import YoutubeDL
     from app.services.media_tool_links import normalize_music_link
     from app.workers.tasks.download import _get_format_selector, _get_yt_dlp_options
-    normalized = normalize_music_link(url)
-    if urlsplit(normalized).hostname not in {"youtube.com", "www.youtube.com", "m.youtube.com", "music.youtube.com", "youtu.be"}:
+    if urlsplit(url).hostname not in {"youtube.com", "www.youtube.com", "m.youtube.com", "music.youtube.com", "youtu.be"}:
         emit("JOB", {"id": job_id, "result": "NOT_YOUTUBE"})
         return
+    normalized = normalize_music_link(url)
     logger = DiagnosticLogger()
     options = _get_yt_dlp_options(normalized,
         format=_get_format_selector(normalized, None, None, "audio"),
@@ -352,10 +352,10 @@ def inspect_download(job):
     if job["status"] not in {"FAILED", "COMPLETED"}:
         emit("DOWNLOAD_CHECK", {"job": job["id"], "result": "JOB_NOT_TERMINAL"})
         return
-    url = normalize_music_link(job["source_url"])
-    if urlsplit(url).hostname not in {"youtube.com", "www.youtube.com", "m.youtube.com", "music.youtube.com", "youtu.be"}:
+    if urlsplit(job["source_url"]).hostname not in {"youtube.com", "www.youtube.com", "m.youtube.com", "music.youtube.com", "youtu.be"}:
         emit("DOWNLOAD_CHECK", {"job": job["id"], "result": "NOT_YOUTUBE"})
         return
+    url = normalize_music_link(job["source_url"])
     selector_options = {}
     # The diagnostic may be fetched before deploying its matching worker image.
     if "allow_combined_audio" in inspect.signature(_get_format_selector).parameters:
@@ -398,10 +398,10 @@ def inspect_formats(job):
     if job["status"] not in {"FAILED", "COMPLETED"}:
         emit("FORMATS_CHECK", {"job": job["id"], "result": "JOB_NOT_TERMINAL"})
         return
-    url = normalize_music_link(job["source_url"])
-    if urlsplit(url).hostname not in {"youtube.com", "www.youtube.com", "m.youtube.com", "music.youtube.com", "youtu.be"}:
+    if urlsplit(job["source_url"]).hostname not in {"youtube.com", "www.youtube.com", "m.youtube.com", "music.youtube.com", "youtu.be"}:
         emit("FORMATS_CHECK", {"job": job["id"], "result": "NOT_YOUTUBE"})
         return
+    url = normalize_music_link(job["source_url"])
     if job.get("playlist_index") is not None:
         emit("FORMATS_CHECK", {"job": job["id"], "result": "PLAYLIST_NOT_SUPPORTED"})
         return

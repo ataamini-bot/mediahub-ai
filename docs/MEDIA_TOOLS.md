@@ -66,7 +66,7 @@ messages, GitHub, or logs.
    Only the first media item and up to 36 seconds (12 for AudD) are requested.
    The fetch is limited to 120 seconds and 25 MiB; private/inaccessible links
    fail visibly before recognition is called. Uploaded files remain supported in the same form.
-3. The bot shows the identified artist/title and up to three matching public YouTube
+3. The bot shows the identified artist/title and up to three matching Music-fa/YouTube
    sources, filtered by title, artist, duration and unwanted cover/remix variants.
 4. A strict title/artist match starts an **MP3 320 kbps** download, including ShazamIO
    results without reference duration. Artist/Topic and official-audio metadata are preferred.
@@ -87,7 +87,27 @@ messages, GitHub, or logs.
    so normal transfer-size limits still apply. This fallback does not resolve HTTP 403
    or responses that contain no accessible audible format.
 
-MP3 outputs are encoded at 320 kbps and 44.1 kHz, including low-sample-rate inputs that
+Music-fa is an additional full-song source, not a recognition provider; no API key is
+needed. After recognition the worker makes one public search for the artist and title,
+checks at most two matching song pages, and probes at most 512 KiB of a native MP3 320.
+Exact artist/title matching uses the site's Persian fields or English metadata; compilations,
+ambiguous links, unexpected variants, shorter-than-one-minute clips, and lower-bitrate files
+are rejected. Only HTTPS links on the observed Music-fa download host are followed;
+off-site redirects and authentication are not attempted. Search has a 20-second budget and
+does not crawl the catalogue. Unavailable or unmatched Music-fa results leave the existing
+YouTube search available. A verified Music-fa candidate is preferred for automatic MP3
+delivery; up to two YouTube alternatives remain in source selection. The source-selection
+card links to the Music-fa song page. The actual MP3 source URL is kept in the ordinary
+download history, with the same plan limits and delivery claim as other music sources.
+
+Music-fa transfers are capped at the smaller of the plan limit and 150 MiB, with a 180-second
+deadline and no automatic source-error retry. Pause/cancel removes a partial transfer;
+resuming fetches that public MP3 again. Full length, MP3 codec and 320 kbps bitrate are
+checked before completion. Native MP3 320 is sent unchanged to avoid a second lossy encode;
+other requested formats use the existing converter. Source availability and website HTML
+can change, so a real recognition/download test on the deployment server is still needed.
+
+Converted MP3 outputs are encoded at 320 kbps and 44.1 kHz, including low-sample-rate inputs that
 would otherwise make the encoder silently use a lower bitrate. This does **not** turn a
 lower-quality source into a lossless/master recording. The file name includes artist and
 song title. Download/encoding failures are shown explicitly; a polling timeout provides

@@ -294,12 +294,13 @@ async def test_shazam_accepts_and_processes_without_audd_key(records, monkeypatc
 
 
 @pytest.mark.asyncio
-async def test_song_download_uses_full_source_and_repeated_click_creates_one_job(records, monkeypatch):
+@pytest.mark.parametrize("source", ["https://www.youtube.com/watch?v=AbcDefGhI12",
+    "https://dls.musics-fa.com/test/Example%20Artist%20-%20Original%20Song%20(320).mp3"])
+async def test_song_download_uses_full_source_and_repeated_click_creates_one_job(records, monkeypatch, source):
     from app.services.download import DownloadService
     from app.repositories.download_job import DownloadJobRepository
     value = records.payload()
     await accept(value)
-    source = "https://www.youtube.com/watch?v=AbcDefGhI12"
     async with AsyncSessionLocal() as db:
         await db.execute(update(MediaToolRequest).where(MediaToolRequest.id == value.request_id).values(
             status="completed", result={"title": "Original", "candidates": [{"url": source}]}))

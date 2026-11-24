@@ -17,6 +17,16 @@ spec.loader.exec_module(diagnostic)
 URL = "https://www.youtube.com/watch?v=AAAAAAAAAAA"
 
 
+def test_musicfa_source_is_skipped_by_youtube_only_diagnostics(monkeypatch, capsys):
+    monkeypatch.setattr(yt_dlp, "YoutubeDL", lambda *a, **k: pytest.fail("Unexpected extraction"))
+    job = {"id": 12, "status": "FAILED", "source_url": "https://dls.musics-fa.com/test/song(320).mp3"}
+    diagnostic.inspect_job(job["id"], job["source_url"])
+    diagnostic.inspect_download(job)
+    diagnostic.inspect_formats(job)
+    output = capsys.readouterr().out
+    assert output.count("NOT_YOUTUBE") == 3 and "musics-fa.com" not in output
+
+
 def reports(capsys):
     output = capsys.readouterr().out
     assert not any(secret in output for secret in ("googlevideo", "private-token", "Private title", "AAAAAAAAAAA"))

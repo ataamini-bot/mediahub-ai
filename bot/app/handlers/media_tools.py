@@ -380,6 +380,8 @@ async def show_result(message, telegram_id, request_id, row, *, auto_download=Tr
         minutes, seconds = divmod(candidate["duration"], 60)
         parts.append(html.escape(text("music_source_choice", number=i+1, title=candidate["title"][:100],
                                       duration=f"{minutes}:{seconds:02d}")))
+        if candidate.get("source") == "musicfa":
+            parts[-1] += '\n<a href="' + html.escape(candidate["page_url"], quote=True) + '">Music-fa · MP3 320</a>'
         rows.append([(text('download_mp_number', number=i + 1), f"tool:audio:{request_id}:{i}:mp3"),
                      (text('other_formats'), f"tool:source:{request_id}:{i}")])
     rows.append([(text("music_output_help"), "tool:about")])
@@ -504,7 +506,7 @@ async def run_track_download(message, telegram_id, request_id, index, output_for
             detail = str(exc).lower()
             if any(word in detail for word in ("http error 403", "http 403", "sign in", "login required",
                                                "private video", "video unavailable", "requested format",
-                                               "no video formats")):
+                                               "no video formats", "musicfa_source_denied", "musicfa_rate_limited")):
                 body = text('the_song_was_identified_but_alt_alt')
             elif "ffmpeg" in detail or "conversion" in detail:
                 body = text('the_song_was_identified_but_alt')
