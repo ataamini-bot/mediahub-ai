@@ -176,16 +176,18 @@ def _file_matches(article, url):
                for artist, title in _names(article))
 
 
-def _media_size(response, *, partial):
+def _media_size(response, *, partial, start=0):
     try:
         if response.status_code == 206:
             if not partial:
                 raise ValueError
-            match = re.fullmatch(r"bytes 0-([0-9]+)/([0-9]+)", response.headers.get("content-range", ""))
-            if not match or int(match[1]) >= int(match[2]):
+            match = re.fullmatch(r"bytes ([0-9]+)-([0-9]+)/([0-9]+)", response.headers.get("content-range", ""))
+            if not match or int(match[1]) != start or not start <= int(match[2]) < int(match[3]):
                 raise ValueError
-            size = int(match[2])
+            size = int(match[3])
         else:
+            if start:
+                raise ValueError
             size = int(response.headers.get("content-length", "0"))
         if not 1 <= size <= SOURCE_LIMIT:
             raise ValueError
@@ -194,47 +196,75 @@ def _media_size(response, *, partial):
         raise MusicFaError("musicfa_invalid_size") from None
 
 
-def _audio_info(path):
+def _audio_info(path, *, strict_320=True):
     try:
         result = subprocess.run(["ffprobe", "-v", "error", "-protocol_whitelist", "file,pipe", "-select_streams", "a:0",
             "-show_entries", "stream=codec_name,bit_rate:format=duration", "-of", "json", str(path)],
             stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=5, check=True)
         info = json.loads(result.stdout)
         stream = info["streams"][0]
-        if stream["codec_name"] != "mp3" or int(stream.get("bit_rate", 0)) != 320000:
+        bitrate = int(stream.get("bit_rate", 0))
+        if stream["codec_name"] != "mp3" or not 32000 <= bitrate <= 320000 or (strict_320 and bitrate != 320000):
             raise ValueError
         return info
     except (OSError, subprocess.SubprocessError, ValueError, KeyError, IndexError, TypeError):
         raise MusicFaError("musicfa_invalid_mp3_320") from None
 
 
-def _probe(client, url, deadline, *, allowed=None, check_cancelled=None):
-    with _response(client, url, deadline, media=True, headers={"Range": f"bytes=0-{PROBE_LIMIT-1}"},
-                   allowed=allowed, check_cancelled=check_cancelled) as response:
-        size = _media_size(response, partial=True)
-        data = bytearray()
-        for chunk in response.iter_bytes(16384):
-            if check_cancelled:
-                check_cancelled()
-            data.extend(chunk[:PROBE_LIMIT-len(data)])
-            if time.monotonic() > deadline:
-                raise MusicFaError("musicfa_timeout")
-            if len(data) >= PROBE_LIMIT:
-                break
+def _probe_details(client, url, deadline, *, allowed=None, check_cancelled=None,
+                   strict_320=True, verify_sample=None):
+    def read_prefix(start):
+        with _response(client, url, deadline, media=True,
+                       headers={"Range": f"bytes={start}-{start+PROBE_LIMIT-1}"},
+                       allowed=allowed, check_cancelled=check_cancelled) as response:
+            size = _media_size(response, partial=True, start=start)
+            data = bytearray()
+            for chunk in response.iter_bytes(16384):
+                if check_cancelled:
+                    check_cancelled()
+                data.extend(chunk[:PROBE_LIMIT-len(data)])
+                if time.monotonic() > deadline:
+                    raise MusicFaError("musicfa_timeout")
+                if len(data) >= PROBE_LIMIT:
+                    break
+        return data, size
+
+    data, size = read_prefix(0)
+    tag_size = 0
+    if data[:3] == b"ID3":
+        if len(data) < 10 or data[3] not in (2, 3, 4) or any(value & 128 for value in data[6:10]):
+            raise MusicFaError("musicfa_invalid_mp3_tag")
+        tag_size = 10 + sum(data[6+i] << (7*(3-i)) for i in range(4))
+        if data[3] == 4 and data[5] & 16:  # ID3v2.4 footer, if present.
+            tag_size += 10
+        if tag_size >= size or tag_size > 16 * 1024**2:
+            raise MusicFaError("musicfa_invalid_mp3_tag")
+    # Cover art can exceed the entire first probe. Request actual audio rather
+    # than downloading the cover or declaring a valid MP3 unreadable.
+    if tag_size > len(data) - 65536:
+        data, second_size = read_prefix(tag_size)
+        if second_size != size:
+            raise MusicFaError("musicfa_invalid_size")
     with tempfile.NamedTemporaryFile(suffix=".mp3") as sample:
         sample.write(data)
         sample.flush()
-        _audio_info(Path(sample.name))
+        info = _audio_info(Path(sample.name), strict_320=strict_320)
+        bitrate = int(info["streams"][0]["bit_rate"])
+        # ffprobe reports an average bitrate for a VBR header and the stream
+        # rate for CBR. Cover art must not inflate the length estimate.
+        duration = (size - tag_size) * 8 / bitrate
+        if not 60 <= duration <= 3600:
+            raise MusicFaError("musicfa_not_full_track")
+        if verify_sample is not None and not verify_sample(Path(sample.name)):
+            raise MusicFaError("music_source_identity_mismatch")
     if time.monotonic() > deadline:
         raise MusicFaError("musicfa_timeout")
-    # Native 320 kbps CBR; subtract the ID3 tag rather than treating cover art as audio.
-    tag_size = 0
-    if data[:3] == b"ID3" and len(data) >= 10:
-        tag_size = 10 + sum((data[6+i] & 127) << (7*(3-i)) for i in range(4))
-    duration = (size - tag_size) / 40000
-    if not 60 <= duration <= 3600:
-        raise MusicFaError("musicfa_not_full_track")
-    return int(duration), size
+    return {"duration": int(duration), "size_bytes": size, "source_bitrate": bitrate}
+
+
+def _probe(client, url, deadline, *, allowed=None, check_cancelled=None):
+    info = _probe_details(client, url, deadline, allowed=allowed, check_cancelled=check_cancelled)
+    return info["duration"], info["size_bytes"]
 
 
 def find_tracks(track, *, deadline=None, check_cancelled=None):
@@ -280,7 +310,7 @@ def find_tracks(track, *, deadline=None, check_cancelled=None):
     return []
 
 
-def download_track(url, target, *, max_bytes, check_cancelled, progress, allowed=None):
+def download_track(url, target, *, max_bytes, check_cancelled, progress, allowed=None, strict_320=True):
     """Use the normal job's allowance/control, validating the complete MP3 before publish."""
     part = target.with_suffix(".mp3.part")
     deadline = time.monotonic() + 180
@@ -306,7 +336,7 @@ def download_track(url, target, *, max_bytes, check_cancelled, progress, allowed
                               "speed": received / max(.01, time.monotonic()-started)})
         if received != total:
             raise MusicFaError("musicfa_incomplete_download")
-        info = _audio_info(part)
+        info = _audio_info(part, strict_320=strict_320)
         duration = float(info.get("format", {}).get("duration", 0))
         if not 60 <= duration <= 3600:
             raise MusicFaError("musicfa_not_full_track")

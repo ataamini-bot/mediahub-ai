@@ -31,11 +31,12 @@ selection; it is stored in the existing music configuration.
 
 ShazamIO uses an unofficial interface. It has no purchased API token, but service
 availability, accuracy and unlimited usage are not promised. The adapter makes at most
-three recognition requests for distinct windows, does not rotate profiles/proxies,
+three recognition requests for distinct windows of the submitted clip, does not rotate profiles/proxies,
 does not retry service errors or follow redirects, and bounds the response size.
 Each call is limited to 45 seconds, within one 90-second preparation/recognition budget.
 It sends a fingerprint computed locally from each 12-second sample, rather than the audio
 file itself. Input and sample files are removed by the existing cleanup flow.
+Optional source-identity verification has its own bounded checks described below.
 
 AudD charges belong to the operator's account; configure its billing limits as well as
 bot limits if enabling it. These are **attempt** limits, not money limits or charges to users'
@@ -89,20 +90,29 @@ messages, GitHub, or logs.
 
 Music-fa and the reviewed public catalogues in [MUSIC_SOURCES.md](MUSIC_SOURCES.md)
 are additional full-song sources; no new API key is needed. All active sites are eligible
-for both Persian and foreign music. Catalogue searches run in a pool of six alongside
-YouTube, with a shared 30-second budget. At most two verified catalogue matches are
-retained, leaving room for a YouTube alternative. Exact artist/title, version, duration
-and native MP3 320 checks reject mismatches and previews. At most 512 KiB per candidate
-is probed. Short-lived public metadata caching avoids repeated searches; media is not cached.
+for both Persian and foreign music. Four catalogue search workers and two verification
+workers run alongside YouTube, with a shared 30-second budget. Slow searches do not
+queue ahead of a ready match's verification. At most two verified catalogue matches are
+retained, leaving room for a YouTube alternative. Artist/title, version, duration
+and actual MP3 checks reject mismatches and previews. When a known version suffix is
+missing from a public filename, a matching Shazam recording key from the source audio
+is required; omitting the suffix only broadens discovery. At most two additional source
+fingerprints run within the same catalogue budget, with no AudD calls or retry after
+service errors. These checks belong to the original recognition allowance.
+At most 512 KiB per candidate is probed, plus another 512 KiB range if a large ID3 cover
+tag hides the audio. Short-lived public metadata caching avoids repeated searches;
+media is not cached. Old recognition results without a recording key keep exact matching;
+a fresh user request is needed to use the audio identity check.
 The source-selection card links to the song page, while the MP3 URL is kept in ordinary
 admin download history. Only reviewed HTTPS site/CDN hosts are followed. Source cooldowns,
 inactive sites, limits and verification details are documented in the source inventory.
 
 Public MP3 transfers are capped at the smaller of the plan limit and 150 MiB, with a 180-second
 deadline and no automatic source-error retry. Pause/cancel removes a partial transfer;
-resuming fetches that public MP3 again. Full length, MP3 codec and 320 kbps bitrate are
+resuming fetches that public MP3 again. Full length, MP3 codec and actual bitrate are
 checked before completion. Native MP3 320 is sent unchanged to avoid a second lossy encode;
-other requested formats use the existing converter. Source availability and website HTML
+lower-bitrate MP3 inputs are encoded at 320 kbps for MP3 output, and other requested
+formats use the existing converter. Source availability and website HTML
 can change, so a real recognition/download test on the deployment server is still needed.
 
 Converted MP3 outputs are encoded at 320 kbps and 44.1 kHz, including low-sample-rate inputs that

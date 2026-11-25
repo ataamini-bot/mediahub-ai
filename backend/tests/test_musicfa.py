@@ -1,6 +1,7 @@
 """Synthetic public catalogue/MP3 fixtures; no real song or user data."""
 import html
 import subprocess
+import time
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 from urllib.parse import quote
@@ -137,6 +138,62 @@ def test_reference_duration_mismatch_is_not_auto_delivered(mp3, monkeypatch):
     assert musicfa.find_tracks({**TRACK, "duration": 180}) == []
 
 
+def test_large_embedded_cover_is_skipped_with_a_bounded_second_audio_range(mp3, monkeypatch):
+    tag_size = 2 * 1024**2
+    existing = 10 + sum((mp3[6+i]&127) << (7*(3-i)) for i in range(4)) if mp3[:3] == b"ID3" else 0
+    tag = b"ID3\x04\0\0" + bytes((tag_size >> (7*(3-i))) & 127 for i in range(4)) + b"\0"*tag_size
+    content = tag + mp3[existing:]
+    transferred = []
+    def handle(request):
+        start, end = map(int,request.headers["range"].removeprefix("bytes=").split("-"))
+        chunk = content[start:end+1]
+        transferred.append(len(chunk))
+        return httpx.Response(206,content=chunk,headers={"Content-Range":f"bytes {start}-{start+len(chunk)-1}/{len(content)}"})
+    calls = transport(monkeypatch,handle)
+    with musicfa._client() as client:duration,size=musicfa._probe(client,MEDIA,time.monotonic()+5)
+    assert duration == pytest.approx(90,abs=1) and size == len(content)
+    assert len(calls) == 2 and sum(transferred) == 2*musicfa.PROBE_LIMIT
+    assert calls[1].headers["range"].startswith(f"bytes={len(tag)}-")
+
+
+@pytest.mark.parametrize("mismatch", ["ignored_range","changed_size","oversized_tag"])
+def test_invalid_second_range_or_cover_size_is_not_accepted(monkeypatch, mismatch):
+    tag_size = 17*1024**2 if mismatch == "oversized_tag" else 2*1024**2
+    data = b"ID3\x04\0\0" + bytes((tag_size >> (7*(3-i)))&127 for i in range(4)) + b"\0"*(musicfa.PROBE_LIMIT-10)
+    def handle(request):
+        start = int(request.headers["range"].split("=")[1].split("-")[0])
+        if start and mismatch == "ignored_range":return httpx.Response(200,content=data,headers={"Content-Length":str(30*1024**2)})
+        size = 30*1024**2 + int(bool(start))
+        return httpx.Response(206,content=data,headers={"Content-Range":f"bytes {start}-{start+len(data)-1}/{size}"})
+    calls=transport(monkeypatch,handle)
+    with musicfa._client() as client,pytest.raises(musicfa.MusicFaError):
+        musicfa._probe(client,MEDIA,time.monotonic()+5)
+    assert len(calls) == (1 if mismatch == "oversized_tag" else 2)
+
+
+@pytest.mark.parametrize("verified",[True,False])
+def test_missing_version_label_needs_a_successful_audio_identity_check(mp3,monkeypatch,verified):
+    from app.services import music_sources
+    from app.services.music_source_catalog import BY_KEY
+    source=BY_KEY["musicviral"]
+    page="https://musicviral.ir/synthetic-song/"
+    media="https://dl.musicviral.ir/test/Example%20Artist%20-%20Original%20Song.mp3"
+    def handle(request):
+        if request.url.host == source.host:
+            return httpx.Response(200,text=f'<article><a href="{media}">Download 320</a></article>',headers={"Content-Type":"text/html"})
+        return httpx.Response(206,content=mp3[:musicfa.PROBE_LIMIT],headers={"Content-Range":f"bytes 0-{musicfa.PROBE_LIMIT-1}/{len(mp3)}"})
+    transport(monkeypatch,handle)
+    checks=[]
+    def verify(path):
+        assert path.is_file() and path.stat().st_size <= musicfa.PROBE_LIMIT
+        checks.append(path)
+        return verified
+    track={**TRACK,"title":"Original Song (Acoustic)","recognition_provider":"shazamio","recognition_key":"12345"}
+    result=music_sources._resolve(source,track,page,time.monotonic()+5,lambda:None,verify)
+    assert bool(result) is verified and len(checks) == 1 and not checks[0].exists()
+    if verified:assert result["identity_match"] == "audio" and result["title"] == track["title"]
+
+
 @pytest.mark.parametrize("location", ["http://dls.musics-fa.com/a(320).mp3", "https://evil.example/a.mp3",
     "https://127.0.0.1/a.mp3", "https://dls.musics-fa.com:8443/a.mp3", "https://user:pass@dls.musics-fa.com/a.mp3"])
 def test_redirect_is_rejected_before_contacting_other_host(monkeypatch, tmp_path, location):
@@ -191,11 +248,16 @@ def test_interrupted_or_oversized_transfer_removes_partial_file(mp3, monkeypatch
     assert not list(tmp_path.iterdir())
 
 
-@pytest.mark.parametrize("output_format,status", [("mp3", 200), ("m4a", 200), ("mp3", 429)])
+@pytest.mark.parametrize("output_format,status,source_bitrate", [("mp3", 200,320), ("m4a", 200,320), ("mp3", 429,320), ("mp3",200,128)])
 @pytest.mark.parametrize("source_url", [MEDIA, "https://dl.musicviral.ir/test/Example%20Artist%20-%20Original%20Song.mp3"])
-def test_real_worker_delivers_or_fails_source_without_repeating_transfer(mp3, monkeypatch, tmp_path, output_format, status, source_url):
+def test_real_worker_delivers_or_fails_source_without_repeating_transfer(mp3, monkeypatch, tmp_path, output_format, status, source_url, source_bitrate):
     from app.workers.tasks import download as worker
     from app.models.download_job import DownloadJobStatus
+    if source_bitrate == 128:
+        low=tmp_path/'lower.mp3'
+        subprocess.run(["ffmpeg","-v","error","-f","lavfi","-i","sine=duration=90","-c:a","libmp3lame","-b:a","128k",str(low)],check=True)
+        mp3=low.read_bytes()
+        low.unlink()
     calls = transport(monkeypatch, lambda request: httpx.Response(status, content=mp3))
     job_id = 123
     monkeypatch.setattr(worker, "DOWNLOAD_DIR", tmp_path)
@@ -225,11 +287,12 @@ def test_real_worker_delivers_or_fails_source_without_repeating_transfer(mp3, mo
     path = tmp_path / f"{job_id}.{output_format}"
     assert list(tmp_path.iterdir()) == [path]
     completed.assert_called_once_with(job_id=job_id, file_path=str(path), file_size=path.stat().st_size)
-    if output_format == "mp3":
+    if output_format == "mp3" and source_bitrate == 320:
         assert path.read_bytes() == mp3  # No second lossy encode.
     probe = worker._probe_media_file(path)
     assert float(probe["format"]["duration"]) == pytest.approx(90, abs=.5)
     assert {s["codec_type"] for s in probe["streams"]} == {"audio"}
+    if output_format == "mp3":assert int(probe["streams"][0]["bit_rate"]) == 320000
 
 
 def test_search_deadline_expires_before_network(monkeypatch):

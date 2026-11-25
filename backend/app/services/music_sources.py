@@ -15,10 +15,12 @@ import httpx
 
 from app.services import musicfa, music_source_cache as cache
 from app.services.music_source_catalog import SOURCES, BY_KEY, source_for_media
+from app.services.music_identity import discovery_track, can_verify_audio
 
 logger = logging.getLogger(__name__)
 SEARCH_SECONDS = 30
-SEARCH_WORKERS = 6
+SEARCH_WORKERS = 4
+RESOLVE_WORKERS = 2
 MAX_PAGE_CHECKS = 18
 
 
@@ -90,7 +92,7 @@ def _excluded(node):
 def search_pages(source, track, body):
     """Rank observed search-result links, ignoring menus and related sections."""
     root = Page(body).root
-    wanted = musicfa._artist(track["artist"] + " " + track["title"])
+    wanted = musicfa._artist(track["artist"] + " " + discovery_track(track)["title"])
     ranked = {}
     for node in root.nodes():
         if node.tag != "a" or _excluded(node):
@@ -126,7 +128,7 @@ def _file_identity(source, url, track):
     for brand in sorted(source.brands, key=len, reverse=True):
         name = re.sub(r"(?i)(?<![a-z0-9])" + re.escape(brand) + r"(?![a-z0-9])", " ", name)
     name = re.sub(r"[\[(]\s*[\])]", " ", name).replace("_", " ").strip()
-    name = re.sub(r"(?i)(?:[\[(]\s*320(?:\s*kbps)?\s*[\])]|(?:[-_ ]+)320(?:\s*kbps)?$)", " ", name)
+    name = re.sub(r"(?i)(?:[\[(]\s*(?:128|192|256|320)(?:\s*kbps)?\s*[\])]|(?:[-_ ]+)(?:128|192|256|320)(?:\s*kbps)?$)", " ", name)
     actual = musicfa._artist(name)
     wanted = musicfa._artist(track["artist"] + " " + track["title"])
     return bool(wanted and actual == wanted)
@@ -134,7 +136,7 @@ def _file_identity(source, url, track):
 
 def download_links(source, track, body, page_url):
     root = Page(body).root
-    links = []
+    links = {}
     for node in root.nodes():
         if node.tag != "a" or _excluded(node):
             continue
@@ -144,15 +146,17 @@ def download_links(source, track, body, page_url):
             continue
         if not re.search(r"دانلود|download|320|۳۲۰", label, re.I):
             continue  # Player/preview links are not download offers.
-        if re.search(r"preview|demo|snippet|teaser|پیش.?نمایش|دمو|۱۲۸|128", label, re.I):
+        if re.search(r"preview|demo|snippet|teaser|پیش.?نمایش|دمو", label, re.I):
             continue
         # Never take a preview or a premium link from a locked download box.
         context = " ".join(n.text()[:3000] for n in list(node.ancestors())[:2])
         if re.search(r"نسخه\s*دمو|نیاز.*اشتراک|با خرید اشتراک|برای.*(?:دانلود|دریافت).*اشتراک|premium.only|login.to.download", context, re.I):
             continue
-        if url not in links:
-            links.append(url)
-    return links if len(links) == 1 else []
+        normalized_label = label.translate(str.maketrans("۰۱۲۳۴۵۶۷۸۹", "0123456789"))
+        advertised = max([int(q) for q in re.findall(r"\b(?:128|192|256|320)\b", normalized_label)] or [0])
+        links[url] = max(advertised, links.get(url, -1))
+    best = [url for url, quality in links.items() if quality == max(links.values())] if links else []
+    return best if len(best) == 1 else []
 
 
 def _cooldown(source, error):
@@ -177,21 +181,31 @@ def _search(source, track, deadline, control):
         return []
 
 
-def _resolve(source, track, page_url, deadline, control):
+def _resolve(source, track, page_url, deadline, control, verify_sample=None):
     try:
         with musicfa._client() as client:
             body = musicfa._html(client, page_url, deadline, allowed=source.allows, check_cancelled=control)
             urls = download_links(source, track, body, page_url)
+            needs_audio_match = False
+            broader = discovery_track(track)
+            if not urls and verify_sample is not None and broader["title"] != track["title"]:
+                urls = download_links(source, broader, body, page_url)
+                needs_audio_match = bool(urls)
             if not urls:
                 return None
-            duration, size = musicfa._probe(client, urls[0], deadline, allowed=source.allows, check_cancelled=control)
+            details = musicfa._probe_details(client, urls[0], deadline, allowed=source.allows,
+                check_cancelled=control, strict_320=False,
+                verify_sample=verify_sample if needs_audio_match else None)
+            duration, size = details["duration"], details["size_bytes"]
             expected = track.get("duration")
             if expected is not None and (not math.isfinite(float(expected)) or
                     abs(duration-float(expected)) > max(5, float(expected)*.03)):
                 return None
             return {"source": source.key, "source_name": source.label, "source_type": "public_mp3",
                     "title": str(track["title"])[:200], "channel": str(track["artist"])[:150],
-                    "url": urls[0], "page_url": page_url, "duration": duration, "size_bytes": size}
+                    "url": urls[0], "page_url": page_url, "duration": duration, "size_bytes": size,
+                    "source_bitrate": details["source_bitrate"],
+                    "identity_match": "audio" if needs_audio_match else "metadata"}
     except SearchStopped:
         return None
     except (musicfa.MusicFaError, httpx.HTTPError, ValueError, TypeError) as error:
@@ -211,7 +225,8 @@ def _musicfa(track, deadline, control):
 
 
 def _cache_key(track):
-    identity = [sorted(musicfa._artist(track.get("artist", ""))), sorted(musicfa._words(track.get("title", ""))), track.get("duration")]
+    identity = [sorted(musicfa._artist(track.get("artist", ""))), sorted(musicfa._words(track.get("title", ""))),
+                track.get("duration"), track.get("recognition_key"), track.get("recognition_provider")]
     return "track:" + hashlib.sha256(json.dumps(identity, ensure_ascii=False).encode()).hexdigest()
 
 
@@ -242,12 +257,35 @@ def find_tracks(track, *, sources=None):
     def control():
         if stopped.is_set() or time.monotonic() >= deadline:
             raise SearchStopped()
+    verification_lock = threading.Lock()
+    verification_count, verification_failed = 0, False
+
+    def verify(path):
+        nonlocal verification_count, verification_failed
+        # At most two short source fingerprints, serialized. A service error
+        # disables further attempts; AudD never triggers these free calls.
+        with verification_lock:
+            control()
+            if verification_failed or verification_count >= 2 or not can_verify_audio(track):
+                return False
+            verification_count += 1
+            from app.services.music_source_match import matches_sample
+            try:
+                return matches_sample(track, path, deadline, control)
+            except SearchStopped:
+                raise
+            except Exception as error:
+                verification_failed = True
+                logger.warning("Music source verification unavailable: error=%s", type(error).__name__)
+                return False
     results, checked, seen = [], 0, set()
     executor = ThreadPoolExecutor(max_workers=SEARCH_WORKERS, thread_name_prefix="music-source")
+    resolver = ThreadPoolExecutor(max_workers=RESOLVE_WORKERS, thread_name_prefix="music-match")
     futures = {}
     try:
-        # Queue search requests before page/probe requests: every source gets a
-        # chance within the budget, regardless of the song or UI language.
+        # Submit every search, but reserve two of the six workers for checking
+        # results. Slow unrelated sites cannot keep a fast match at the back
+        # of the search queue until its verification budget has expired.
         for source in active:
             if stored.get("cooldown:"+source.key):
                 continue
@@ -270,7 +308,7 @@ def find_tracks(track, *, sources=None):
                         if checked >= MAX_PAGE_CHECKS:
                             break
                         checked += 1
-                        futures[executor.submit(_resolve, source, track, url, deadline, control)] = ("resolve", source)
+                        futures[resolver.submit(_resolve, source, track, url, deadline, control, verify)] = ("resolve", source)
                 else:
                     for item in (value if kind == "musicfa" else [value]):
                         if item and item["url"] not in seen and source.key not in {r["source"] for r in results}:
@@ -279,6 +317,7 @@ def find_tracks(track, *, sources=None):
     finally:
         stopped.set()
         executor.shutdown(wait=True, cancel_futures=True)
+        resolver.shutdown(wait=True, cancel_futures=True)
     results = results[:2]
     cache.write(key, results, 300 if results else 30)
     logger.warning("Music catalogue search complete: sources=%s, matches=%s", len(active), len(results))
@@ -290,7 +329,7 @@ def download_track(url, target, **kwargs):
     if not source:
         raise musicfa.MusicFaError("musicfa_invalid_source")
     try:
-        return musicfa.download_track(url, target, allowed=source.allows, **kwargs)
+        return musicfa.download_track(url, target, allowed=source.allows, strict_320=False, **kwargs)
     except musicfa.MusicFaError as error:
         _cooldown(source, error)
         raise

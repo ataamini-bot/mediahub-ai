@@ -1,7 +1,9 @@
 """Reviewed public music sites. No source is restricted by song/UI language."""
 from dataclasses import dataclass
 import re
-from urllib.parse import quote, unquote, urlsplit
+from urllib.parse import quote, quote_plus, unquote, urlsplit
+
+from app.services.music_identity import discovery_track
 
 
 @dataclass(frozen=True)
@@ -20,10 +22,12 @@ class Source:
         return self.status == "public" and bool(self.media_hosts)
 
     def search_url(self, track):
+        track = discovery_track(track)
         query = " ".join((str(track.get("artist", "")), str(track.get("title", "")))).strip()
         if not track.get("artist") or not track.get("title") or len(query) > 400:
             raise ValueError("invalid_music_identity")
-        return "https://" + self.host + self.search_path.format(query=quote(query, safe=""))
+        return "https://" + self.host + self.search_path.format(
+            query=quote(query, safe=""), query_plus=quote_plus(query, safe=""))
 
     def allows(self, url, media=False):
         try:
@@ -68,7 +72,8 @@ SOURCES = (
     Source("musicfa", "Music-fa", "musics-fa.com", ("dls.musics-fa.com",), r"/download-song/[0-9]+/",
            ("music-fa.com", "musics-fa.com"), search_path="/search/{query}"),
     Source("rozmusic", "RozMusic", "rozmusic.com", ("dl.rozmusic.com",), r"/[^/]+\.html", ("rozmusic.com",)),
-    Source("upmusics", "UpMusics", "upmusics.com", ("irsv.upmusics.com",), brands=("upmusics", "upmusics.com")),
+    Source("upmusics", "UpMusics", "upmusics.com", ("irsv.upmusics.com",),
+           brands=("upmusics", "upmusics.com"), search_path="/search/{query_plus}"),
     Source("musicbaran", "MusicBaran", "musicbaran1.ir", ("dl.dlmusicbaran.ir",), r"/music/[^/]+/", ("musicbaran",)),
     Source("popmusic", "Pop Music", "pop-music.ir", ("dl.pop-music.ir",), brands=("pop-music.ir",)),
     Source("musicdel", "MusicDel", "musicdel.ir", ("dl.musicdel.ir",), r"/single-tracks/[0-9]+/", ("musicdel.ir",)),

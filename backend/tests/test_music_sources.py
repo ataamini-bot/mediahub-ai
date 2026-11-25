@@ -3,7 +3,7 @@ from concurrent.futures import ThreadPoolExecutor
 import json
 import threading
 import time
-from urllib.parse import quote
+from urllib.parse import quote, unquote_plus
 
 import httpx
 import pytest
@@ -48,7 +48,7 @@ def media_url(source, track=TRACK, *, suffix=" (320)"):
 def test_every_active_catalogue_searches_both_languages_and_matches_same_track(source, track):
     page, media = page_url(source), media_url(source, track)
     query = source.search_url(track)
-    assert quote(track["artist"], safe="") in query and quote(track["title"], safe="") in query
+    assert track["artist"] in unquote_plus(query) and track["title"] in unquote_plus(query)
     search = f'<article><h2><a rel="bookmark" href="{page}">{track["artist"]} {track["title"]}</a></h2></article>'
     assert sources.search_pages(source, track, search) == [page]
     body = f'<main><article><h1>{track["title"]}</h1><a href="{media}">دانلود 320</a></article></main>'
@@ -72,7 +72,7 @@ def test_media_destination_is_never_inferred_from_an_untrusted_host_or_url(url):
 
 
 @pytest.mark.parametrize("label,box", [("پخش آنلاین", ""), ("دانلود نسخه دمو", ""),
-    ("Download preview 320", ""), ("دانلود 128", ""), ("دانلود 320", "برای دانلود باید اشتراک داشته باشید"),
+    ("Download preview 320", ""), ("دانلود 320", "برای دانلود باید اشتراک داشته باشید"),
     ("دانلود 320", "با خرید اشتراک لینک فعال می‌شود")])
 def test_player_preview_and_locked_download_boxes_are_not_full_song_sources(label, box):
     source = BY_KEY["rozmusic"]
@@ -81,7 +81,7 @@ def test_player_preview_and_locked_download_boxes_are_not_full_song_sources(labe
 
 
 @pytest.mark.parametrize("change", ["Other Artist - Original Song", "Example Artist - Other Song", "Example Artist - Original Song Remix",
-                                   "Example Artist - Original Song Cover", "Example Artist - Original Song (128)"])
+                                   "Example Artist - Original Song Cover"])
 def test_variant_and_identity_mismatch_cannot_replace_full_track(change):
     source = BY_KEY["rozmusic"]
     url = "https://dl.rozmusic.com/test/" + quote(change + ".mp3")
@@ -91,6 +91,47 @@ def test_variant_and_identity_mismatch_cannot_replace_full_track(change):
 def test_brand_suffix_and_newsongs_quality_annotation_are_supported():
     url = "https://dl.newsong.ir/test/Example%20Artist%20Original%20Song%20320_(www.newsong.ir).mp3"
     assert sources._file_identity(BY_KEY["newsong"], url, TRACK)
+
+
+def test_best_offered_quality_is_selected_but_lower_quality_is_not_a_missing_song():
+    source = BY_KEY["rozmusic"]
+    lower, higher = media_url(source, suffix=" (128)"), media_url(source)
+    body = f'<article><a href="{lower}">Download 128</a><a href="{higher}">Download 320</a></article>'
+    assert sources.download_links(source, TRACK, body, page_url(source)) == [higher]
+    assert sources.download_links(source, TRACK, f'<a href="{lower}">Download 128</a>', page_url(source)) == [lower]
+
+
+def test_versionless_discovery_is_only_enabled_with_a_valid_shazam_identity():
+    source = BY_KEY["upmusics"]
+    track = {**TRACK, "title":"Original Song (Acoustic)", "recognition_provider":"shazamio", "recognition_key":"12345"}
+    body = f'<article><a href="{page_url(source)}">Example Artist Original Song</a></article>'
+    assert "Acoustic" not in source.search_url(track)
+    assert sources.search_pages(source, track, body) == [page_url(source)]
+    for other in ({**track,"recognition_provider":"audd"}, {**track,"recognition_key":"https://invalid.example"}):
+        assert "Acoustic" in source.search_url(other)
+        assert sources.search_pages(source, other, body) == []
+    literal = {**track, "title":"Original Song (Part Two)"}
+    assert "Part Two" in unquote_plus(source.search_url(literal))
+    assert sources._cache_key(track) != sources._cache_key({**track,"recognition_key":"67890"})
+
+
+@pytest.mark.parametrize("failure,expected_calls", [(False,2),(True,1)])
+def test_source_audio_checks_are_serial_bounded_and_stop_on_provider_failure(monkeypatch, failure, expected_calls):
+    from app.services import music_source_match
+    calls=[]
+    def match(*args):
+        calls.append(1)
+        if failure:raise httpx.ReadTimeout("private upstream body")
+        return False
+    monkeypatch.setattr(music_source_match,"matches_sample",match)
+    monkeypatch.setattr(sources,"_search",lambda source,*args:[page_url(source)])
+    def resolve(source, track, page, deadline, control, verify):
+        verify(None)
+        return None
+    monkeypatch.setattr(sources,"_resolve",resolve)
+    track={**TRACK,"recognition_provider":"shazamio","recognition_key":"12345"}
+    assert sources.find_tracks(track,sources=[BY_KEY[k] for k in ("upmusics","rozmusic","musicviral","nicmusic")]) == []
+    assert len(calls) == expected_calls
 
 
 def test_search_ignores_sidebar_and_irrelevant_articles_before_applying_page_budget():
@@ -165,6 +206,31 @@ def test_total_budget_cancels_queued_and_inflight_source_searches(monkeypatch):
     started = time.monotonic()
     assert sources.find_tracks(TRACK, sources=[s for s in ACTIVE if s.key != "musicfa"]) == []
     assert stopped and time.monotonic()-started < .8
+
+
+def test_fast_matches_are_verified_while_other_catalogues_are_still_searching(monkeypatch):
+    monkeypatch.setattr(sources, "SEARCH_SECONDS", .4)
+    matching = {"upmusics", "rozmusic"}
+    waiting = threading.Event()
+    def search(source, track, deadline, control):
+        if source.key in matching:
+            return [page_url(source)]
+        waiting.set()
+        try:
+            while True:
+                control()
+                time.sleep(.005)
+        except sources.SearchStopped:
+            return []
+    def resolve(source, track, page, deadline, control, verify):
+        assert waiting.wait(.2)
+        control()
+        return {"source":source.key,"url":media_url(source),"page_url":page,"duration":90}
+    monkeypatch.setattr(sources, "_search", search)
+    monkeypatch.setattr(sources, "_resolve", resolve)
+    selected = [BY_KEY[k] for k in ("upmusics", "rozmusic", "musicviral", "nicmusic", "musicdel", "newsong", "melodya", "musicsmehr")]
+    result = sources.find_tracks(TRACK, sources=selected)
+    assert {item["source"] for item in result} == matching
 
 
 def test_a_broken_source_does_not_discard_another_verified_candidate(monkeypatch):

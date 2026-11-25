@@ -2,6 +2,7 @@
 import asyncio
 import io
 import json
+import re
 import time
 import wave
 
@@ -69,8 +70,12 @@ def track_identity(response):
     # Shazam does not reliably supply full-track duration. Never treat the
     # sample/preview duration as the song's duration. Full-song selection uses
     # strict title/artist matching and the independent source's duration.
-    return {"title": title.strip()[:200], "artist": artist.strip()[:200],
-            "album": "", "duration": None}
+    identity = {"title": title.strip()[:200], "artist": artist.strip()[:200],
+                "album": "", "duration": None}
+    key = str(track.get("key") or "")
+    if re.fullmatch(r"[0-9]{1,20}", key):
+        identity.update(recognition_provider="shazamio", recognition_key=key)
+    return identity
 
 
 async def recognize_sample(sample):

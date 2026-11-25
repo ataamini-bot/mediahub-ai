@@ -38,6 +38,13 @@ def test_shazam_identity_excludes_preview_and_unverified_duration():
         "title": "Original Song", "artist": "Example Artist", "album": "", "duration": None}
 
 
+def test_shazam_preserves_only_valid_track_key_for_source_audio_matching():
+    result = shazam.track_identity({**RESPONSE, "track": {**RESPONSE["track"], "key":"123456"}})
+    assert result["recognition_key"] == "123456" and result["recognition_provider"] == "shazamio"
+    invalid = shazam.track_identity({**RESPONSE,"track":{**RESPONSE["track"],"key":"https://private.invalid"}})
+    assert "recognition_key" not in invalid and "recognition_provider" not in invalid
+
+
 @pytest.mark.parametrize("response,code", [
     ({"matches": []}, "music_not_found"),
     ({}, "invalid_provider_result"),

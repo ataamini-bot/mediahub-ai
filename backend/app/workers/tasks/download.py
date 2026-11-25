@@ -19,7 +19,7 @@ from sqlalchemy import select
 from app.db.worker_session import WorkerSessionLocal
 from app.services.instagram_formats import instagram_video_choices
 from app.services.instagram_access import media_downloader, rate_limit_error
-from app.services.musicfa import MusicFaError
+from app.services.musicfa import MusicFaError, _audio_info as public_music_audio_info
 from app.services.music_source_catalog import source_for_media
 from app.services.music_sources import download_track as download_public_music_track
 from app.models.download_job import (
@@ -4326,14 +4326,16 @@ def download_task(
                 check_cancelled=lambda: _check_job_control(job_id), progress=progress_hook,
             )
             print(f"Media download complete: job={job_id}, source={source_for_media(source_url).key}, elapsed_s={time.monotonic()-download_started:.2f}")
-            if output_format in (None, "mp3"):
+            source_info = public_music_audio_info(file_path, strict_320=False)
+            native_320 = int(source_info["streams"][0]["bit_rate"]) == 320000
+            if output_format in (None, "mp3") and native_320:
                 # The adapter verifies the complete native MP3 320. Keep its
                 # original audio without a second lossy encode or extra delay.
                 print(f"Media output ready: job={job_id}, mode=public_mp3_320")
             else:
                 file_path = _prepare_requested_output(
                     job_id=job_id, file_path=file_path, media_type=media_type,
-                    output_format=output_format, max_download_bytes=max_download_bytes,
+                    output_format=output_format or "mp3", max_download_bytes=max_download_bytes,
                 )
 
         elif media_type == "convert" and str(source_url).startswith(UPLOAD_SOURCE_PREFIX):
