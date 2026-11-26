@@ -95,8 +95,9 @@ workers run alongside YouTube, with a shared 30-second budget. Slow searches do 
 queue ahead of a ready match's verification. At most two verified catalogue matches are
 retained, leaving room for a YouTube alternative. Artist/title, version, duration
 and actual MP3 checks reject mismatches and previews. When a known version suffix is
-missing from a public filename, a matching Shazam recording key from the source audio
-is required; omitting the suffix only broadens discovery. At most two additional source
+missing from a public filename, the source audio must independently match: either the
+same Shazam recording key or the same full title, version and artist when catalogue keys
+differ. Omitting the suffix only broadens discovery. At most two additional source
 fingerprints run within the same catalogue budget, with no AudD calls or retry after
 service errors. These checks belong to the original recognition allowance.
 At most 512 KiB per candidate is probed, plus another 512 KiB range if a large ID3 cover

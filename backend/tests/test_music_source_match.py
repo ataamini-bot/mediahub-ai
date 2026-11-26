@@ -22,7 +22,7 @@ def sample(tmp_path_factory):
 
 
 @pytest.mark.parametrize("key,expected",[("12345",True),("67890",False)])
-def test_only_the_same_shazam_recording_can_validate_missing_version(sample,monkeypatch,tmp_path,key,expected):
+def test_missing_source_version_still_requires_the_same_recording_key(sample,monkeypatch,tmp_path,key,expected):
     calls=[]
     async def recognize(content):
         with wave.open(io.BytesIO(content)) as audio:
@@ -40,6 +40,26 @@ def test_other_provider_or_expired_budget_never_sends_source_audio(monkeypatch):
     monkeypatch.setattr(matcher.subprocess,"run",lambda *a,**k:pytest.fail("Unexpected audio processing"))
     assert not matcher.matches_sample({**TRACK,"recognition_provider":"audd"},None,time.monotonic()+10,lambda:None)
     assert not matcher.matches_sample(TRACK,None,time.monotonic()-1,lambda:None)
+
+
+@pytest.mark.parametrize("title,artist,expected",[
+    ("Original Song (Acoustic)","Example Artist",True),
+    ("Original Song - ACOUSTIC","EXAMPLE ARTIST",True),
+    ("Original Song","Example Artist",False),
+    ("Original Song (Live)","Example Artist",False),
+    ("Original Song (Remix)","Example Artist",False),
+    ("Original Song (Acoustic)","Different Artist",False),
+    ("Different Song (Acoustic)","Example Artist",False),
+])
+def test_different_catalogue_key_needs_exact_full_audio_identity(sample,monkeypatch,tmp_path,title,artist,expected):
+    calls=[]
+    async def recognize(content):
+        calls.append(1)
+        return {"matches":[{"id":"match"}],"track":{"title":title,"subtitle":artist,"key":"67890"}}
+    monkeypatch.setattr(shazam,"recognize_sample",recognize)
+    monkeypatch.setattr(matcher.tempfile,"tempdir",str(tmp_path))
+    assert matcher.matches_sample(TRACK,sample,time.monotonic()+10,lambda:None) is expected
+    assert calls == [1] and not list(tmp_path.iterdir())
 
 
 @pytest.mark.parametrize("service_error",[False,True])

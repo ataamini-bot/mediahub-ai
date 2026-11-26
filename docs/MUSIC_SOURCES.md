@@ -19,8 +19,10 @@ No new API key is required for the public-site adapters.
   variants, ambiguous download links, player-only URLs and locked/preview download boxes.
 - A known trailing version label such as `(Acoustic)` can be omitted from the discovery
   query when Shazam supplies a recording key. If the file also omits that label, acceptance
-  requires the same Shazam recording key from a locally generated fingerprint of up to
-  12 seconds of source audio. At most two such checks run, serially, within the existing
+  requires independent recognition of up to 12 seconds of source audio. Accept the same
+  Shazam recording key, or an exact normalized match of the full title (including version)
+  and artist when catalogue keys differ. Never use the versionless discovery title for
+  this audio check. At most two such checks run, serially, within the existing
   30-second catalogue budget, each with an eight-second recognition timeout. A valid
   no-match can allow the next candidate; a service error stops further checks. AudD and
   older results without a Shazam key retain exact metadata matching and make no extra calls.
