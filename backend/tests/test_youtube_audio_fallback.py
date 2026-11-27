@@ -80,7 +80,7 @@ def test_combined_full_source_download_becomes_mp3_320_without_video_or_truncati
     session = MagicMock()
     session.__enter__.return_value.execute.return_value.scalar_one_or_none.return_value = job
     monkeypatch.setattr(worker, "WorkerSessionLocal", lambda: session)
-    monkeypatch.setattr(worker, "_set_processing", lambda _id: True)
+    monkeypatch.setattr(worker, "_set_processing", lambda _id, **_claim: True)
     monkeypatch.setattr(worker, "_get_job_status", lambda _id: DownloadJobStatus.PROCESSING)
     completed = MagicMock()
     monkeypatch.setattr(worker, "_set_completed", completed)

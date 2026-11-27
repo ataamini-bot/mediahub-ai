@@ -263,7 +263,7 @@ def test_real_worker_delivers_or_fails_source_without_repeating_transfer(mp3, mo
     monkeypatch.setattr(worker, "DOWNLOAD_DIR", tmp_path)
     monkeypatch.setattr(worker, "_check_job_control", lambda _: None)
     monkeypatch.setattr(worker, "_update_download_stats", lambda **_: None)
-    monkeypatch.setattr(worker, "_set_processing", lambda _: True)
+    monkeypatch.setattr(worker, "_set_processing", lambda _, **_claim: True)
     monkeypatch.setattr(worker, "_get_job_status", lambda _: DownloadJobStatus.PROCESSING)
     monkeypatch.setattr(worker.yt_dlp, "YoutubeDL", lambda *a, **k: pytest.fail("Music-fa must not use YouTube"))
     job = SimpleNamespace(status=DownloadJobStatus.PENDING, source_url=source_url, format_id=None, quality=None,
