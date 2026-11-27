@@ -783,6 +783,9 @@ async def get_media_info(
     playlist_index: int | None = None,
 ) -> dict:
 
+    from app.middleware.interface import ui_actor
+    actor = ui_actor.get()
+
     timeout = (
         aiohttp.ClientTimeout(
             total=180
@@ -796,6 +799,7 @@ async def get_media_info(
         async with session.get(
             f"{BACKEND_URL}/downloads/info",
             params={
+                **({"telegram_id": actor} if actor else {}),
                 "url":
                     source_url,
 
@@ -1041,9 +1045,20 @@ async def release_download_files(job_id: int):
     return await _post_job_action(job_id, "release-files", "Temporary file cleanup failed")
 
 
+async def claim_download_delivery(job_id: int) -> dict:
+    return await _post_job_action(job_id, "claim-delivery", "Delivery claim failed")
+
+
+async def invalidate_cached_download(job_id: int) -> dict:
+    return await _post_job_action(job_id, "invalidate-cached-file", "Cache invalidation failed")
+
+
 async def mark_download_delivered(
     job_id: int,
+    receipt: dict | None = None,
 ) -> dict:
+    if receipt is not None:
+        return await _payment_request("POST", f"/downloads/{job_id}/delivered", payload=receipt)
     return await _post_job_action(
         job_id,
         "delivered",

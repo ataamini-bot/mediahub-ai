@@ -40,6 +40,7 @@ from app.services.download_access import (
     DownloadAccessService,
 )
 from app.services.instagram_access import InstagramRateLimited
+from app.services.source_capacity import SourceBusy, media_info as bounded_media_info
 from app.models.download_job import (
     DownloadJob,
     DownloadJobStatus,
@@ -57,6 +58,25 @@ router = APIRouter(
     ],
     dependencies=[Depends(require_internal_api_key)],
 )
+
+
+class TelegramReceipt(BaseModel):
+    file_id: str = Field(min_length=1, max_length=1024)
+    file_kind: str = Field(pattern=r"^(document|audio)$")
+    filename: str = Field(min_length=1, max_length=255)
+
+
+@router.post("/{job_id}/claim-delivery")
+async def claim_delivery(job_id: int, db: AsyncSession = Depends(get_db)):
+    from app.services.download_capacity import claim_delivery as claim
+    return await claim(db, job_id)
+
+
+@router.post("/{job_id}/invalidate-cached-file")
+async def invalidate_cached_file(job_id: int, db: AsyncSession = Depends(get_db)):
+    from app.services.download_capacity import invalidate_cached_delivery
+    await invalidate_cached_delivery(db, job_id)
+    return {"ok": True}
 
 
 class CoverOwner(BaseModel):
@@ -144,10 +164,12 @@ async def create_download(
 )
 async def mark_download_delivered(
     job_id: int,
+    receipt: TelegramReceipt | None = None,
     db: AsyncSession = Depends(get_db),
 ):
+    from app.services.download_capacity import confirm_delivery
     try:
-        return await DownloadAccessService(db).mark_delivered(job_id)
+        return await confirm_delivery(db, job_id, receipt)
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
@@ -185,6 +207,7 @@ async def get_media_info(
         default=None,
         ge=1,
     ),
+    telegram_id: int | None = Query(default=None, gt=0),
     db: AsyncSession = Depends(get_db),
 ):
     try:
@@ -192,9 +215,10 @@ async def get_media_info(
         await ensure_public_operation(db, "downloads")
 
         media_info = await asyncio.to_thread(
-            DownloadService.get_media_info,
+            bounded_media_info,
             source_url=url,
             playlist_index=playlist_index,
+            telegram_id=telegram_id if isinstance(telegram_id, int) else None,
         )
 
         return media_info
@@ -202,6 +226,9 @@ async def get_media_info(
     except InstagramRateLimited as exc:
         raise HTTPException(status_code=503, detail=exc.detail(),
                             headers={"Retry-After": str(exc.retry_after)}) from exc
+
+    except SourceBusy as exc:
+        raise HTTPException(503, exc.detail(), headers={"Retry-After": "10"}) from exc
 
     except PublicOperationDisabled as exc:
 
@@ -258,7 +285,7 @@ async def get_download(
         db
     )
 
-    job = await service.get_job(
+    job = await service.repository.get_by_id(
         job_id
     )
 
@@ -276,7 +303,7 @@ async def get_download(
             ),
         )
 
-    return job
+    return await service.get_job(job_id)
 
 
 # ============================================================

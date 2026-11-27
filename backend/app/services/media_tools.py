@@ -67,11 +67,25 @@ async def submit(db, data):
     config = await read_config(db, data.kind)
     if not config["enabled"] or not provider_configured(config):
         raise MediaToolError("tool_disabled", 503)
+    cached_result = None
     if options.get("source_url"):
+        from app.services import music_link_cache
+        def existing_result():
+            cache_key = music_link_cache.key(options["source_url"], config["provider"], data.telegram_id)
+            return music_link_cache.read(cache_key)
+        cached_result = await asyncio.to_thread(existing_result)
+        if not cached_result:
+            try:
+                await asyncio.to_thread(check_instagram_access, options["source_url"])
+            except InstagramRateLimited:
+                raise MediaToolError("instagram_rate_limited", 503) from None
+    if not cached_result:
+        from app.services.recognition_access import check
+        from app.services.media_tool_providers import ToolError
         try:
-            await asyncio.to_thread(check_instagram_access, options["source_url"])
-        except InstagramRateLimited:
-            raise MediaToolError("instagram_rate_limited", 503) from None
+            await asyncio.to_thread(check, config["provider"])
+        except ToolError as exc:
+            raise MediaToolError(exc.code, 503) from None
     from app.services.download_access import quota_day_start_utc, quota_window_start_utc
     timezone_name = await get_managed_setting(db, "quota.timezone")
     midnight = quota_day_start_utc(timezone_name=timezone_name)
@@ -97,6 +111,11 @@ async def submit(db, data):
             input_file(data.telegram_id, data.request_id, data.kind)
         except ValueError:
             raise MediaToolError("input_expired", 422) from None
+    from app.services.download_capacity import ensure_queue_space, DownloadQueueFull
+    try:
+        await ensure_queue_space(db)
+    except DownloadQueueFull as exc:
+        raise MediaToolError(exc.code, 503) from None
     row = MediaToolRequest(id=data.request_id, user_id=user.id, kind=data.kind, options=options, status="pending")
     db.add(row)
     await db.commit()

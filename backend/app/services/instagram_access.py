@@ -10,6 +10,12 @@ import threading
 import time
 from urllib.parse import urlsplit
 
+# Imported lazily by the wrapper to keep the cooldown usable during startup.
+def pace_instagram():
+    from app.services.source_capacity import pace_instagram as pace
+    return pace()
+
+
 import redis
 from redis.backoff import NoBackoff
 from redis.retry import Retry
@@ -162,6 +168,9 @@ def media_downloader(source_url, options):
 
                 def guarded_urlopen(request):
                     check_instagram_access(source_url)
+                    request_url = getattr(request, "url", str(request))
+                    if is_instagram_url(request_url):
+                        pace_instagram()
                     try:
                         return original_urlopen(request)
                     except Exception as exc:
@@ -175,6 +184,10 @@ def media_downloader(source_url, options):
                 downloader.urlopen = guarded_urlopen
             yield downloader
     except Exception as exc:
+        from app.services.source_capacity import SourceBusy
+        for error in _errors(exc):
+            if isinstance(error, SourceBusy):
+                raise error from None
         limited = rate_limit_error(exc, source_url)
         if limited:
             raise limited from None

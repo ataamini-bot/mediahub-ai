@@ -129,6 +129,8 @@ from app.services.backend import (
     get_download_entitlement,
     get_media_info,
     mark_download_delivered,
+    claim_download_delivery,
+    invalidate_cached_download,
     release_download_files,
     pause_download_job,
     register_telegram_user,
@@ -282,9 +284,9 @@ class DownloadMessageFilter(
 
 def download_error_text(exc: Exception) -> str:
     code = exc.detail.get("code") if isinstance(exc, BackendAPIError) and isinstance(exc.detail, dict) else str(exc)
-    if code == "instagram_rate_limited":
+    if code in {"instagram_rate_limited", "download_queue_full", "telegram_cached_file_expired"}:
         from app.tool_texts import tool_text
-        return tool_text("error_instagram_rate_limited")
+        return tool_text("error_" + code)
     if not isinstance(exc, BackendAPIError) or not isinstance(exc.detail, dict):
         return str(exc)[:1000]
 
@@ -3010,6 +3012,12 @@ async def send_downloaded_file(
     media_info: dict | None = None,
 ) -> None:
     job_id = int(job["id"])
+    claim = await claim_download_delivery(job_id)
+    if not claim.get("claimed"):
+        # A concurrent poller or an interrupted send owns delivery. In
+        # particular, do not delete the other poller's in-flight local file.
+        return
+    cached_file = job.get("telegram_file_id")
     path = Path(job["file_path"]) if job.get("file_path") else None
 
     def unlink_output():
@@ -3021,11 +3029,14 @@ async def send_downloaded_file(
             print(f"Temporary output cleanup requires retry: job={job_id}, {type(exc).__name__}")
 
     try:
-        if path is None:
-            raise RuntimeError("Downloaded file path is missing")
-        if not path.is_file():
-            raise FileNotFoundError("Downloaded file is no longer available")
-        file_size = path.stat().st_size
+        if cached_file:
+            file_size = int(job.get("file_size") or 0)
+        else:
+            if path is None:
+                raise RuntimeError("Downloaded file path is missing")
+            if not path.is_file():
+                raise FileNotFoundError("Downloaded file is no longer available")
+            file_size = path.stat().st_size
         if file_size <= 0:
             raise RuntimeError("Downloaded file is empty")
         if file_size > MAX_DOWNLOAD_SIZE_BYTES:
@@ -3040,7 +3051,9 @@ async def send_downloaded_file(
             f"📦 حجم فایل: <b>{size_label}</b>\n\n"
             "📤 <b>در حال ارسال فایل به تلگرام...</b>"
         ), reply_markup=None)
-        filename = media_filename((media_info or {}).get("title"), path.suffix or ".mp4")
+        suffix = Path(job.get("telegram_filename") or "file.mp4").suffix if cached_file else (path.suffix or ".mp4")
+        filename = job.get("telegram_filename") if cached_file else media_filename((media_info or {}).get("title"), suffix)
+        upload = cached_file or FSInputFile(str(path), filename=filename)
         compatible = job.get("media_type") == "video" and job.get("output_format") == "mp4"
         caption = _completed_file_caption(filename, size_label, job, media_info)
         if job.get("media_type") == "video":
@@ -3057,15 +3070,31 @@ async def send_downloaded_file(
         if music:
             from app.music_presentation import music_file_presentation
             caption, markup = music_file_presentation(music, job_id)
-        if music and path.suffix.lower() in {".mp3", ".m4a"}:
-            await message.answer_audio(
-                audio=FSInputFile(str(path), filename=filename), title=music["title"][:128],
-                performer=music["artist"][:128], duration=int((media_info or {}).get("duration") or 0),
-                caption=caption, parse_mode="HTML", reply_markup=markup)
-        else:
-            await message.answer_document(
-                document=FSInputFile(str(path), filename=filename), disable_content_type_detection=True,
-                caption=caption, parse_mode="HTML", reply_markup=markup)
+        file_kind = "audio" if music and suffix.lower() in {".mp3", ".m4a"} else "document"
+        if cached_file and job.get("telegram_file_kind") != file_kind:
+            await invalidate_cached_download(job_id)
+            raise RuntimeError("telegram_cached_file_expired")
+        try:
+            if file_kind == "audio":
+                sent = await message.answer_audio(
+                    audio=upload, title=music["title"][:128], performer=music["artist"][:128],
+                    duration=int((media_info or {}).get("duration") or 0),
+                    caption=caption, parse_mode="HTML", reply_markup=markup)
+            else:
+                sent = await message.answer_document(
+                    document=upload, disable_content_type_detection=True,
+                    caption=caption, parse_mode="HTML", reply_markup=markup)
+        except Exception as exc:
+            from aiogram.exceptions import TelegramBadRequest
+            definite_invalid_id = (isinstance(exc, TelegramBadRequest) and any(value in str(exc).lower()
+                for value in ("wrong file identifier", "file_id invalid", "file reference expired", "wrong remote file id")))
+            if cached_file and definite_invalid_id:
+                await invalidate_cached_download(job_id)
+                raise RuntimeError("telegram_cached_file_expired") from None
+            raise
+        media = getattr(sent, file_kind, None)
+        file_id = getattr(media, "file_id", None)
+        receipt = {"file_id": file_id, "file_kind": file_kind, "filename": filename} if isinstance(file_id, str) and file_id else None
         print(f"Telegram media sent: job={job_id}, bytes={file_size}, elapsed_s={time.monotonic()-upload_started:.2f}")
         # Remove the bytes immediately after Telegram accepts the file, even
         # when delivery accounting is temporarily unreachable.
@@ -3077,7 +3106,10 @@ async def send_downloaded_file(
                 pass
         for attempt in range(3):
             try:
-                await mark_download_delivered(job_id)
+                if receipt is None:
+                    await mark_download_delivered(job_id)
+                else:
+                    await mark_download_delivered(job_id, receipt)
                 break
             except Exception as exc:
                 print(f"Delivery confirmation failed: job={job_id}, attempt={attempt+1}, {type(exc).__name__}")

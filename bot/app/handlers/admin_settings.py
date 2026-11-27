@@ -141,7 +141,8 @@ async def edit_runtime_setting(
         await state.set_state(AdminSettingStates.waiting_for_value)
         if definition.kind == "integer":
             instruction = (
-                f"{_tr('یک عدد بین ')}{definition.minimum}{_tr(' تا ')}{definition.maximum}{_tr(' مگابایت بفرستید.')}"
+                f"{_tr('یک عدد بین ')}{definition.minimum}{_tr(' تا ')}{definition.maximum}"
+                + (_tr(' مگابایت بفرستید.') if key == "payments.receipt_max_size_mb" else _tr(' بفرستید.'))
             )
         else:
             instruction = (
@@ -151,7 +152,7 @@ async def edit_runtime_setting(
         await callback.message.edit_text(
             (
                 f"✏️ <b>{html.escape(definition.label)}</b>\n\n"
-                f"{instruction}"
+                f"{html.escape(definition.description)}\n\n{instruction}"
             ),
             parse_mode="HTML",
             reply_markup=build_setting_value_keyboard(key),

@@ -49,6 +49,8 @@ async def configure(db, payload):
         broadcasts = await cancel_restored_broadcasts(db)
         notices = await reconcile_credit_notices_after_restore(db)
         tools = await reconcile_restored_tools(db)
+        from app.services.download_capacity import clear_restored_outputs
+        await clear_restored_outputs(db)
         AuditService(db).record(action="system.database_restored", target_type="database",
             details={"unfinished_jobs_cancelled": result.rowcount, "credit_notices_uncertain": notices,
                      "media_tools_cancelled": tools, **broadcasts})

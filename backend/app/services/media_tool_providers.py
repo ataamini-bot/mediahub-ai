@@ -20,6 +20,8 @@ class ToolError(RuntimeError):
 
 
 def provider_json(url, *, token, files, data, timeout=45):
+    from app.services.recognition_access import before_request, record_limit
+    before_request("audd")
     data = {**data, "api_token": token}
     try:
         with httpx.Client(timeout=httpx.Timeout(timeout, connect=15), trust_env=False) as client:
@@ -27,6 +29,7 @@ def provider_json(url, *, token, files, data, timeout=45):
                 if response.status_code in (401, 403):
                     raise ToolError("provider_auth")
                 if response.status_code == 429:
+                    record_limit("audd", response.headers)
                     raise ToolError("provider_busy")
                 if response.status_code >= 400:
                     raise ToolError("provider_rejected")

@@ -118,7 +118,7 @@ async def claim_preview(request_id: UUID, data: ToolOwner, db: AsyncSession = De
         return {"claimed": False}
     preview = (row.result or {}).get("preview")
     path = folder(data.telegram_id, request_id) / "preview.mp4"
-    if not preview or path.is_symlink() or not path.is_file() or not 0 < path.stat().st_size < MAX_PREVIEW_BYTES:
+    if not preview or (not preview.get("telegram_file_id") and (path.is_symlink() or not path.is_file() or not 0 < path.stat().st_size < MAX_PREVIEW_BYTES)):
         return {"claimed": False}
     # Commit before Telegram receives bytes. An uncertain send is not repeated.
     row.delivery_state = "preview_sending"
@@ -126,8 +126,12 @@ async def claim_preview(request_id: UUID, data: ToolOwner, db: AsyncSession = De
     return {"claimed": True, "preview": preview}
 
 
+class PreviewRelease(ToolOwner):
+    file_id: str | None = Field(default=None, min_length=1, max_length=1024)
+
+
 @router.post("/{request_id}/release-preview")
-async def release_preview(request_id: UUID, data: ToolOwner, db: AsyncSession = Depends(get_db)):
+async def release_preview(request_id: UUID, data: PreviewRelease, db: AsyncSession = Depends(get_db)):
     try:
         row = await owned(db, request_id, data.telegram_id, lock=True)
     except MediaToolError as exc:
@@ -139,6 +143,10 @@ async def release_preview(request_id: UUID, data: ToolOwner, db: AsyncSession = 
     if row.status not in {"pending", "processing"}:
         remove_files(data.telegram_id, request_id)
         row.files_removed_at = datetime.now(timezone.utc)
+    if getattr(data, "file_id", None):
+        import asyncio
+        from app.services.music_link_cache import save_preview
+        await asyncio.to_thread(save_preview, row.link_cache_key, (row.result or {}).get("preview"), data.file_id)
     await db.commit()
     return {"released": True}
 
@@ -187,7 +195,8 @@ async def download_song(request_id: UUID, data: SongDownload, db: AsyncSession =
         # Only a source from the server's full-song candidates can reach the
         # ordinary audio downloader. An uploaded clip can never reach here.
         job = await DownloadService(db).create_job(source_url=url, telegram_id=data.telegram_id,
-                    media_type="audio", output_format=data.output_format)
+                    media_type="audio", output_format=data.output_format,
+                    delivery_kind="audio" if data.output_format in {"mp3", "m4a"} else "document")
     except (DownloadAccessError, DownloadFormatError) as exc:
         await db.rollback()
         row = await owned(db, request_id, data.telegram_id, lock=True)
@@ -224,7 +233,7 @@ async def claim_song_delivery(request_id: UUID, data: SongDownload, db: AsyncSes
         return {"claimed": False, "reason": "already_delivered"}
     if selection.get("delivery_state"):
         return {"claimed": False, "reason": "delivery_started"}
-    if job.files_removed_at or not job.file_path:
+    if not job.telegram_file_id and (job.files_removed_at or not job.file_path):
         return {"claimed": False, "reason": "input_expired"}
     # Persist before Telegram receives bytes. Concurrent pollers, repeat clicks
     # and bot restarts must not deliver the same source/format twice.

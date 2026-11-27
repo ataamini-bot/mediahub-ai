@@ -66,6 +66,8 @@ def ui(monkeypatch):
     monkeypatch.setattr(main, "get_download_entitlement", AsyncMock(return_value={"forced_join_required": False}))
     monkeypatch.setattr(main, "safe_edit_message", AsyncMock())
     monkeypatch.setattr(main, "mark_download_delivered", AsyncMock())
+    monkeypatch.setattr(main, "claim_download_delivery", AsyncMock(return_value={"claimed": True}))
+    monkeypatch.setattr(main, "invalidate_cached_download", AsyncMock())
     monkeypatch.setattr(main, "release_download_files", AsyncMock())
     monkeypatch.setattr(main, "start_cover_request", AsyncMock(return_value=72))
     monkeypatch.setattr(main, "confirm_cover_request", AsyncMock())

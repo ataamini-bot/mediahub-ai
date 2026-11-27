@@ -32,8 +32,11 @@ class RecognitionClient:
         # requests are not used to work around provider access restrictions.
         if kwargs.pop("proxy", None) is not None:
             raise ToolError("provider_rejected")
+        from app.services.recognition_access import before_request, record_limit
+        await asyncio.to_thread(before_request, "shazamio")
         async with self.client.stream(method, url, **kwargs) as response:
             if response.status_code == 429:
+                await asyncio.to_thread(record_limit, "shazamio", response.headers)
                 raise ToolError("provider_busy")
             if response.status_code in (401, 403):
                 raise ToolError("provider_auth")

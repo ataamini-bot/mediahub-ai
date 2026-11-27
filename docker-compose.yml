@@ -167,7 +167,8 @@ services:
     container_name: mediahub-worker
     restart: unless-stopped
 
-    command: celery -A app.workers.celery_app worker --loglevel=INFO
+    command: python -m app.workers.launcher
+    stop_grace_period: 60s
 
     env_file:
       - .env

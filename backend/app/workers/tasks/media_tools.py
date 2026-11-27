@@ -48,43 +48,63 @@ def run_tool(request_id):
             if user:
                 remove_files(user.telegram_id, row.id)
             return
+        from app.services import music_link_cache as link_cache
+        cache_key = link_cache.key((row.options or {}).get("source_url"), config["provider"], user.telegram_id)
+        cached = link_cache.read(cache_key)
+        cache_owner = link_cache.acquire(cache_key) if cached is None else None
+        if cache_owner is False:
+            # Leave this independent user's quota-reserved request pending.
+            # The owner alone fetches a sample; the next execution reads metadata.
+            row.enqueued_at = datetime.now(timezone.utc)
+            db.commit()
+            run_tool.apply_async(args=[str(request_id)], countdown=5, retry=False)
+            return
+        if cache_owner:
+            cached = link_cache.read(cache_key) or cached
+        row.link_cache_key = cache_key
         row.status, row.started_at = "processing", datetime.now(timezone.utc)
         db.commit()
         telegram_id, kind, options = user.telegram_id, row.kind, row.options
     result, error, preview = None, None, None
     try:
-        if kind == "music" and options.get("source_url"):
-            from app.services.media_tool_links import fetch_music_link
-            started = time.monotonic()
-            source = fetch_music_link(options["source_url"], folder(telegram_id, request_id) / "input",
-                                      seconds=36 if config["provider"] == "shazamio" else 12)
-            logger.warning("Music link sample ready: request=%s, elapsed_s=%.2f", request_id, time.monotonic() - started)
+        if cached is not None:
+            ensure_request_active(request_id)
+            result, preview = cached
+            logger.info("Music link recognition reused")
         else:
-            source = input_file(telegram_id, request_id, kind)
-        if kind == "music":
-            preview = prepare_preview(source)
-            if preview:
-                with WorkerSessionLocal() as db:
-                    current = db.scalar(select(MediaToolRequest).where(MediaToolRequest.id == request_id).with_for_update())
-                    if current and current.status == "processing":
-                        current.result = {"preview": preview}
-                        db.commit()
-            # Link extraction can take longer than an upload. A cancellation
-            # received during it must stop before any paid recognition call.
-            ensure_request_active(request_id)
-            started = time.monotonic()
-            result = recognize_music(source, config["token"], provider=config["provider"],
-                                     check_cancelled=lambda: ensure_request_active(request_id))
-            logger.warning("Music recognition complete: request=%s, elapsed_s=%.2f, duration_known=%s",
-                           request_id, time.monotonic() - started, bool(result.get("duration")))
-            # Recognition metadata never supplies a downloadable preview.
-            ensure_request_active(request_id)
-            started = time.monotonic()
-            result["candidates"] = find_full_tracks(result)
-            result["automatic_candidate"] = automatic_song_candidate(result, result["candidates"])
-            logger.warning("Music sources ready: request=%s, count=%s, automatic=%s, elapsed_s=%.2f",
-                           request_id, len(result["candidates"]), result["automatic_candidate"] is not None,
-                           time.monotonic() - started)
+            if kind == "music" and options.get("source_url"):
+                from app.services.media_tool_links import fetch_music_link
+                started = time.monotonic()
+                source = fetch_music_link(options["source_url"], folder(telegram_id, request_id) / "input",
+                                          seconds=36 if config["provider"] == "shazamio" else 12)
+                logger.warning("Music link sample ready: request=%s, elapsed_s=%.2f", request_id, time.monotonic() - started)
+            else:
+                source = input_file(telegram_id, request_id, kind)
+            if kind == "music":
+                preview = prepare_preview(source)
+                if preview:
+                    with WorkerSessionLocal() as db:
+                        current = db.scalar(select(MediaToolRequest).where(MediaToolRequest.id == request_id).with_for_update())
+                        if current and current.status == "processing":
+                            current.result = {"preview": preview}
+                            db.commit()
+                # Link extraction can take longer than an upload. A cancellation
+                # received during it must stop before any paid recognition call.
+                ensure_request_active(request_id)
+                started = time.monotonic()
+                result = recognize_music(source, config["token"], provider=config["provider"],
+                                         check_cancelled=lambda: ensure_request_active(request_id))
+                logger.warning("Music recognition complete: request=%s, elapsed_s=%.2f, duration_known=%s",
+                               request_id, time.monotonic() - started, bool(result.get("duration")))
+                # Recognition metadata never supplies a downloadable preview.
+                ensure_request_active(request_id)
+                started = time.monotonic()
+                result["candidates"] = find_full_tracks(result)
+                result["automatic_candidate"] = automatic_song_candidate(result, result["candidates"])
+                logger.warning("Music sources ready: request=%s, count=%s, automatic=%s, elapsed_s=%.2f",
+                               request_id, len(result["candidates"]), result["automatic_candidate"] is not None,
+                               time.monotonic() - started)
+            link_cache.save(cache_key, result)
     except ToolError as exc:
         error = exc.code
     except SoftTimeLimitExceeded:
@@ -93,6 +113,7 @@ def run_tool(request_id):
         # Do not log provider responses, credentials, photo bytes or file paths.
         error = "tool_failed"
     finally:
+        link_cache.release(cache_key, cache_owner)
         remove_files(telegram_id, request_id, keep_preview=bool(preview))
     with WorkerSessionLocal() as db:
         row = db.scalar(select(MediaToolRequest).where(MediaToolRequest.id == request_id).with_for_update())

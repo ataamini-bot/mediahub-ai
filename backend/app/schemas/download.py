@@ -153,6 +153,11 @@ class DownloadResponse(
     BaseModel
 ):
     id: int
+    telegram_file_id: str | None = None
+    telegram_file_kind: str | None = None
+    telegram_filename: str | None = None
+    delivery_started_at: datetime | None = None
+    delivery_kind: str = "document"
     source_url: str
 
     plan_id: (

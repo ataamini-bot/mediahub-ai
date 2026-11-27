@@ -9,6 +9,7 @@ from urllib.parse import urlsplit, urlunsplit
 
 from app.services.media_tool_providers import ToolError
 from app.services.instagram_access import InstagramRateLimited, check_instagram_access, media_downloader
+from app.services.pinterest_links import is_pinterest_host, valid_link, resolve_pin
 
 LINK_HOSTS = {
     "youtube.com", "www.youtube.com", "m.youtube.com", "music.youtube.com", "youtu.be",
@@ -24,9 +25,11 @@ def normalize_music_link(value):
     if not isinstance(value, str) or not 1 <= len(value) <= 2048 or re.search(r"[\s\\\x00-\x1f\x7f]", value):
         raise ValueError("Invalid music link")
     parts = urlsplit(value)
-    if (parts.scheme not in {"http", "https"} or parts.hostname not in LINK_HOSTS
+    if (parts.scheme not in {"http", "https"} or (parts.hostname not in LINK_HOSTS and not is_pinterest_host(parts.hostname or ""))
             or parts.username or parts.password or parts.port not in {None, 80, 443}):
         raise ValueError("Unsupported music link")
+    if is_pinterest_host(parts.hostname or "") and not valid_link(value):
+        raise ValueError("Send an individual Pinterest pin")
     # No local URLs, custom ports, arbitrary shorteners, or credentials.
     return urlunsplit(("https", parts.hostname, parts.path or "/", parts.query, ""))
 
@@ -80,6 +83,8 @@ def download_link_sample(url, target, *, seconds=12):
         raise ValueError("Unsupported recognition sample length")
     url = normalize_music_link(url)
     options = _get_media_info_options(url)
+    if is_pinterest_host(urlsplit(url).hostname or ""):
+        url = resolve_pin(url)
     # A combined Instagram rendition supplies the small visual preview without
     # another fetch. Each recognition signature is still at most 12 seconds.
     format_selector = ("best[height<=480]/best/bestaudio" if urlsplit(url).hostname in
@@ -92,7 +97,7 @@ def download_link_sample(url, target, *, seconds=12):
             "ffmpeg_i": ["-protocol_whitelist", "http,https,tcp,tls,crypto", "-rw_timeout", "15000000"],
             "ffmpeg_o": ["-fs", str(MAX_SAMPLE_BYTES), "-t", str(seconds)],
         },
-        allowed_extractors=["youtube.*", "instagram.*", "tiktok.*", "twitter.*", "threads.*"],
+        allowed_extractors=["youtube.*", "instagram.*", "tiktok.*", "twitter.*", "threads.*", "pinterest"],
         socket_timeout=12, retries=0, fragment_retries=0, extractor_retries=0,
         cachedir=False, nopart=True, fixup="never", logger=QuietLogger(),
     )

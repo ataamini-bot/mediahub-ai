@@ -15,6 +15,8 @@ celery_app.conf.update(
     result_serializer="json",
     timezone="UTC",
     enable_utc=True,
+    worker_prefetch_multiplier=1,
+    task_routes={"mediahub.download": {"queue": "downloads"}},
     broker_transport_options={
         "queue_order_strategy": "priority",
         "priority_steps": list(range(10)),
@@ -48,7 +50,8 @@ def on_worker_ready(
     sender=None,
     **kwargs,
 ):
-    notify_worker_ready()
+    if not str(getattr(sender, "hostname", "")).startswith("tools@"):
+        notify_worker_ready()
 
 
 @worker_shutdown.connect
@@ -56,4 +59,5 @@ def on_worker_shutdown(
     sender=None,
     **kwargs,
 ):
-    notify_worker_stopping()
+    if not str(getattr(sender, "hostname", "")).startswith("tools@"):
+        notify_worker_stopping()

@@ -10,8 +10,8 @@
   },
   "b_identify_a_song_and": {
     "label": "🎵 تشخیص آهنگ و دریافت نسخه کامل",
-    "fa": "🎵 آهنگ این کلیپ چیه؟\n\nیکی از این‌ها را بفرست:\n🔗 لینک ویدئو\n🎬 کلیپ یا فایل آهنگ\n🎙 ویس با حداقل ۱۰ ثانیه موسیقی واضح\n\nبعد از شناسایی، می‌توانی نسخهٔ کامل آهنگ را با فرمت دلخواه دریافت کنی.",
-    "en": "🎵 What song is this?\n\nSend one of these:\n🔗 A video link\n🎬 A clip or audio file\n🎙 A voice message with at least 10 seconds of clear music\n\nIdentify the song, then get the full track in your preferred format.",
+    "fa": "🎵 آهنگ این کلیپ چیه؟\n\nیکی از این‌ها را بفرست:\n🔗 لینک ویدئو از اینستاگرام، پینترست یا دیگر منابع پشتیبانی‌شده\n🎬 کلیپ یا فایل آهنگ\n🎙 ویس با حداقل ۱۰ ثانیه موسیقی واضح\n\nبعد از شناسایی، می‌توانی نسخهٔ کامل آهنگ را با فرمت دلخواه دریافت کنی.",
+    "en": "🎵 What song is this?\n\nSend one of these:\n🔗 A video link from Instagram, Pinterest or another supported source\n🎬 A clip or audio file\n🎙 A voice message with at least 10 seconds of clear music\n\nIdentify the song, then get the full track in your preferred format.",
     "fields": [],
     "maximum": 3000,
     "html": true,
@@ -12363,6 +12363,24 @@
     "en": "📎 The user sent an attachment.",
     "fields": [],
     "maximum": 200,
+    "html": false,
+    "scope": "common"
+  },
+  "error_download_queue_full": {
+    "label": "ظرفیت صف دانلود",
+    "fa": "الان ظرفیت پردازش پر است. لطفاً کمی بعد دوباره تلاش کنید؛ درخواستی به سهمیهٔ دانلود شما اضافه نشد.",
+    "en": "Processing capacity is full. Please try again shortly; no new download was charged to your quota.",
+    "fields": [],
+    "maximum": 1000,
+    "html": false,
+    "scope": "common"
+  },
+  "error_telegram_cached_file_expired": {
+    "label": "فایل تلگرام منقضی شده",
+    "fa": "فایل قبلی در تلگرام دیگر قابل ارسال نیست. لطفاً دانلود را دوباره شروع کنید تا فایل تازه دریافت شود.",
+    "en": "The previous Telegram file is no longer available. Please start the download again to fetch a fresh file.",
+    "fields": [],
+    "maximum": 1000,
     "html": false,
     "scope": "common"
   }

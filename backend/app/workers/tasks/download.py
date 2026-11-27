@@ -1704,6 +1704,7 @@ def _update_download_stats(
 
 def _set_processing(
     job_id: int,
+    *, allow_retry: bool = False, task_id: str | None = None,
 ) -> bool:
 
     with WorkerSessionLocal() as session:
@@ -1714,11 +1715,17 @@ def _set_processing(
             ).where(
                 DownloadJob.id
                 == job_id
-            )
+            ).with_for_update()
         ).scalar_one_or_none()
 
         if job is None:
             return False
+        if job.status == DownloadJobStatus.PROCESSING:
+            if not allow_retry or job.execution_token != task_id:
+                return False
+        elif job.status != DownloadJobStatus.PENDING:
+            return False
+        job.execution_token = task_id
 
         if job.status in (
             DownloadJobStatus.PAUSED,
@@ -1766,7 +1773,7 @@ def _set_completed(
             ).where(
                 DownloadJob.id
                 == job_id
-            )
+            ).with_for_update()
         ).scalar_one_or_none()
 
         if job is None:
@@ -3832,9 +3839,7 @@ def download_task(
     # Processing
     # ========================================================
 
-    if not _set_processing(
-        job_id
-    ):
+    if not _set_processing(job_id, allow_retry=bool(self.request.retries), task_id=self.request.id):
 
         return (
             f"Download job "
@@ -3885,9 +3890,17 @@ def download_task(
         ],
     ] = {}
 
+    public_visibility_recorded = False
+
     def progress_hook(
         data: dict,
     ) -> None:
+        nonlocal public_visibility_recorded
+        if not public_visibility_recorded and (data.get("info_dict") or {}).get("availability") == "public":
+            from app.services.source_capacity import register_public_source
+            register_public_source(source_url)
+            public_visibility_recorded = True
+
 
         nonlocal last_progress
 

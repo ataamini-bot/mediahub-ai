@@ -23,6 +23,22 @@ class RuntimeSettingDefinition:
 
 
 RUNTIME_SETTINGS: tuple[RuntimeSettingDefinition, ...] = (
+    RuntimeSettingDefinition(key="downloads.public_reuse", category="downloads", kind="boolean",
+        minimum=None, maximum=None, label='استفاده دوباره از فایل عمومی', description='ارسال خروجی عمومی یکسان از تلگرام بدون دانلود دوباره'),
+    RuntimeSettingDefinition(key="downloads.reuse_minutes", category="downloads", kind="integer",
+        minimum=1, maximum=1440, label='عمر شناسه فایل عمومی (دقیقه)', description='پس از این زمان منبع دوباره دریافت می\u200cشود'),
+    RuntimeSettingDefinition(key="downloads.queue_limit", category="downloads", kind="integer",
+        minimum=5, maximum=50000, label='ظرفیت صف دانلود', description='سقف مجموع درخواست\u200cهای در صف، در حال پردازش و متوقف'),
+    RuntimeSettingDefinition(key="downloads.metadata_parallel", category="downloads", kind="integer",
+        minimum=1, maximum=32, label='بررسی هم\u200cزمان لینک\u200cها', description='سقف بررسی اطلاعات لینک در کل سرویس\u200cها'),
+    RuntimeSettingDefinition(key="downloads.metadata_seconds", category="downloads", kind="integer",
+        minimum=0, maximum=600, label='عمر اطلاعات لینک (ثانیه)', description='ذخیره کوتاه\u200cمدت اطلاعات پست عمومی؛ صفر یعنی غیرفعال'),
+    RuntimeSettingDefinition(key="downloads.instagram_interval_ms", category="downloads", kind="integer",
+        minimum=250, maximum=10000, label='فاصله درخواست اینستاگرام (میلی\u200cثانیه)', description='حداقل فاصله درخواست\u200cهای اطلاعات به اینستاگرام؛ تضمین رفع محدودیت نیست'),
+    RuntimeSettingDefinition(key="downloads.worker_processes", category="downloads", kind="integer",
+        minimum=1, maximum=16, label='پردازشگر دانلود', description='تعداد پردازشگرها؛ اعمال پس از راه\u200cاندازی مجدد سرویس Worker'),
+    RuntimeSettingDefinition(key="downloads.recognition_interval_ms", category="downloads", kind="integer", minimum=250, maximum=10000,
+        label="فاصله درخواست تشخیص آهنگ (میلی‌ثانیه)", description="حداقل فاصله تماس با سرویس تشخیص؛ زمان انتظار اعلام‌شدهٔ سرویس نیز رعایت می‌شود"),
     RuntimeSettingDefinition(
         key="bot.maintenance_mode",
         category="bot",
@@ -73,7 +89,7 @@ def setting_value_text(definition: RuntimeSettingDefinition, value: object) -> s
         return _tr("فعال ✅") if bool(value) else _tr("غیرفعال ⛔️")
     if definition.kind == "integer":
         try:
-            return f"{int(value)}{_tr(' مگابایت')}"
+            return f"{int(value)}" + (_tr(" مگابایت") if definition.key == "payments.receipt_max_size_mb" else "")
         except (TypeError, ValueError):
             return _tr("نامعتبر ⚠️")
     return str(value or "—")
@@ -84,7 +100,7 @@ def runtime_settings_text(rows: list[dict]) -> str:
     lines = [
         _tr("⚙️ <b>تنظیمات ربات</b>"),
         "",
-        _tr("تغییرها بلافاصله و بدون ویرایش فایل سرور اعمال می‌شوند."),
+        _tr("تغییرها بدون ویرایش فایل سرور اعمال می‌شوند؛ تعداد پردازشگر پس از راه‌اندازی مجدد Worker تغییر می‌کند."),
         "",
     ]
 

@@ -133,3 +133,10 @@ def test_cleanup_does_not_follow_symlinks_and_checks_upload_limit(monkeypatch, t
         input_file(123, request_id, "music")
     remove_files(123, request_id)
     assert outside.read_text() == "keep" and not path.exists()
+
+
+@pytest.fixture(autouse=True)
+def isolated_recognition_transport(monkeypatch):
+    from app.services import recognition_access
+    monkeypatch.setattr(recognition_access, "before_request", lambda *_: None)
+    monkeypatch.setattr(recognition_access, "record_limit", lambda *_: None)

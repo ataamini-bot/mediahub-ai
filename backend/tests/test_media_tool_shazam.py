@@ -226,3 +226,10 @@ def test_all_windows_share_one_recognition_deadline(monkeypatch, tmp_path):
         shazam.recognize_shazam(source)
     assert calls == [1, 1] and timeouts == [45, 40]
     assert not (tmp_path / "sample.wav").exists()
+
+
+@pytest.fixture(autouse=True)
+def isolated_recognition_transport(monkeypatch):
+    from app.services import recognition_access
+    monkeypatch.setattr(recognition_access, "before_request", lambda *_: None)
+    monkeypatch.setattr(recognition_access, "record_limit", lambda *_: None)

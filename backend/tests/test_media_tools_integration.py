@@ -338,7 +338,7 @@ async def test_song_download_uses_full_source_and_repeated_click_creates_one_job
         assert (await client.post(endpoint, json=body)).json()["reason"] == "delivery_started"
         assert (await client.post(endpoint, json={**body, "output_format": "flac"})).json()["claimed"]
         assert (await client.post(endpoint, json={**body, "telegram_id": records.users[2].telegram_id})).status_code == 404
-    assert calls == [{"source_url": source, "telegram_id": value.telegram_id, "media_type": "audio", "output_format": fmt}
+    assert calls == [{"source_url": source, "telegram_id": value.telegram_id, "media_type": "audio", "output_format": fmt, "delivery_kind": "audio" if fmt == "mp3" else "document"}
                      for fmt in ("mp3", "flac")]
 
 

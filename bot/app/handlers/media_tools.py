@@ -286,6 +286,7 @@ async def maybe_show_preview(message, telegram_id, request_id, row, *, reply_to=
     if not (row.get("result") or {}).get("preview") or row.get("delivery_state"):
         return message
     claimed = False
+    receipt_file_id = None
     path = tool_folder(telegram_id, request_id) / "preview.mp4"
     try:
         claim = await _payment_request("POST", f"/media-tools/{request_id}/claim-preview",
@@ -293,14 +294,17 @@ async def maybe_show_preview(message, telegram_id, request_id, row, *, reply_to=
         claimed = bool(claim.get("claimed"))
         if not claimed:
             return message
-        if path.is_symlink() or not path.is_file() or not 0 < path.stat().st_size < 5 * 1024**2:
-            return message
         preview = claim["preview"]
-        sent = await message.answer_video(video=FSInputFile(path, filename="MediaHub-preview.mp4"),
+        cached_preview = preview.get("telegram_file_id")
+        if not cached_preview and (path.is_symlink() or not path.is_file() or not 0 < path.stat().st_size < 5 * 1024**2):
+            return message
+        sent = await message.answer_video(video=cached_preview or FSInputFile(path, filename="MediaHub-preview.mp4"),
             caption=html.escape(text("music_preview_processing")), parse_mode="HTML", supports_streaming=True,
             duration=preview["duration"], width=preview["width"], height=preview["height"],
             reply_markup=status_keyboard(request_id), request_timeout=30,
             reply_parameters=ReplyParameters(message_id=reply_to, allow_sending_without_reply=True) if reply_to else None)
+        received_id = getattr(getattr(sent, "video", None), "file_id", None)
+        receipt_file_id = received_id if isinstance(received_id, str) and received_id else None
         try:
             await message.delete()
         except Exception:
@@ -314,7 +318,7 @@ async def maybe_show_preview(message, telegram_id, request_id, row, *, reply_to=
             path.unlink(missing_ok=True)
             try:
                 await _payment_request("POST", f"/media-tools/{request_id}/release-preview",
-                                       payload={"telegram_id": telegram_id})
+                                       payload={"telegram_id": telegram_id, **({"file_id": receipt_file_id} if receipt_file_id else {})})
             except BackendAPIError:
                 pass
 

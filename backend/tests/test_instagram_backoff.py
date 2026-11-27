@@ -18,6 +18,7 @@ URL = "https://www.instagram.com/reel/PublicTest/"
 
 @pytest.fixture
 def cooldown(monkeypatch):
+    monkeypatch.setattr(guard, "pace_instagram", lambda: None)
     clock = SimpleNamespace(now=1000.0, until=0.0, writes=0)
     monkeypatch.setattr(guard, "time", SimpleNamespace(monotonic=lambda: clock.now))
     monkeypatch.setattr(guard, "_local_until", 0.0)
@@ -131,11 +132,20 @@ def test_redis_outage_keeps_observed_local_pause(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_known_cooldown_rejects_download_before_admission(cooldown):
+async def test_known_cooldown_miss_does_not_commit_admission(monkeypatch, cooldown):
     from app.services.download import DownloadService
+    from app.services import download_capacity
+    from app.repositories.download_job import DownloadJobRepository
+    from app.services.download_access import DownloadAccessService
+    monkeypatch.setattr(DownloadAccessService, "authorize_job", AsyncMock(return_value=MagicMock()))
+    monkeypatch.setattr(DownloadJobRepository, "create", AsyncMock(return_value=SimpleNamespace(id=123)))
+    monkeypatch.setattr(download_capacity, "prepare_job", AsyncMock(return_value=True))
+    monkeypatch.setattr(download_capacity, "capacity_lock", AsyncMock())
+    db = AsyncMock()
     guard.rate_limit_error(throttled(), URL)
     with pytest.raises(guard.InstagramRateLimited):
-        await DownloadService(None).create_job(URL, telegram_id=123, quality="720p")
+        await DownloadService(db).create_job(URL, telegram_id=123, quality="720p")
+    db.commit.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -143,6 +153,7 @@ async def test_metadata_api_returns_structured_retry_information(monkeypatch, co
     from app.api import downloads
     from fastapi import HTTPException
     monkeypatch.setattr(downloads, "ensure_public_operation", AsyncMock())
+    monkeypatch.setattr(downloads, "bounded_media_info", lambda source_url, playlist_index=None, **_: downloads.DownloadService.get_media_info(source_url, playlist_index))
     guard.rate_limit_error(throttled("120"), URL)
     with pytest.raises(HTTPException) as caught:
         await downloads.get_media_info(url=URL, playlist_index=None, db=None)
@@ -162,7 +173,7 @@ async def test_music_admission_does_not_create_or_charge_a_known_blocked_link(mo
     db.get = AsyncMock(return_value=None)
     db.commit = AsyncMock()
     monkeypatch.setattr(media_tools, "ensure_public_operation", AsyncMock())
-    monkeypatch.setattr(media_tools, "read_config", AsyncMock(return_value={"enabled": True}))
+    monkeypatch.setattr(media_tools, "read_config", AsyncMock(return_value={"enabled": True, "provider": "shazamio"}))
     monkeypatch.setattr(media_tools, "provider_configured", lambda _config: True)
     data = SimpleNamespace(telegram_id=123, kind="music", auto_mp3=True, request_id="synthetic", source_url=URL)
     with pytest.raises(media_tools.MediaToolError, match="instagram_rate_limited"):
@@ -208,7 +219,7 @@ def test_worker_rate_limit_cleans_files_and_skips_celery_retry(monkeypatch, cool
     session.__enter__.return_value.execute.return_value.scalar_one_or_none.return_value = job
     monkeypatch.setattr(worker, "WorkerSessionLocal", lambda: session)
     monkeypatch.setattr(worker, "DOWNLOAD_DIR", tmp_path)
-    monkeypatch.setattr(worker, "_set_processing", lambda _: True)
+    monkeypatch.setattr(worker, "_set_processing", lambda _, **kwargs: True)
     monkeypatch.setattr(worker, "_check_job_control", lambda _: None)
     monkeypatch.setattr(worker, "_get_job_status", lambda _: DownloadJobStatus.PROCESSING)
     failed = MagicMock()

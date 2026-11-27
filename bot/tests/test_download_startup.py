@@ -42,6 +42,8 @@ async def test_startup_wires_real_music_polling_and_delivery(monkeypatch, tmp_pa
     monkeypatch.setattr(main, "get_download_job", AsyncMock(side_effect=[
         {"id": 7, "status": "processing", "progress": 20}, job]))
     monkeypatch.setattr(main, "mark_download_delivered", AsyncMock())
+    monkeypatch.setattr(main, "claim_download_delivery", AsyncMock(return_value={"claimed": True}))
+    monkeypatch.setattr(main, "invalidate_cached_download", AsyncMock())
     monkeypatch.setattr(main, "release_download_files", AsyncMock())
     monkeypatch.setattr(media_tools, "access", AsyncMock(return_value=True))
     post = AsyncMock(side_effect=[{"id": 7}, {"claimed": True}])

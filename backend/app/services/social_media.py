@@ -18,6 +18,7 @@ from typing import Any
 from urllib.parse import parse_qs, urlparse
 
 import requests
+from app.services.pinterest_links import is_pinterest_host, resolve_pin
 
 
 GALLERY_DL_TIMEOUT_SECONDS = 90
@@ -56,8 +57,7 @@ def social_platform(source_url: str) -> str | None:
     if not hostname:
         return None
 
-    if hostname == "pin.it" or hostname.startswith("pinterest.") or \
-            ".pinterest." in hostname:
+    if is_pinterest_host(hostname):
         return "pinterest"
 
     if _host_matches(hostname, "tiktok.com"):
@@ -162,6 +162,8 @@ def _first_text(*values: Any) -> str | None:
 
 def _resolve_short_source(source_url: str, platform: str) -> str:
     hostname = _hostname(source_url)
+    if platform == "pinterest":
+        return resolve_pin(source_url)
     short_hosts = {"pin.it", "vm.tiktok.com", "vt.tiktok.com", "fb.watch"}
     if hostname not in short_hosts:
         return source_url
