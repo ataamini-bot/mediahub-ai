@@ -6,7 +6,7 @@ checkout have been withdrawn and are not included in this version.
 
 ## Operator setup
 
-After installing this version and applying migration `d39e0f102132`, run:
+After installing this version and applying migration `e40f10213243`, run:
 
 ```bash
 cd /opt/mediahub-ai
@@ -17,6 +17,9 @@ The same form is option **10. Music recognition** in `sudo mediahub`.
 Enable music recognition, choose `shazamio` (the default) or `audd`, and set daily attempt
 limits. ShazamIO does not need an API key; only AudD asks for one privately. No recognition
 request is made during setup. Settings take effect without restarting.
+
+For request reuse, provider pacing, queue controls and Pinterest audio input,
+see [Download capacity](DOWNLOAD_CAPACITY.md).
 
 | Tool | Provider | Key | Default limits |
 |---|---|---|---|

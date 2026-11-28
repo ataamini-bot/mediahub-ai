@@ -21,6 +21,22 @@ def check_backend():
     raise AssertionError("Fresh backend failed to start")
 
 
+def check_worker_pools(console):
+    # Exercise both real consumers without downloading media or contacting a
+    # provider. This also detects launcher exit/restart and queue-name mistakes.
+    console.compose("exec", "-T", "backend", "python", "-c", """
+from app.workers.tasks.health import health_task
+from app.workers.celery_app import celery_app
+for queue in ('downloads', 'celery'):
+    assert health_task.apply_async(queue=queue).get(timeout=45) == 'MediaHub worker is healthy'
+queues = celery_app.control.inspect(timeout=5).active_queues() or {}
+for prefix, queue in (('downloads@', 'downloads'), ('tools@', 'celery')):
+    assert any(name.startswith(prefix) and {q['name'] for q in values} == {queue}
+               for name, values in queues.items()), (prefix, queues)
+print('WORKER_POOLS=OK')
+""")
+
+
 def main():
     assert os.getenv("GITHUB_ACTIONS") == "true", "Disposable GitHub runner only"
     root = Path(__file__).resolve().parents[1]
@@ -44,6 +60,7 @@ def main():
         console.start_youtube_provider()
         console.compose("up", "-d", "--no-deps", "--no-build", "backend", "worker", "backup")
         check_backend()
+        check_worker_pools(console)
         for service in ("backend", "worker"):
             console.compose("exec", "-T", service, "python", "-m", "app.services.youtube_health")
         info = console.backup(verify=True)
@@ -55,6 +72,7 @@ def main():
         console.local({"action": "reconcile_restore"})
         console.compose("up", "-d", "--no-deps", "backend", "worker", "backup")
         check_backend()
+        check_worker_pools(console)
         print("FRESH_DOCKER_CORE=OK PORTABLE_BACKUP_RESTORE=OK TELEGRAM_LIVE=NOT_TESTED")
     finally:
         console.compose("down", "--volumes")

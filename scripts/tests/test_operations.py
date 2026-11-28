@@ -1,4 +1,5 @@
 import json
+import ast
 import sys
 from pathlib import Path
 
@@ -8,6 +9,23 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import mediahub
 from ops_common import OperationError, read_env, read_json, save_json, write_env
 from telegram_setup import ensure_topics
+
+
+def test_release_schema_matches_the_single_migration_head_and_deploy_gate():
+    root = Path(__file__).resolve().parents[2]
+    revisions, parents = set(), set()
+    for path in (root / "backend/alembic/versions").glob("*.py"):
+        for node in ast.parse(path.read_text()).body:
+            if isinstance(node, (ast.Assign, ast.AnnAssign)):
+                targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+                names = {target.id for target in targets if isinstance(target, ast.Name)}
+                if names & {"revision", "down_revision"}:
+                    value = ast.literal_eval(node.value)
+                    if value is not None:
+                        (revisions if "revision" in names else parents).update(value if isinstance(value, tuple) else [value])
+    schema = json.loads((root / "release.json").read_text())["schema"]
+    assert revisions - parents == {schema}
+    assert f'== "{schema}"' in (root / "scripts/deploy_launch_operations.sh").read_text()
 
 
 def test_media_tool_setup_keeps_keys_private_and_sets_explicit_limits(tmp_path, monkeypatch, capsys):
