@@ -28,10 +28,13 @@ class DownloadJobRepository:
         media_type: str | None = None,
         output_format: str | None = None,
         playlist_index: int | None = None,
+        delivery_kind: str = "document",
+        commit: bool = True,
     ) -> DownloadJob:
 
         job = DownloadJob(
             source_url=source_url,
+            delivery_kind=delivery_kind,
             user_id=user_id,
             plan_id=plan_id,
             plan_name_snapshot=plan_name_snapshot,
@@ -46,7 +49,10 @@ class DownloadJobRepository:
 
         self.session.add(job)
 
-        await self.session.commit()
+        if commit:
+            await self.session.commit()
+        else:
+            await self.session.flush()
         await self.session.refresh(job)
 
         return job
@@ -54,12 +60,9 @@ class DownloadJobRepository:
     async def get_by_id(
         self,
         job_id: int,
+        *, for_update: bool = False,
     ) -> DownloadJob | None:
-
-        return await self.session.get(
-            DownloadJob,
-            job_id,
-        )
+        return await self.session.get(DownloadJob, job_id, with_for_update=for_update)
 
     async def set_celery_task_id(
         self,

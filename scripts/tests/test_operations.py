@@ -1,4 +1,5 @@
 import json
+import ast
 import sys
 from pathlib import Path
 
@@ -8,6 +9,67 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import mediahub
 from ops_common import OperationError, read_env, read_json, save_json, write_env
 from telegram_setup import ensure_topics
+
+
+def test_release_schema_matches_the_single_migration_head_and_deploy_gate():
+    root = Path(__file__).resolve().parents[2]
+    revisions, parents = set(), set()
+    for path in (root / "backend/alembic/versions").glob("*.py"):
+        for node in ast.parse(path.read_text()).body:
+            if isinstance(node, (ast.Assign, ast.AnnAssign)):
+                targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+                names = {target.id for target in targets if isinstance(target, ast.Name)}
+                if names & {"revision", "down_revision"}:
+                    value = ast.literal_eval(node.value)
+                    if value is not None:
+                        (revisions if "revision" in names else parents).update(value if isinstance(value, tuple) else [value])
+    schema = json.loads((root / "release.json").read_text())["schema"]
+    assert revisions - parents == {schema}
+    assert f'== "{schema}"' in (root / "scripts/deploy_launch_operations.sh").read_text()
+
+
+def test_media_tool_setup_keeps_keys_private_and_sets_explicit_limits(tmp_path, monkeypatch, capsys):
+    console = mediahub.Console(tmp_path)
+    calls = []
+    current = {kind: {"enabled": False, "configured": False, "per_user_daily": 2,
+        "global_daily": 30} for kind in ("music",)}
+    def local(payload):
+        calls.append(payload)
+        return current if payload["action"] == "media_tools_status" else {"available": True}
+    answers = iter(["yes", "audd", "private-test-key", "1", "5"])
+    prompts = []
+    def ask(*args, **kwargs):
+        prompts.append((args, kwargs))
+        return next(answers)
+    monkeypatch.setattr(console, "local", local)
+    monkeypatch.setattr(mediahub, "ask", ask)
+    console.tools()
+    assert calls[1]["configuration"]["global_daily"] == 5
+    assert calls[1]["configuration"]["per_user_daily"] == 1
+    assert calls[1]["configuration"]["token"] == "private-test-key"
+    assert calls[1]["configuration"]["provider"] == "audd"
+    assert prompts[2][1]["secret"] is True
+    assert "private-test-key" not in capsys.readouterr().out
+
+
+def test_shazam_setup_does_not_ask_for_a_key_or_call_provider(tmp_path, monkeypatch):
+    console = mediahub.Console(tmp_path)
+    calls, prompts = [], []
+    def local(payload):
+        calls.append(payload)
+        return {"music": {"enabled": False, "configured": True, "token_configured": False,
+                "provider": "shazamio", "per_user_daily": 2, "global_daily": 30}}
+    answers = iter(["yes", "shazamio", "2", "30"])
+    def ask(prompt, *args, **kwargs):
+        prompts.append((prompt, kwargs))
+        return next(answers)
+    monkeypatch.setattr(console, "local", local)
+    monkeypatch.setattr(mediahub, "ask", ask)
+    console.tools()
+    assert [call["action"] for call in calls] == ["media_tools_status", "media_tools_configure"]
+    assert calls[1]["configuration"] == {"kind": "music", "enabled": True, "provider": "shazamio",
+        "per_user_daily": 2, "global_daily": 30}
+    assert all(not options.get("secret") for _, options in prompts)
 
 
 class FakeTelegram:

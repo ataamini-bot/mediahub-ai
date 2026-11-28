@@ -1,0 +1,129 @@
+from datetime import datetime, timezone
+import logging
+import time
+from uuid import UUID
+
+from billiard.exceptions import SoftTimeLimitExceeded
+from sqlalchemy import select
+
+from app.db.worker_session import WorkerSessionLocal
+from app.models.media_tool import MediaToolRequest
+from app.models.user import User, UserStatus
+from app.services.media_tool_config import read_worker_config, provider_configured
+from app.services.media_tool_files import folder, input_file, remove_files
+from app.services.media_tool_providers import ToolError, automatic_song_candidate, find_full_tracks, recognize_music
+from app.services.media_tool_preview import prepare_preview
+from app.workers.celery_app import celery_app
+
+logger = logging.getLogger(__name__)
+
+
+def ensure_request_active(request_id):
+    with WorkerSessionLocal() as db:
+        if db.scalar(select(MediaToolRequest.status).where(MediaToolRequest.id == request_id)) != "processing":
+            raise ToolError("request_cancelled")
+
+
+@celery_app.task(name="media_tools.run", acks_late=True, reject_on_worker_lost=False,
+                 soft_time_limit=300, time_limit=330, max_retries=0, ignore_result=True)
+def run_tool(request_id):
+    request_id = UUID(request_id)
+    with WorkerSessionLocal() as db:
+        row = db.scalar(select(MediaToolRequest).where(MediaToolRequest.id == request_id).with_for_update())
+        # Claim is durable before the provider sees any bytes. A redelivery or
+        # a worker crash cannot initiate the same external call twice.
+        if not row or row.status != "pending":
+            return
+        user = db.get(User, row.user_id)
+        if row.kind != "music":
+            row.status, row.error_code = "cancelled", "tool_disabled"
+            db.commit()
+            if user:
+                remove_files(user.telegram_id, row.id)
+            return
+        config = read_worker_config(db, row.kind)
+        if not user or user.status != UserStatus.ACTIVE or not config["enabled"] or not provider_configured(config):
+            row.status, row.error_code = "cancelled", "tool_disabled"
+            db.commit()
+            if user:
+                remove_files(user.telegram_id, row.id)
+            return
+        from app.services import music_link_cache as link_cache
+        cache_key = link_cache.key((row.options or {}).get("source_url"), config["provider"], user.telegram_id)
+        cached = link_cache.read(cache_key)
+        cache_owner = link_cache.acquire(cache_key) if cached is None else None
+        if cache_owner is False:
+            # Leave this independent user's quota-reserved request pending.
+            # The owner alone fetches a sample; the next execution reads metadata.
+            row.enqueued_at = datetime.now(timezone.utc)
+            db.commit()
+            run_tool.apply_async(args=[str(request_id)], countdown=5, retry=False)
+            return
+        if cache_owner:
+            cached = link_cache.read(cache_key) or cached
+        row.link_cache_key = cache_key
+        row.status, row.started_at = "processing", datetime.now(timezone.utc)
+        db.commit()
+        telegram_id, kind, options = user.telegram_id, row.kind, row.options
+    result, error, preview = None, None, None
+    try:
+        if cached is not None:
+            ensure_request_active(request_id)
+            result, preview = cached
+            logger.info("Music link recognition reused")
+        else:
+            if kind == "music" and options.get("source_url"):
+                from app.services.media_tool_links import fetch_music_link
+                started = time.monotonic()
+                source = fetch_music_link(options["source_url"], folder(telegram_id, request_id) / "input",
+                                          seconds=36 if config["provider"] == "shazamio" else 12)
+                logger.warning("Music link sample ready: request=%s, elapsed_s=%.2f", request_id, time.monotonic() - started)
+            else:
+                source = input_file(telegram_id, request_id, kind)
+            if kind == "music":
+                preview = prepare_preview(source)
+                if preview:
+                    with WorkerSessionLocal() as db:
+                        current = db.scalar(select(MediaToolRequest).where(MediaToolRequest.id == request_id).with_for_update())
+                        if current and current.status == "processing":
+                            current.result = {"preview": preview}
+                            db.commit()
+                # Link extraction can take longer than an upload. A cancellation
+                # received during it must stop before any paid recognition call.
+                ensure_request_active(request_id)
+                started = time.monotonic()
+                result = recognize_music(source, config["token"], provider=config["provider"],
+                                         check_cancelled=lambda: ensure_request_active(request_id))
+                logger.warning("Music recognition complete: request=%s, elapsed_s=%.2f, duration_known=%s",
+                               request_id, time.monotonic() - started, bool(result.get("duration")))
+                # Recognition metadata never supplies a downloadable preview.
+                ensure_request_active(request_id)
+                started = time.monotonic()
+                result["candidates"] = find_full_tracks(result)
+                result["automatic_candidate"] = automatic_song_candidate(result, result["candidates"])
+                logger.warning("Music sources ready: request=%s, count=%s, automatic=%s, elapsed_s=%.2f",
+                               request_id, len(result["candidates"]), result["automatic_candidate"] is not None,
+                               time.monotonic() - started)
+            link_cache.save(cache_key, result)
+    except ToolError as exc:
+        error = exc.code
+    except SoftTimeLimitExceeded:
+        error = "provider_uncertain"
+    except Exception:
+        # Do not log provider responses, credentials, photo bytes or file paths.
+        error = "tool_failed"
+    finally:
+        link_cache.release(cache_key, cache_owner)
+        remove_files(telegram_id, request_id, keep_preview=bool(preview))
+    with WorkerSessionLocal() as db:
+        row = db.scalar(select(MediaToolRequest).where(MediaToolRequest.id == request_id).with_for_update())
+        if not row or row.status != "processing":
+            remove_files(telegram_id, request_id)
+            return
+        row.completed_at = datetime.now(timezone.utc)
+        row.result = {**((result or {}) if not error else {}), **({"preview": preview} if preview else {})} or None
+        row.error_code = error
+        row.status = "uncertain" if error == "provider_uncertain" else "failed" if error else "completed"
+        if not (folder(telegram_id, request_id) / "preview.mp4").exists():
+            row.files_removed_at = row.completed_at
+        db.commit()

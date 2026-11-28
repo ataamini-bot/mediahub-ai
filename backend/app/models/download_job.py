@@ -4,6 +4,7 @@ from typing import Optional
 
 from sqlalchemy import (
     BigInteger,
+    Boolean,
     DateTime,
     Enum,
     Float,
@@ -45,6 +46,16 @@ class DownloadJob(
     TimestampMixin,
 ):
     __tablename__ = "download_jobs"
+
+    cache_public: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
+    public_output_key: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    telegram_file_id: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    telegram_file_kind: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    telegram_filename: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    delivery_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    execution_token: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    enqueued_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    delivery_kind: Mapped[str] = mapped_column(String(16), nullable=False, default="document", server_default="document")
 
     # File lifecycle only. Source links, ownership and activity remain for admins.
     files_removed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)

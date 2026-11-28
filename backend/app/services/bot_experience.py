@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from typing import Any
 from urllib.parse import urlparse
 
-from sqlalchemy import distinct, func, select, text
+from sqlalchemy import func, select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -144,6 +144,7 @@ DEFAULT_BUTTONS: dict[str, dict[str, str]] = {
         "language": "🌐 تغییر زبان | Language",
         "support": "🛟 پشتیبانی",
         "convert": "🔄 تبدیل فایل",
+        "music": "🎵 تشخیص آهنگ",
         "tutorial": "📘 آموزش استفاده",
         "faq": "❓ سوالات متداول",
         "admin": "⚙️ پنل مدیریت",
@@ -156,6 +157,7 @@ DEFAULT_BUTTONS: dict[str, dict[str, str]] = {
         "language": "🌐 Language | تغییر زبان",
         "support": "🛟 Support",
         "convert": "🔄 Convert media",
+        "music": "🎵 Identify music",
         "tutorial": "📘 How to use",
         "faq": "❓ FAQ",
         "admin": "⚙️ Admin panel",
@@ -266,6 +268,10 @@ def _merge_home_layout(value: Any) -> dict[str, Any]:
     candidate_order = value.get("order")
     if isinstance(candidate_order, list):
         normalized = [key for key in candidate_order if key in HOME_MENU_BUTTON_KEYS]
+        if "convert" in normalized:
+            for new_key in ("music",):
+                if new_key not in normalized:
+                    normalized.insert(normalized.index("convert") + 1, new_key)
         if len(normalized) == len(HOME_MENU_BUTTON_KEYS) and len(set(normalized)) == len(normalized):
             order = normalized
     return {"columns": columns, "order": order}
@@ -278,6 +284,8 @@ class BotExperienceService:
     async def configuration(self, language: str) -> dict[str, Any]:
         normalized = language if language in SUPPORTED_LANGUAGES else "fa"
         settings = ApplicationSettingsService(self.session)
+        from app.tool_texts import TOOL_TEXTS
+        tool_texts = await settings.get_value(f"bot.tool_texts.{normalized}", {}) or {}
         content = _merge_string_map(
             DEFAULT_CONTENT[normalized],
             await settings.get_value(f"bot.content.{normalized}"),
@@ -308,6 +316,7 @@ class BotExperienceService:
         )
         return {
             "language": normalized,
+            "tool_texts": tool_texts,
             "content": content,
             "buttons": buttons,
             "button_styles": button_styles,
@@ -928,25 +937,43 @@ class BotExperienceService:
         return record
 
     async def support_recipient_telegram_ids(self) -> list[int]:
+        return list(await self.support_notification_recipients())
+
+    async def support_notification_recipients(self) -> dict[int, str]:
+        """Current, active support administrators and their own UI languages."""
+        columns = (User.telegram_id, User.preferred_language, User.language_code)
         superadmin_result = await self.session.execute(
-            select(User.telegram_id)
+            select(*columns)
             .join(AdminAccount, AdminAccount.user_id == User.id)
-            .where(AdminAccount.is_active.is_(True), AdminAccount.is_superadmin.is_(True))
+            .where(
+                User.status == UserStatus.ACTIVE,
+                AdminAccount.is_active.is_(True),
+                AdminAccount.is_superadmin.is_(True),
+            )
         )
         role_result = await self.session.execute(
-            select(distinct(User.telegram_id))
+            select(*columns).distinct()
             .join(AdminAccount, AdminAccount.user_id == User.id)
             .join(AdminRoleAssignment, AdminRoleAssignment.admin_account_id == AdminAccount.id)
             .join(AdminRole, AdminRole.id == AdminRoleAssignment.role_id)
             .join(AdminRolePermission, AdminRolePermission.role_id == AdminRole.id)
             .join(AdminPermission, AdminPermission.id == AdminRolePermission.permission_id)
             .where(
+                User.status == UserStatus.ACTIVE,
                 AdminAccount.is_active.is_(True),
                 AdminRole.is_active.is_(True),
                 AdminPermission.code.in_(("tickets.view", "tickets.reply")),
             )
         )
-        return sorted(set(superadmin_result.scalars()) | set(role_result.scalars()))
+        recipients = {
+            telegram_id: effective_language(
+                preferred_language=preferred,
+                telegram_language_code=telegram_language,
+            )
+            for telegram_id, preferred, telegram_language
+            in [*superadmin_result.all(), *role_result.all()]
+        }
+        return dict(sorted(recipients.items()))
 
     async def _ticket_messages(self, ticket_id: int) -> list[SupportMessage]:
         result = await self.session.execute(

@@ -93,6 +93,7 @@ def build_home_keyboard(
         ],
         [
             _inline_button(text=runtime_button(config, "convert"), callback_data="convert:open", style=runtime_button_style(config, "convert")),
+            _inline_button(text=runtime_button(config, "music"), callback_data="tool:open:music"),
         ],
         [
             InlineKeyboardButton(

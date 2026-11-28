@@ -18,6 +18,15 @@ jobs:
     runs-on: ubuntu-24.04
 
     services:
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 5
       postgres:
         image: postgres:16-alpine
         env:
@@ -50,6 +59,7 @@ jobs:
       DATA_ENCRYPTION_KEY: MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDA=
       ADMIN_NOTIFICATIONS_ENABLED: "false"
       RUN_BACKUP_INTEGRATION: "1"
+      RUN_REDIS_INTEGRATION: "1"
 
     steps:
       - name: Check out repository

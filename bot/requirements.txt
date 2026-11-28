@@ -1,4 +1,6 @@
-aiogram>=3.31,<4
+# Keep command routing on the version covered by the navigation regression tests.
+# 3.34.0 dereferences User.active_usernames even when the field is absent.
+aiogram==3.31.0
 httpx
 aiohttp
 redis

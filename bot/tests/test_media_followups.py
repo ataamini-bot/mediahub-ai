@@ -66,6 +66,8 @@ def ui(monkeypatch):
     monkeypatch.setattr(main, "get_download_entitlement", AsyncMock(return_value={"forced_join_required": False}))
     monkeypatch.setattr(main, "safe_edit_message", AsyncMock())
     monkeypatch.setattr(main, "mark_download_delivered", AsyncMock())
+    monkeypatch.setattr(main, "claim_download_delivery", AsyncMock(return_value={"claimed": True}))
+    monkeypatch.setattr(main, "invalidate_cached_download", AsyncMock())
     monkeypatch.setattr(main, "release_download_files", AsyncMock())
     monkeypatch.setattr(main, "start_cover_request", AsyncMock(return_value=72))
     monkeypatch.setattr(main, "confirm_cover_request", AsyncMock())
@@ -150,6 +152,38 @@ async def test_compatible_video_is_identified_and_does_not_offer_reconversion(ui
     assert "download_compatible:428" not in actions(sent["reply_markup"])
     assert {"download_again:428", "download_details:428", "download_more:audio:428"} <= actions(sent["reply_markup"])
     assert not path.exists()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("output_format", ["mp3", "m4a", "flac"])
+@pytest.mark.parametrize("failed_send", [False, True])
+async def test_full_song_player_metadata_and_immediate_cleanup(ui, monkeypatch, tmp_path, output_format, failed_send):
+    from uuid import uuid4
+    path = tmp_path / ("428." + output_format)
+    path.write_bytes(b"full song")
+    send = AsyncMock(side_effect=TimeoutError("uncertain") if failed_send else None)
+    monkeypatch.setattr(Message, "answer_audio" if output_format in {"mp3", "m4a"} else "answer_document", send)
+    music = {"title": "Song <Live>", "artist": "Artist & Friend", "request_id": uuid4().hex, "candidate": 0}
+    async def deliver():
+        await main.send_downloaded_file(message(), message(),
+            job(file_path=str(path), output_format=output_format, media_type="audio"),
+            {"title": "Artist & Friend - Song", "duration": 224, "media_type": "audio", "music": music})
+    if failed_send:
+        with pytest.raises(TimeoutError):
+            await deliver()
+        main.mark_download_delivered.assert_not_awaited()
+    else:
+        await deliver()
+        main.mark_download_delivered.assert_awaited_once_with(428)
+    send.assert_awaited_once()
+    kwargs = send.await_args.kwargs
+    assert "Song &lt;Live&gt;" in kwargs["caption"] and "Artist &amp; Friend" in kwargs["caption"]
+    assert "tool:open:music" in actions(kwargs["reply_markup"])
+    if output_format in {"mp3", "m4a"}:
+        assert (kwargs["title"], kwargs["performer"], kwargs["duration"]) == (music["title"], music["artist"], 224)
+        Message.answer_document.assert_not_awaited()
+    assert not path.exists()
+    main.release_download_files.assert_awaited_once_with(428)
 
 
 @pytest.mark.asyncio

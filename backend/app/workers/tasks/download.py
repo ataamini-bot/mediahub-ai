@@ -18,6 +18,10 @@ from sqlalchemy import select
 
 from app.db.worker_session import WorkerSessionLocal
 from app.services.instagram_formats import instagram_video_choices
+from app.services.instagram_access import media_downloader, rate_limit_error
+from app.services.musicfa import MusicFaError, _audio_info as public_music_audio_info
+from app.services.music_source_catalog import source_for_media
+from app.services.music_sources import download_track as download_public_music_track
 from app.models.download_job import (
     DownloadJob,
     DownloadJobStatus,
@@ -605,8 +609,8 @@ def _extract_instagram_image(
         "ignore_no_formats_error": True,
     }
 
-    with yt_dlp.YoutubeDL(
-        options
+    with media_downloader(
+        source_url, options
     ) as ydl:
 
         raw_info = ydl.extract_info(
@@ -1700,6 +1704,7 @@ def _update_download_stats(
 
 def _set_processing(
     job_id: int,
+    *, allow_retry: bool = False, task_id: str | None = None,
 ) -> bool:
 
     with WorkerSessionLocal() as session:
@@ -1710,11 +1715,17 @@ def _set_processing(
             ).where(
                 DownloadJob.id
                 == job_id
-            )
+            ).with_for_update()
         ).scalar_one_or_none()
 
         if job is None:
             return False
+        if job.status == DownloadJobStatus.PROCESSING:
+            if not allow_retry or job.execution_token != task_id:
+                return False
+        elif job.status != DownloadJobStatus.PENDING:
+            return False
+        job.execution_token = task_id
 
         if job.status in (
             DownloadJobStatus.PAUSED,
@@ -1762,7 +1773,7 @@ def _set_completed(
             ).where(
                 DownloadJob.id
                 == job_id
-            )
+            ).with_for_update()
         ).scalar_one_or_none()
 
         if job is None:
@@ -2237,7 +2248,9 @@ def _build_ffmpeg_conversion_command(
     if kind == "audio":
         command.extend(["-map", "0:a:0", "-vn"])
         audio_args = {
-            "mp3": ["-c:a", "libmp3lame", "-b:a", "192k", "-f", "mp3"],
+            # MPEG-1 sample rates are required for a real 320 kbps stream;
+            # low-rate inputs otherwise make libmp3lame silently cap bitrate.
+            "mp3": ["-c:a", "libmp3lame", "-b:a", "320k", "-ar", "44100", "-f", "mp3"],
             "m4a": ["-c:a", "aac", "-b:a", "192k", "-f", "ipod"],
             "wav": ["-c:a", "pcm_s16le", "-f", "wav"],
             "aac": ["-c:a", "aac", "-b:a", "192k", "-f", "adts"],
@@ -2773,8 +2786,8 @@ def _get_non_youtube_format_selector(
             playlist_index
         )
 
-    with yt_dlp.YoutubeDL(
-        ydl_options
+    with media_downloader(
+        source_url, ydl_options
     ) as ydl:
 
         info = ydl.extract_info(
@@ -3173,6 +3186,8 @@ def _get_format_selector(
     quality: str | None,
     media_type: str | None,
     playlist_index: int | None = None,
+    *,
+    allow_combined_audio: bool = False,
 ) -> str | Callable:
 
     if _is_instagram_url(source_url) and not format_id and media_type != "audio":
@@ -3199,6 +3214,10 @@ def _get_format_selector(
             source_url
         ):
 
+            # Some public player responses offer only a combined video/audio
+            # stream. Keep audio-only preferred, then extract audio from that
+            # same full source instead of failing format selection. Never use
+            # video-only streams or storyboards as audio.
             return (
                 "bestaudio"
                 "[ext=m4a]"
@@ -3208,6 +3227,7 @@ def _get_format_selector(
                 "[ext=m4a]"
                 "/"
                 "bestaudio"
+                + ("/best[vcodec!=none][acodec!=none]" if allow_combined_audio else "")
             )
 
         return (
@@ -3236,8 +3256,8 @@ def _get_format_selector(
             )
         )
 
-        with yt_dlp.YoutubeDL(
-            ydl_options
+        with media_downloader(
+            source_url, ydl_options
         ) as ydl:
 
             info = ydl.extract_info(
@@ -3819,9 +3839,7 @@ def download_task(
     # Processing
     # ========================================================
 
-    if not _set_processing(
-        job_id
-    ):
+    if not _set_processing(job_id, allow_retry=bool(self.request.retries), task_id=self.request.id):
 
         return (
             f"Download job "
@@ -3872,9 +3890,17 @@ def download_task(
         ],
     ] = {}
 
+    public_visibility_recorded = False
+
     def progress_hook(
         data: dict,
     ) -> None:
+        nonlocal public_visibility_recorded
+        if not public_visibility_recorded and (data.get("info_dict") or {}).get("availability") == "public":
+            from app.services.source_capacity import register_public_source
+            register_public_source(source_url)
+            public_visibility_recorded = True
+
 
         nonlocal last_progress
 
@@ -4303,8 +4329,27 @@ def download_task(
             )
 
         # ====================================================
-        # Uploaded conversion
+        # Native full-song source / uploaded conversion
         # ====================================================
+
+        elif media_type == "audio" and source_for_media(source_url):
+            download_started = time.monotonic()
+            file_path = download_public_music_track(
+                source_url, DOWNLOAD_DIR / f"{job_id}.mp3", max_bytes=max_download_bytes,
+                check_cancelled=lambda: _check_job_control(job_id), progress=progress_hook,
+            )
+            print(f"Media download complete: job={job_id}, source={source_for_media(source_url).key}, elapsed_s={time.monotonic()-download_started:.2f}")
+            source_info = public_music_audio_info(file_path, strict_320=False)
+            native_320 = int(source_info["streams"][0]["bit_rate"]) == 320000
+            if output_format in (None, "mp3") and native_320:
+                # The adapter verifies the complete native MP3 320. Keep its
+                # original audio without a second lossy encode or extra delay.
+                print(f"Media output ready: job={job_id}, mode=public_mp3_320")
+            else:
+                file_path = _prepare_requested_output(
+                    job_id=job_id, file_path=file_path, media_type=media_type,
+                    output_format=output_format or "mp3", max_download_bytes=max_download_bytes,
+                )
 
         elif media_type == "convert" and str(source_url).startswith(UPLOAD_SOURCE_PREFIX):
             uploaded_source = _resolve_uploaded_source(source_url)
@@ -4358,6 +4403,7 @@ def download_task(
                         playlist_index=(
                             playlist_index
                         ),
+                        allow_combined_audio=output_format_kind(output_format) == "audio",
                     )
                 )
 
@@ -4459,8 +4505,8 @@ def download_task(
             )
 
             download_started = time.monotonic()
-            with yt_dlp.YoutubeDL(
-                ydl_options
+            with media_downloader(
+                source_url, ydl_options
             ) as ydl:
 
                 ydl.download(
@@ -4616,9 +4662,10 @@ def download_task(
 
     except Exception as exc:
 
+        limited = rate_limit_error(exc, source_url)
         error_message = (
             str(
-                exc
+                limited or exc
             )
         )
 
@@ -4675,7 +4722,9 @@ def download_task(
         # ====================================================
 
         if (
-            self.request.retries
+            limited is None
+            and not isinstance(exc, MusicFaError)
+            and self.request.retries
             < self.max_retries
         ):
             countdown = min(

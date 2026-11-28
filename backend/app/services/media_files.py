@@ -104,6 +104,13 @@ async def cleanup_loop():
                 await db.run_sync(sweep)
                 await db.commit()
                 await db.run_sync(remove_orphans)
+                from app.services.media_tools import sweep_tools
+                await db.run_sync(sweep_tools)
+                await db.commit()
+            from app.services.media_tools import dispatch_pending_tools
+            await asyncio.to_thread(dispatch_pending_tools)
+            from app.services.download_capacity import recover_pending_downloads
+            await recover_pending_downloads()
         except asyncio.CancelledError:
             raise
         except Exception as exc:

@@ -1,3 +1,4 @@
+import asyncio
 import json
 import subprocess
 from datetime import datetime, timezone
@@ -37,6 +38,7 @@ from app.services.media_formats import (
     output_format_kind,
 )
 from app.services.instagram_formats import instagram_video_choices
+from app.services.instagram_access import InstagramRateLimited, check_instagram_access, media_downloader
 from app.workers.tasks.download import (
     cleanup_paused_download,
     download_task,
@@ -1552,7 +1554,7 @@ def _get_instagram_raw_info(source_url: str) -> dict[str, Any] | None:
         "noplaylist": False, "socket_timeout": 15, "ignore_no_formats_error": True,
     }
     try:
-        with yt_dlp.YoutubeDL(options) as ydl:
+        with media_downloader(source_url, options) as ydl:
             raw_info = ydl.extract_info(source_url, download=False, process=False)
             if not isinstance(raw_info, dict):
                 return None
@@ -1560,6 +1562,8 @@ def _get_instagram_raw_info(source_url: str) -> dict[str, Any] | None:
                 # Gallery detection and quality selection both consume these entries.
                 raw_info["entries"] = list(raw_info.get("entries") or [])
         return raw_info
+    except InstagramRateLimited:
+        raise
     except Exception as exc:
         print(f"Instagram raw extraction failed: {type(exc).__name__}")
         return None
@@ -2629,6 +2633,7 @@ class DownloadService:
         output_format: str | None = None,
         playlist_index: int | None = None,
         estimated_size_bytes: int | None = None,
+        delivery_kind: str = "document",
     ) -> DownloadJob:
 
         normalized_media_type = str(media_type or "video").strip().lower()
@@ -2649,6 +2654,17 @@ class DownloadService:
             if normalized_media_type == "video" and target_kind != "video":
                 raise DownloadFormatError("Video jobs require a video output format")
 
+        # Read upstream backoff before the short database admission lock. A
+        # confirmed Telegram cache hit can still be served during a cooldown.
+        blocked = None
+        try:
+            await asyncio.to_thread(check_instagram_access, source_url)
+        except InstagramRateLimited as exc:
+            blocked = exc
+        from app.services.source_capacity import public_verified
+        cache_public = await asyncio.to_thread(public_verified, source_url)
+        from app.services.download_capacity import capacity_lock
+        await capacity_lock(self.session)
         entitlement = await DownloadAccessService(
             self.session
         ).authorize_job(
@@ -2676,45 +2692,21 @@ class DownloadService:
                 media_type=normalized_media_type,
                 output_format=normalized_output_format,
                 playlist_index=playlist_index,
+                delivery_kind=delivery_kind,
+                commit=False,
             )
         )
 
-        # ----------------------------------------------------
-        # Queue Celery task
-        # ----------------------------------------------------
-
-        try:
-            task = download_task.apply_async(
-                args=[job.id],
-                priority=(
-                    0
-                    if entitlement.priority_processing
-                    else 5
-                ),
-            )
-        except Exception as exc:
-            job.status = DownloadJobStatus.FAILED
-            job.error_message = "Unable to queue download task"
+        job.cache_public = cache_public
+        from app.services.download_capacity import prepare_job, publish_job
+        needs_worker = await prepare_job(self.session, job, entitlement)
+        if needs_worker:
+            if blocked:
+                raise blocked
+            await publish_job(self.session, job, entitlement.priority_processing)
+        else:
             await self.session.commit()
-            raise RuntimeError("Unable to queue download task") from exc
-
-        # ----------------------------------------------------
-        # Save Celery task ID
-        # ----------------------------------------------------
-
-        job.celery_task_id = (
-            task.id
-        )
-
-        await (
-            self.session.commit()
-        )
-
-        await (
-            self.session.refresh(
-                job
-            )
-        )
+        await self.session.refresh(job)
 
         return job
 
@@ -2727,11 +2719,12 @@ class DownloadService:
         job_id: int,
     ) -> DownloadJob | None:
 
-        return (
-            await self.repository.get_by_id(
-                job_id
-            )
-        )
+        job = await self.repository.get_by_id(job_id)
+        if job is not None:
+            from app.services.download_capacity import refresh_waiting, publish_job
+            if await refresh_waiting(self.session, job):
+                await publish_job(self.session, job, bool((job.plan_limits_snapshot or {}).get("priority_processing")))
+        return job
 
 
     # ========================================================
@@ -2743,9 +2736,12 @@ class DownloadService:
         job_id: int,
     ) -> DownloadJob:
 
+        from app.services.download_capacity import capacity_lock
+        await capacity_lock(self.session)
+
         job = (
             await self.repository.get_by_id(
-                job_id
+                job_id, for_update=True
             )
         )
 
@@ -2852,9 +2848,12 @@ class DownloadService:
         job_id: int,
     ) -> DownloadJob:
 
+        from app.services.download_capacity import capacity_lock
+        await capacity_lock(self.session)
+
         job = (
             await self.repository.get_by_id(
-                job_id
+                job_id, for_update=True
             )
         )
 
@@ -2889,45 +2888,12 @@ class DownloadService:
         job.speed = None
         job.eta = None
 
-        await (
-            self.session.commit()
-        )
-
-        await (
-            self.session.refresh(
-                job
-            )
-        )
-
-        try:
-            task = download_task.apply_async(
-                args=[job.id],
-                priority=(
-                    0
-                    if priority_processing
-                    else 5
-                ),
-            )
-        except Exception as exc:
-            job.status = DownloadJobStatus.PAUSED
-            job.paused_at = datetime.now(timezone.utc)
-            job.error_message = "Unable to queue resumed download task"
+        from app.services.download_capacity import prepare_job, publish_job
+        if await prepare_job(self.session, job, None):
+            await publish_job(self.session, job, priority_processing)
+        else:
             await self.session.commit()
-            raise RuntimeError("Unable to queue resumed download task") from exc
-
-        job.celery_task_id = (
-            task.id
-        )
-
-        await (
-            self.session.commit()
-        )
-
-        await (
-            self.session.refresh(
-                job
-            )
-        )
+        await self.session.refresh(job)
 
         return job
 
@@ -2940,9 +2906,12 @@ class DownloadService:
         job_id: int,
     ) -> DownloadJob:
 
+        from app.services.download_capacity import capacity_lock
+        await capacity_lock(self.session)
+
         job = (
             await self.repository.get_by_id(
-                job_id
+                job_id, for_update=True
             )
         )
 
@@ -3444,8 +3413,8 @@ class DownloadService:
             )
         )
 
-        with yt_dlp.YoutubeDL(
-            options
+        with media_downloader(
+            source_url, options
         ) as ydl:
             if instagram_raw is not None:
                 info = ydl.process_ie_result(instagram_raw, download=False)
@@ -3834,6 +3803,7 @@ class DownloadService:
         )
 
         return {
+            "_cache_public": info.get("availability") == "public",
             "source_url":
                 source_url,
 
