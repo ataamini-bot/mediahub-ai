@@ -28,6 +28,13 @@ class SearchStopped(Exception):
     pass
 
 
+class SearchPages(list):
+    """Distinguish an empty search from a source that must not be retried."""
+    def __init__(self, values=(), *, available=True):
+        super().__init__(values)
+        self.available = available
+
+
 @dataclass
 class Node:
     tag: str
@@ -89,10 +96,11 @@ def _excluded(node):
                for token in ("comment", "related", "sidebar", "advert", "suggest")) for n in node.ancestors())
 
 
-def search_pages(source, track, body):
+def search_pages(source, track, body, *, title_only=False):
     """Rank observed search-result links, ignoring menus and related sections."""
     root = Page(body).root
-    wanted = musicfa._artist(track["artist"] + " " + discovery_track(track)["title"])
+    wanted = (musicfa._artist(track["title"]) if title_only else
+              musicfa._artist(track["artist"] + " " + discovery_track(track)["title"]))
     ranked = {}
     for node in root.nodes():
         if node.tag != "a" or _excluded(node):
@@ -116,20 +124,24 @@ def search_pages(source, track, body):
         score = (int(wanted <= musicfa._artist(node.text() + " " + node.attrs.get("title", ""))),
                  int("bookmark" in node.attrs.get("rel", "") or any(n.tag in {"h1", "h2", "h3", "h4", "h5"} for n in parents)))
         ranked[url] = max(score, ranked.get(url, (-1, -1)))
-    return sorted(ranked, key=ranked.get, reverse=True)[:1]
+    return sorted(ranked, key=ranked.get, reverse=True)[:2 if title_only else 1]
 
 
-def _file_identity(source, url, track):
+def _file_name(source, url):
     name = unquote(urlsplit(url).path).rsplit("/", 1)[-1]
     if not name.lower().endswith(".mp3"):
-        return False
+        return ""
     name = name[:-4]
     # Strip only known site branding and quality annotations, not arbitrary words.
     for brand in sorted(source.brands, key=len, reverse=True):
         name = re.sub(r"(?i)(?<![a-z0-9])" + re.escape(brand) + r"(?![a-z0-9])", " ", name)
     name = re.sub(r"[\[(]\s*[\])]", " ", name).replace("_", " ").strip()
     name = re.sub(r"(?i)(?:[\[(]\s*(?:128|192|256|320)(?:\s*kbps)?\s*[\])]|(?:[-_ ]+)(?:128|192|256|320)(?:\s*kbps)?$)", " ", name)
-    actual = musicfa._artist(name)
+    return name.strip()
+
+
+def _file_identity(source, url, track):
+    actual = musicfa._artist(_file_name(source, url))
     wanted = musicfa._artist(track["artist"] + " " + track["title"])
     return bool(wanted and actual == wanted)
 
@@ -169,16 +181,16 @@ def _cooldown(source, error):
                    message if isinstance(error, musicfa.MusicFaError) else type(error).__name__)
 
 
-def _search(source, track, deadline, control):
+def _search(source, track, deadline, control, *, title_only=False):
     try:
         with musicfa._client() as client:
-            body = musicfa._html(client, source.search_url(track), deadline, allowed=source.allows, check_cancelled=control)
-        return search_pages(source, track, body)
+            body = musicfa._html(client, source.search_url(track, title_only=title_only), deadline, allowed=source.allows, check_cancelled=control)
+        return SearchPages(search_pages(source, track, body, title_only=title_only))
     except SearchStopped:
-        return []
+        return SearchPages(available=False)
     except (musicfa.MusicFaError, httpx.HTTPError, ValueError, TypeError) as error:
         _cooldown(source, error)
-        return []
+        return SearchPages(available=False)
 
 
 def _resolve(source, track, page_url, deadline, control, verify_sample=None):
@@ -207,10 +219,10 @@ def _resolve(source, track, page_url, deadline, control, verify_sample=None):
                     "source_bitrate": details["source_bitrate"],
                     "identity_match": "audio" if needs_audio_match else "metadata"}
     except SearchStopped:
-        return None
+        return SearchPages(available=False)
     except (musicfa.MusicFaError, httpx.HTTPError, ValueError, TypeError) as error:
         _cooldown(source, error)
-        return None
+        return SearchPages(available=False)
 
 
 def _musicfa(track, deadline, control):
@@ -218,14 +230,14 @@ def _musicfa(track, deadline, control):
         found = musicfa.find_tracks(track, deadline=deadline, check_cancelled=control)
         return [{**item, "source_name": "Music-fa", "source_type": "public_mp3"} for item in found]
     except SearchStopped:
-        return []
+        return SearchPages(available=False)
     except (musicfa.MusicFaError, httpx.HTTPError) as error:
         _cooldown(BY_KEY["musicfa"], error)
-        return []
+        return SearchPages(available=False)
 
 
 def _cache_key(track):
-    identity = [sorted(musicfa._artist(track.get("artist", ""))), sorted(musicfa._words(track.get("title", ""))),
+    identity = ["artist-proof-v1", sorted(musicfa._artist(track.get("artist", ""))), sorted(musicfa._words(track.get("title", ""))),
                 track.get("duration"), track.get("recognition_key"), track.get("recognition_provider")]
     return "track:" + hashlib.sha256(json.dumps(identity, ensure_ascii=False).encode()).hexdigest()
 
@@ -251,7 +263,9 @@ def find_tracks(track, *, sources=None):
     stored = cache.read([key] + ["cooldown:"+s.key for s in active])
     cached = stored.get(key)
     if _valid_cached(cached) and not any(stored.get("cooldown:"+item["source"]) for item in cached):
-        return [{**item, "title": str(track["title"])[:200], "channel": str(track["artist"])[:150]} for item in cached]
+        return [{**item, "title": str(track["title"])[:200],
+                 "channel": item["channel"] if item.get("identity_match") == "audio_recording_key" else str(track["artist"])[:150]}
+                for item in cached]
     deadline = time.monotonic() + SEARCH_SECONDS
     stopped = threading.Event()
     def control():
@@ -260,7 +274,7 @@ def find_tracks(track, *, sources=None):
     verification_lock = threading.Lock()
     verification_count, verification_failed = 0, False
 
-    def verify(path):
+    def verify(path, *, require_key=False):
         nonlocal verification_count, verification_failed
         # At most two short source fingerprints, serialized. A service error
         # disables further attempts; AudD never triggers these free calls.
@@ -271,14 +285,14 @@ def find_tracks(track, *, sources=None):
             verification_count += 1
             from app.services.music_source_match import matches_sample
             try:
-                return matches_sample(track, path, deadline, control)
+                return matches_sample(track, path, deadline, control, **({"require_key": True} if require_key else {}))
             except SearchStopped:
                 raise
             except Exception as error:
                 verification_failed = True
                 logger.warning("Music source verification unavailable: error=%s", type(error).__name__)
                 return False
-    results, checked, seen = [], 0, set()
+    results, checked, seen, unavailable = [], 0, set(), set()
     executor = ThreadPoolExecutor(max_workers=SEARCH_WORKERS, thread_name_prefix="music-source")
     resolver = ThreadPoolExecutor(max_workers=RESOLVE_WORKERS, thread_name_prefix="music-match")
     futures = {}
@@ -300,9 +314,12 @@ def find_tracks(track, *, sources=None):
             for future in done:
                 kind, source = futures.pop(future)
                 if future.exception() is not None:
+                    unavailable.add(source.key)
                     logger.warning("Music catalogue task failed: source=%s, error=%s", source.key, type(future.exception()).__name__)
                     continue
                 value = future.result()
+                if getattr(value, "available", True) is False:
+                    unavailable.add(source.key)
                 if kind == "search":
                     for url in value:
                         if checked >= MAX_PAGE_CHECKS:
@@ -318,6 +335,21 @@ def find_tracks(track, *, sources=None):
         stopped.set()
         executor.shutdown(wait=True, cancel_futures=True)
         resolver.shutdown(wait=True, cancel_futures=True)
+        # Searches that ended during shutdown must not be retried as a fallback.
+        for future, (_, source) in futures.items():
+            if future.cancelled() or future.exception() is not None or getattr(future.result(), "available", True) is False:
+                unavailable.add(source.key)
+    if not results and not verification_failed and verification_count == 0 and can_verify_audio(track):
+        # A wrong provider artist can otherwise make every catalogue search
+        # empty. Keep the original audio identity and require independent proof.
+        from app.services.music_artist_correction import find_corrected_tracks
+        deadline = time.monotonic() + 25
+        stopped.clear()
+        try:
+            results = find_corrected_tracks(track, active, unavailable, stored, deadline, control,
+                lambda path: verify(path, require_key=True))
+        finally:
+            stopped.set()
     results = results[:2]
     cache.write(key, results, 300 if results else 30)
     logger.warning("Music catalogue search complete: sources=%s, matches=%s", len(active), len(results))

@@ -227,4 +227,7 @@ def find_full_tracks(track):
         public_future = executor.submit(find_tracks, track)
         youtube_future = executor.submit(_find_youtube_tracks, track)
         public, youtube = public_future.result(), youtube_future.result()
+    from app.services.music_artist_correction import apply_verified_artist
+    if apply_verified_artist(track, public):
+        return public[:3]  # Older-artist YouTube search results cannot follow a correction.
     return (public + youtube)[:3]

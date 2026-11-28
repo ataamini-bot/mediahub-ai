@@ -12,7 +12,7 @@ from app.services.musicfa import _identity_matches
 logger = logging.getLogger(__name__)
 
 
-def matches_sample(track, sample, deadline, control):
+def matches_sample(track, sample, deadline, control, *, require_key=False):
     if not can_verify_audio(track):
         return False
     from app.services.media_tool_shazam import recognize_sample, track_identity
@@ -51,6 +51,7 @@ def matches_sample(track, sample, deadline, control):
         # title must never let a live/remix/studio version replace this one.
         same_key = identity.get("recognition_key") == track["recognition_key"]
         same_names = _identity_matches(track, identity["artist"], identity["title"])
+        matched = same_key if require_key else same_key or same_names
         logger.warning("Music source audio match: matched=%s, key_match=%s, name_match=%s",
-                       same_key or same_names, same_key, same_names)
-        return same_key or same_names
+                       matched, same_key, same_names)
+        return matched

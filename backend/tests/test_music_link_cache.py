@@ -36,3 +36,13 @@ def test_unknown_visibility_is_per_user_and_failures_are_not_cached(storage, mon
     cache.save(key, None)
     cache.save(key, {"title": "Unresolved", "candidates": []})
     assert cache.read(key) is None
+
+
+def test_corrected_identity_retains_provider_attribution_without_media(storage, monkeypatch):
+    configure(monkeypatch)
+    key = cache.key("https://www.instagram.com/reel/SyntheticArtist/", "shazamio", 123)
+    result = {"title": "Original Song", "artist": "Actual Artist", "recognized_artist": "Reported Artist",
+              "artist_correction": {"method": "audio_and_catalogue_agreement", "sources": ["rozmusic", "upmusics"]},
+              "recognition_key": "12345", "candidates": [{"url": "https://example.invalid/song"}]}
+    cache.save(key, {**result, "sample_path": "/private/audio.wav"})
+    assert cache.read(key)[0] == result

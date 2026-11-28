@@ -103,8 +103,15 @@ same Shazam recording key or the same full title, version and artist when catalo
 differ. Omitting the suffix only broadens discovery. At most two additional source
 fingerprints run within the same catalogue budget, with no AudD calls or retry after
 service errors. These checks belong to the original recognition allowance.
+If the provider artist appears incorrect and strict discovery finds no sources,
+title-only recovery can add up to 25 seconds. Two reviewed sites must agree on the
+alternative artist and full title, and both MP3s must match the original recording key
+from a bounded middle-audio sample. This uses the same maximum of two source fingerprints,
+not an additional pair. Only that recording's artist changes; original provider metadata
+is retained for audit. Unsupported or conflicting evidence leaves the attribution unchanged.
 At most 512 KiB per candidate is probed, plus another 512 KiB range if a large ID3 cover
-tag hides the audio. Short-lived public metadata caching avoids repeated searches;
+tag hides the audio; artist recovery adds one 512 KiB middle range per candidate.
+Short-lived public metadata caching avoids repeated searches;
 media is not cached. Old recognition results without a recording key keep exact matching;
 a fresh user request is needed to use the audio identity check.
 The source-selection card links to the song page, while the MP3 URL is kept in ordinary

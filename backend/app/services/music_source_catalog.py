@@ -21,10 +21,10 @@ class Source:
     def active(self):
         return self.status == "public" and bool(self.media_hosts)
 
-    def search_url(self, track):
-        track = discovery_track(track)
-        query = " ".join((str(track.get("artist", "")), str(track.get("title", "")))).strip()
-        if not track.get("artist") or not track.get("title") or len(query) > 400:
+    def search_url(self, track, *, title_only=False):
+        track = track if title_only else discovery_track(track)
+        query = str(track.get("title", "")) if title_only else " ".join((str(track.get("artist", "")), str(track.get("title", "")))).strip()
+        if (not title_only and not track.get("artist")) or not track.get("title") or len(query) > 400:
             raise ValueError("invalid_music_identity")
         return "https://" + self.host + self.search_path.format(
             query=quote(query, safe=""), query_plus=quote_plus(query, safe=""))

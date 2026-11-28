@@ -42,6 +42,14 @@ def test_other_provider_or_expired_budget_never_sends_source_audio(monkeypatch):
     assert not matcher.matches_sample(TRACK,None,time.monotonic()-1,lambda:None)
 
 
+def test_attribution_change_requires_recording_key_even_when_provider_names_match(sample, monkeypatch):
+    async def recognize(content):
+        return {"matches": [{"id": "match"}], "track": {"title": TRACK["title"],
+                "subtitle": TRACK["artist"], "key": "67890"}}
+    monkeypatch.setattr(shazam, "recognize_sample", recognize)
+    assert not matcher.matches_sample(TRACK, sample, time.monotonic()+10, lambda:None, require_key=True)
+
+
 @pytest.mark.parametrize("title,artist,expected",[
     ("Original Song (Acoustic)","Example Artist",True),
     ("Original Song - ACOUSTIC","EXAMPLE ARTIST",True),

@@ -26,6 +26,21 @@ No new API key is required for the public-site adapters.
   30-second catalogue budget, each with an eight-second recognition timeout. A valid
   no-match can allow the next candidate; a service error stops further checks. AudD and
   older results without a Shazam key retain exact metadata matching and make no extra calls.
+- When strict discovery has no result and has made no source fingerprint calls, an
+  additional 25-second artist-recovery budget searches the full title on RozMusic,
+  UpMusics and Bir Music. Titles must contain at least two words. Each site contributes
+  at most two observed post pages; unavailable and cooling sites are excluded. Two
+  distinct sites must agree on the artist/full title in both primary page metadata and
+  downloadable filenames. Conflicting supported identities are rejected.
+  Both candidate files must independently return the original Shazam recording key
+  and agree on length. For this stricter check, a single additional 512 KiB range from
+  inside each MP3 avoids relying on the intro; only up to 12 seconds is fingerprinted.
+  Matching names under another recording key cannot change an artist. At most two
+  source fingerprints run across normal discovery and artist recovery combined.
+  The original provider artist and correction provenance remain in result metadata;
+  only the verified recording's displayed artist changes. Results from the earlier
+  YouTube search are discarded after correction. There is no global artist alias or
+  paid fallback, and all temporary samples are removed.
 - A bounded prefix probe verifies MP3 codec/bitrate and estimates length without retaining
   media. It reads at most 512 KiB, plus a second 512 KiB range when a large ID3 cover tag
   obscures the audio. The tag is skipped, not downloaded in full. Reference length must

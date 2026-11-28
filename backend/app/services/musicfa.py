@@ -212,7 +212,7 @@ def _audio_info(path, *, strict_320=True):
 
 
 def _probe_details(client, url, deadline, *, allowed=None, check_cancelled=None,
-                   strict_320=True, verify_sample=None):
+                   strict_320=True, verify_sample=None, verify_middle=False):
     def read_prefix(start):
         with _response(client, url, deadline, media=True,
                        headers={"Range": f"bytes={start}-{start+PROBE_LIMIT-1}"},
@@ -255,6 +255,16 @@ def _probe_details(client, url, deadline, *, allowed=None, check_cancelled=None,
         duration = (size - tag_size) * 8 / bitrate
         if not 60 <= duration <= 3600:
             raise MusicFaError("musicfa_not_full_track")
+        if verify_sample is not None and verify_middle:
+            # A song's intro may not be identifiable. One bounded byte range
+            # inside the audio avoids that intro; this is not a precise seek.
+            middle, middle_size = read_prefix(tag_size + (size - tag_size) // 3)
+            if middle_size != size:
+                raise MusicFaError("musicfa_invalid_size")
+            sample.seek(0)
+            sample.truncate()
+            sample.write(middle)
+            sample.flush()
         if verify_sample is not None and not verify_sample(Path(sample.name)):
             raise MusicFaError("music_source_identity_mismatch")
     if time.monotonic() > deadline:

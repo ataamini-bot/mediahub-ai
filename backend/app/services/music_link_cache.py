@@ -11,7 +11,7 @@ from app.services.source_capacity import configuration, public_verified, storage
 
 PREFIX = "mediahub:music-links:v1:"
 RESULT_FIELDS = {"title", "artist", "album", "release_date", "duration", "recognition_provider",
-                 "recognition_key", "candidates", "automatic_candidate"}
+                 "recognition_key", "candidates", "automatic_candidate", "recognized_artist", "artist_correction"}
 
 
 def key(source_url, provider, telegram_id):
